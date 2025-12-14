@@ -1,39 +1,110 @@
+# Contenedores para Dahell Intelligence (Scraper + DB + GUI)
 version: '3.8'
 
 services:
-scraper:
-build:
-context: .
-target: selenium
-container_name: dropi_scraper
-volumes:
-- raw_data:/app/raw_data
-- output:/app/output
-- db:/app/db          # opcional: compartir DB con loader si el scraper también la necesita
-env_file:
-- .env               # carga DROPI_EMAIL, DROPI_PASSWORD, HEADLESS
-environment:
-# Variables para el scraper
-- RAW_JSONL=/app/raw_data/raw_products.jsonl
-- CATALOG_CSV=/app/output/catalogo_dropi.csv
-restart: on-failure
+  # 1. Base de Datos (PostgreSQL 17 + pgvector)
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: dahell_db
+    restart: always
+    env_file:
+      - .env.docker
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # Script de inicialización: Crea las tablas al arrancar la primera vez
+      - ./dahell_db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    networks:
+      - dahell_net
 
-loader:
-build:
-context: .
-target: base
-container_name: dropi_loader
-depends_on:
-- scraper
-volumes:
-- raw_data:/app/raw_data
-- db:/app/db
-env_file:
-- .env               # carga DUCKDB_PATH si se define aquí
-command: ["python", "scripts/loader.py", "--input", "/app/raw_data/raw_products.jsonl", "--db", "/app/db/dropi.db"]
-restart: on-failure
+  # 2. Interfaz Gráfica para DB (pgAdmin 4)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: dahell_pgadmin
+    restart: always
+    env_file:
+      - .env.docker
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    networks:
+      - dahell_net
+
+  # 3. Scraper (Python + Selenium)
+  scraper:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_scraper
+    # Comparte variables del .env con Python
+    env_file:
+      - .env.docker
+    volumes:
+      - ./raw_data:/app/raw_data # Persistir JSONs y fotos descargadas
+      - ./backend:/app/backend # Código fuente actualizado
+    # No inicia solo, tú lo lanzas cuando quieras scrapear
+    profiles: [ "tools" ]
+    networks:
+      - dahell_net
+    # Comando por defecto (opcional, o se corre manual)
+    command: python backend/manage.py scraper
+
+  vectorizer:
+    build:
+      context: .
+      target: selenium
+    env_file:
+      - .env.docker
+    volumes:
+      - ./backend:/app/backend
+      - ./cache_huggingface:/app/cache_huggingface
+    # ⚡ Habilitar acceso a la GPU NVIDIA
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    networks:
+      - dahell_net
+    command: python backend/manage.py vectorizer
+
+  clusterizer:
+    build:
+      context: .
+      target: selenium # Reusamos la imagen que ya tiene python y librerias
+    env_file:
+      - .env.docker
+    volumes:
+      - ./backend:/app/backend
+    networks:
+      - dahell_net
+    command: python backend/manage.py clusterizer
+
+  # 6. Frontend (React + Vite)
+  frontend:
+    image: node:20-alpine
+    container_name: dahell_frontend
+    restart: always
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules # Evitar conflictos con node_modules del host
+    ports:
+      - "5173:5173"
+    environment:
+      - CHOKIDAR_USEPOLLING=true # Necesario para hot-reload en Windows/Docker
+    command: sh -c "npm install && npm run dev -- --host"
+    networks:
+      - dahell_net
 
 volumes:
-raw_data:
-output:
-db:
+  pg_data:
+    # Persistencia de la DB
+
+networks:
+  dahell_net:
+    driver: bridge

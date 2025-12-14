@@ -1,5 +1,106 @@
-venv/
+# ============================================================================
+# .gitignore - DAHELL INTELLIGENCE
+# ============================================================================
+
+# --- Python ---
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Entorno Virtual ---
+venv/
+ENV/
+env/
+.venv/
+
+# --- Django ---
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+/static/
+/media/
+
+# --- Variables de Entorno (CRÍTICO) ---
 .env
+.env.local
+.env.*.local
+# Mantener .env.docker visible para despliegue (asegúrate de no poner secretos reales ahí)
+!.env.docker
+
+# --- Datos Crudos y Procesados ---
+raw_data/*.jsonl
+raw_data/*.json
+!raw_data/.gitkeep
+
+# --- Backups de Base de Datos ---
+backups/*.sql
+!backups/.gitkeep
+
+# --- Logs ---
+logs/*.log
+logs/*.txt
+!logs/.gitkeep
+*.log
+*.log.*
+
+# --- Caché de Modelos IA ---
+cache_huggingface/
+*.pt
+*.pth
+*.ckpt
+
+# --- IDEs y Editores ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
+
+# --- Node.js (Frontend) ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- Archivos Temporales ---
+*.tmp
+*.temp
+*.bak
+*.old
+
+# --- Archivos de Sistema ---
+Thumbs.db
+desktop.ini
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints/
+*.ipynb
+
+# --- Coverage y Tests ---
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml

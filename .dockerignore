@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+.git/
+raw_data/*.jsonl  # We mount raw_data, don't copy it
+output/
+db/
+cache_huggingface/
+.env
