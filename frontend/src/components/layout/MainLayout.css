@@ -1,0 +1,41 @@
+.app-container {
+    display: flex;
+    min-height: 100vh;
+    padding-left: calc(var(--sidebar-width) + 2rem);
+    /* Espacio para sidebar */
+    padding-right: 1rem;
+    padding-top: 2vh;
+    padding-bottom: 2vh;
+}
+
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    max-width: 1600px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.top-header {
+    height: 60px;
+    display: flex;
+    align-items: center;
+    padding: 0 1rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.current-page {
+    color: var(--text-main);
+    font-weight: 500;
+}
+
+.content-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 2rem;
+    /* Ocultar barra scroll en layout principal, dejarla para tablas */
+    scrollbar-width: thin;
+}

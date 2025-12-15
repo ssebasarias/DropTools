@@ -1,8 +1,18 @@
-venv/
-__pycache__/
-.git/
-raw_data/*.jsonl  # We mount raw_data, don't copy it
-output/
-db/
-cache_huggingface/
+.git
+.gitignore
 .env
+.env.local
+.vscode
+node_modules
+frontend/node_modules
+backend/venv
+venv
+__pycache__
+*.pyc
+*.pyo
+logs
+raw_data
+cache_huggingface
+pg_data
+dahell_db_data
+tmp

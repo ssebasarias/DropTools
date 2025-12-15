@@ -1,0 +1,226 @@
+.cluster-lab-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.lab-toolbar {
+    padding: 1rem 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.stats {
+    display: flex;
+    gap: 1.5rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.stats strong {
+    color: var(--text-main);
+}
+
+.filters {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-filter {
+    padding: 0.4rem 1rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+}
+
+.btn-filter:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-main);
+}
+
+.btn-filter.active {
+    background: rgba(99, 102, 241, 0.15);
+    color: var(--primary);
+    border-color: rgba(99, 102, 241, 0.3);
+}
+
+/* Cluster Card */
+.cluster-card {
+    margin-bottom: 2rem;
+}
+
+.cluster-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.cluster-info h3 {
+    margin-bottom: 0.5rem;
+    font-size: 1.25rem;
+}
+
+.cluster-meta {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.method-tag {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+}
+
+.cluster-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    transition: all 0.2s;
+}
+
+.btn-icon:hover {
+    color: white;
+}
+
+.btn-icon.check:hover {
+    background: var(--success);
+}
+
+.btn-icon.split:hover {
+    background: var(--danger);
+}
+
+/* Grid de Items */
+.cluster-items-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+}
+
+.cluster-item {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+    padding: 0.75rem;
+    display: flex;
+    gap: 1rem;
+    position: relative;
+    border: 1px solid transparent;
+    transition: border-color 0.2s;
+}
+
+.cluster-item:hover {
+    border-color: var(--glass-border);
+}
+
+.item-image {
+    width: 70px;
+    height: 70px;
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.item-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.leader-badge {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(99, 102, 241, 0.9);
+    color: white;
+    font-size: 0.6rem;
+    text-align: center;
+    padding: 2px 0;
+    font-weight: 600;
+}
+
+.item-details {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.item-details h4 {
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-main);
+}
+
+.item-pricing {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    margin-bottom: 0.25rem;
+}
+
+.sku {
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
+.price {
+    color: var(--success);
+    font-weight: 600;
+}
+
+.supplier {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.remove-item-btn {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 20px;
+    height: 20px;
+    background: var(--bg-app);
+    border: 1px solid var(--glass-border);
+    border-radius: 50%;
+    color: var(--text-muted);
+    display: none;
+    /* Mostrar solo en hover */
+    align-items: center;
+    justify-content: center;
+}
+
+.cluster-item:hover .remove-item-btn {
+    display: flex;
+}
+
+.remove-item-btn:hover {
+    color: var(--danger);
+    border-color: var(--danger);
+}

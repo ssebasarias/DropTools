@@ -7,14 +7,29 @@ import time
 import logging
 import psycopg2
 import re
+import pathlib
+import sys
 from difflib import SequenceMatcher
 from django.core.management.base import BaseCommand
 from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("clusterizer_v2")
-
 load_dotenv()
+
+# ─────── Configuración de Logs ───────
+LOG_DIR = pathlib.Path("/app/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logger = logging.getLogger("clusterizer")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+fh = logging.FileHandler(LOG_DIR / "clusterizer.log", encoding='utf-8')
+fh.setFormatter(formatter)
+logger.addHandler(fh)
+
+ch = logging.StreamHandler(sys.stdout)
+ch.setFormatter(formatter)
+logger.addHandler(ch)
 
 UMBRAL_VISUAL_STRICT = 0.05
 UMBRAL_VISUAL_CANDIDATE = 0.20
@@ -106,33 +121,13 @@ def update_cluster_metrics(cur):
 
 def run_hard_clustering(conn):
     cur = conn.cursor()
-    logger.info("🔒 Fase 1: Hard Clustering (Bodegas & SKU)...")
+    logger.info("🔒 Fase 1: Hard Clustering (Solo por SKU)...")
     
-    # 1.1 BODEGA
-    cur.execute("""
-        SELECT s.warehouse_id, array_agg(DISTINCT s.product_id)
-        FROM product_stock_log s
-        WHERE s.warehouse_id IS NOT NULL
-        GROUP BY s.warehouse_id
-        HAVING count(DISTINCT s.product_id) > 1
-    """)
-    groups = cur.fetchall()
+    # NOTA: Se eliminó el clustering por BODEGA porque una bodega
+    # puede tener múltiples productos distintos, causando falsos positivos graves.
     
-    for wh_id, pids in groups:
-        target_cluster = None
-        cur.execute(f"SELECT cluster_id FROM product_cluster_membership WHERE product_id IN %s LIMIT 1", (tuple(pids),))
-        res = cur.fetchone()
-        if res:
-            target_cluster = res[0]
-        else:
-            target_cluster = create_cluster(cur, pids[0], 'HARD_WAREHOUSE', 1.0)
-            
-        for pid in pids:
-            add_to_cluster(cur, target_cluster, pid, 'HARD_WAREHOUSE', 1.0)
-            
-    conn.commit()
-    
-    # 1.2 SKU
+    # 1. SKU CLUSTERING
+    # Buscamos SKUs idénticos que tengan más de 3 caracteres
     cur.execute("""
         SELECT sku, array_agg(product_id)
         FROM products
@@ -142,27 +137,34 @@ def run_hard_clustering(conn):
     """)
     sku_groups = cur.fetchall()
     
+    count_sku_clusters = 0
+    
     for sku, pids in sku_groups:
         norm_sku = normalize_sku(sku)
-        if not norm_sku: continue
+        
+        # Filtros de seguridad para SKUs basura
+        if not norm_sku or len(norm_sku) < 4: continue
+        if norm_sku in ["TEST", "PRUEBA", "GENERICO", "VARIOS", "0000", "1234"]: continue
         
         target_cluster = None
-        cur.execute(f"SELECT cluster_id, match_method FROM product_cluster_membership WHERE product_id IN %s", (tuple(pids),))
-        memberships = cur.fetchall()
-        existing = set(m[0] for m in memberships)
         
-        if len(existing) == 0:
-            target_cluster = create_cluster(cur, pids[0], 'HARD_SKU', 0.95)
-        elif len(existing) == 1:
-            target_cluster = list(existing)[0]
+        # Verificar si alguno de estos productos ya tiene cluster
+        cur.execute(f"SELECT cluster_id FROM product_cluster_membership WHERE product_id IN %s LIMIT 1", (tuple(pids),))
+        res = cur.fetchone()
+        
+        if res:
+            target_cluster = res[0]
         else:
-            continue
+            # Crear nuevo cluster
+            target_cluster = create_cluster(cur, pids[0], 'HARD_SKU', 0.98)
+            count_sku_clusters += 1
             
+        # Unir todos al cluster
         for pid in pids:
-            add_to_cluster(cur, target_cluster, pid, 'HARD_SKU', 0.95)
+            add_to_cluster(cur, target_cluster, pid, 'HARD_SKU', 0.98)
             
     conn.commit()
-    logger.info("   Fase 1 completada.")
+    logger.info(f"   Fase 1 completada. {count_sku_clusters} nuevos clusters creados por SKU.")
     cur.close()
 
 def run_soft_clustering(conn):

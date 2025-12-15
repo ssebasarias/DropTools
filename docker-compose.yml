@@ -44,12 +44,32 @@ services:
     volumes:
       - ./raw_data:/app/raw_data # Persistir JSONs y fotos descargadas
       - ./backend:/app/backend # Código fuente actualizado
+      - ./logs:/app/logs
     # No inicia solo, tú lo lanzas cuando quieras scrapear
-    profiles: [ "tools" ]
     networks:
       - dahell_net
     # Comando por defecto (opcional, o se corre manual)
     command: python backend/manage.py scraper
+    restart: always
+    depends_on:
+      - db
+
+  loader:
+    build:
+      context: .
+      target: selenium
+    env_file:
+      - .env.docker
+    volumes:
+      - ./backend:/app/backend
+      - ./raw_data:/app/raw_data
+      - ./logs:/app/logs
+    networks:
+      - dahell_net
+    command: python backend/manage.py loader
+    restart: always
+    depends_on:
+      - db
 
   vectorizer:
     build:
@@ -60,6 +80,7 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./cache_huggingface:/app/cache_huggingface
+      - ./logs:/app/logs
     # ⚡ Habilitar acceso a la GPU NVIDIA
     deploy:
       resources:
@@ -71,6 +92,9 @@ services:
     networks:
       - dahell_net
     command: python backend/manage.py vectorizer
+    restart: always
+    depends_on:
+      - db
 
   clusterizer:
     build:
@@ -80,9 +104,33 @@ services:
       - .env.docker
     volumes:
       - ./backend:/app/backend
+      - ./logs:/app/logs
     networks:
       - dahell_net
     command: python backend/manage.py clusterizer
+    restart: always
+    depends_on:
+      - db
+
+  # 5. Backend API (Django REST Framework)
+  backend:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_backend
+    restart: always
+    env_file:
+      - .env.docker
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    command: python backend/manage.py runserver 0.0.0.0:8000
+    networks:
+      - dahell_net
+    depends_on:
+      - db
 
   # 6. Frontend (React + Vite)
   frontend:

@@ -6,6 +6,8 @@ import os
 import time
 import requests
 import logging
+import pathlib
+import sys
 from io import BytesIO
 import torch
 from PIL import Image
@@ -16,9 +18,23 @@ import numpy as np
 from django.core.management.base import BaseCommand
 from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("vectorizer")
 load_dotenv()
+
+# ─────── Configuración de Logs ───────
+LOG_DIR = pathlib.Path("/app/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logger = logging.getLogger("vectorizer")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+fh = logging.FileHandler(LOG_DIR / "vectorizer.log", encoding='utf-8')
+fh.setFormatter(formatter)
+logger.addHandler(fh)
+
+ch = logging.StreamHandler(sys.stdout)
+ch.setFormatter(formatter)
+logger.addHandler(ch)
 
 def addapt_numpy_array(numpy_array):
     return AsIs(list(numpy_array))

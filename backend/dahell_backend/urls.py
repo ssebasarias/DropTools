@@ -16,7 +16,12 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from core.views import DashboardStatsView, GoldMineView, SystemLogsView, CategoriesView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
+    path('api/gold-mine/', GoldMineView.as_view(), name='gold-mine'),
+    path('api/categories/', CategoriesView.as_view(), name='categories'),
+    path('api/system-logs/', SystemLogsView.as_view(), name='system-logs'),
 ]

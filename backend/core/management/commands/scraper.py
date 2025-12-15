@@ -3,6 +3,7 @@ Módulo principal de scraping para Dropi (Django Command).
 """
 import os
 import logging
+import sys
 from django.core.management.base import BaseCommand
 from dotenv import load_dotenv
 from selenium import webdriver
@@ -30,8 +31,26 @@ HEADLESS    = os.getenv("HEADLESS", "True").lower() in ("1", "true", "yes")
 RAW_DIR_PATH = pathlib.Path(os.getenv("RAW_DIR", "raw_data"))
 RAW_DIR_PATH.mkdir(parents=True, exist_ok=True)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+# ─────── Configuración de Logs (Centralizada) ───────
+# Creamos carpeta logs dentro del contenedor (montada a host)
+LOG_DIR = pathlib.Path("/app/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logger = logging.getLogger("scraper")
+logger.setLevel(logging.INFO)
+
+# Formatter bonito
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+# 1. File Handler (Para visualización en Frontend)
+file_handler = logging.FileHandler(LOG_DIR / "scraper.log", encoding='utf-8')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# 2. Console Handler (Para Docker standard logs)
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 # ─────── Helper Functions ───────
 
@@ -50,8 +69,17 @@ def build_driver() -> webdriver.Chrome:
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
 
-    driver_path = ChromeDriverManager().install()
-    service = Service(driver_path)
+    # 1. Intentar usar driver del sistema (Docker)
+    system_driver = os.environ.get("CHROMEDRIVER")
+    if system_driver and os.path.exists(system_driver):
+        logger.info(f"Using system chromedriver: {system_driver}")
+        service = Service(system_driver)
+    else:
+        # 2. Fallback a webdriver_manager
+        logger.info("Using webdriver_manager...")
+        driver_path = ChromeDriverManager().install()
+        service = Service(driver_path)
+
     return webdriver.Chrome(service=service, options=opts)
 
 def login(driver: webdriver.Chrome, timeout: int = 30) -> bool:
@@ -81,24 +109,36 @@ def login(driver: webdriver.Chrome, timeout: int = 30) -> bool:
         return False
 
 def navigate_to_catalog(driver: webdriver.Chrome) -> None:
-    logger.info("4) Navegando al catálogo...")
+    logger.info("4) Navegando al catálogo (Modo Humano)...")
     time.sleep(5)
     wait = WebDriverWait(driver, 20)
     
-    # Clic en "Productos"
     try:
-        prod_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//span[normalize-space()='Productos']/ancestor::a")))
-        prod_btn.click()
-        time.sleep(1)
+        # Intento 1: Navegación por menú
+        # Buscamos "Productos" de forma más flexible
+        prod_xpath = "//span[contains(text(), 'Productos')]"
+        prod_el = wait.until(EC.element_to_be_clickable((By.XPATH, prod_xpath)))
+        
+        # Intentar click en el ancestro 'a' si existe, sino en el elemento mismo
+        try:
+            prod_el.find_element(By.XPATH, "./ancestor::a").click()
+        except:
+            prod_el.click()
+            
+        time.sleep(2) # Espera humana
         
         # Clic en "Catálogo"
-        cat_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[@href='/dashboard/search' and normalize-space()='Catálogo']")))
+        cat_xpath = "//a[contains(@href, '/dashboard/search') and contains(text(), 'Catálogo')]"
+        cat_btn = wait.until(EC.element_to_be_clickable((By.XPATH, cat_xpath)))
         cat_btn.click()
         
         time.sleep(5)
-        logger.info("🔍 Catálogo abierto.")
+        logger.info("🔍 Catálogo abierto (Navegación manual exitosa).")
+        
     except Exception as e:
-        logger.warning(f"Error navegando menú: {e}. Intentando ir directo a URL...")
+        # Log limpio sin stacktrace gigante
+        err_msg = str(e).split('\n')[0]
+        logger.warning(f"⚠️ No se pudo navegar el menú ({err_msg}). Abriendo URL directa para rescatar la sesión.")
         driver.get("https://app.dropi.co/dashboard/search")
         time.sleep(5)
 
@@ -151,12 +191,12 @@ class Command(BaseCommand):
     help = 'Scraper de Dropi (Daemon)'
 
     def handle(self, *args, **options):
-        self.stdout.write("🚀 SCRAPER DAEMON INICIADO (Modo Infinito)")
+        logger.info("🚀 SCRAPER DAEMON INICIADO (Modo Infinito)")
         
         while True:
             driver = None
             try:
-                self.stdout.write("🔄 Iniciando ciclo de scraping...")
+                logger.info("🔄 Iniciando ciclo de scraping...")
                 driver = build_driver()
                 driver.execute_cdp_cmd("Network.enable", {})
 
@@ -176,7 +216,7 @@ class Command(BaseCommand):
                                 record = self.process_product(p)
                                 f.write(json.dumps(record, ensure_ascii=False) + '\n')
                                 f.flush()
-                            self.stdout.write(f"📦 +{len(nuevos)} productos (Total: {len(seen)})")
+                            logger.info(f"📦 +{len(nuevos)} productos (Total: {len(seen)})")
                         
                         # Navegación
                         scroll_to_bottom(driver)
@@ -190,7 +230,7 @@ class Command(BaseCommand):
                         if not found:
                             consecutive_no_button += 1
                             if consecutive_no_button >= 5:
-                                self.stdout.write("🛑 Fin del catálogo o error. Reiniciando...")
+                                logger.info("🛑 Fin del catálogo o error. Reiniciando...")
                                 break
                         else:
                             consecutive_no_button = 0
@@ -198,7 +238,7 @@ class Command(BaseCommand):
                         time.sleep(1)
 
             except Exception as e:
-                self.stderr.write(f"💥 Error: {e}")
+                logger.error(f"💥 Error: {e}")
                 time.sleep(60)
             finally:
                 if driver: driver.quit()
