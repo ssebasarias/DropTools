@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { fetchGoldMine, searchVisualGoldMine, fetchCategories } from '../services/api';
-import { ShoppingBag, Users, Search, Filter, Camera, X, UploadCloud } from 'lucide-react';
+import { ShoppingBag, Users, Search, Filter, Camera, X } from 'lucide-react';
 import './Dashboard.css';
 
 const GoldMine = () => {
@@ -12,6 +12,8 @@ const GoldMine = () => {
     const [search, setSearch] = useState('');
     const [competitorRange, setCompetitorRange] = useState('0-20');
     const [selectedCategory, setSelectedCategory] = useState('all');
+    const [minPrice, setMinPrice] = useState('');
+    const [maxPrice, setMaxPrice] = useState('');
 
     // Visual Search State
     const [visualImage, setVisualImage] = useState(null);
@@ -44,6 +46,12 @@ const GoldMine = () => {
                 offset: currentOffset
             };
 
+            // Agregar filtros de precio si están definidos
+            if (minPrice && Number(minPrice) > 0) params.min_price = minPrice;
+            if (maxPrice && Number(maxPrice) > 0) params.max_price = maxPrice;
+
+            console.log('🔍 Gold Mine Params:', params);
+
             const newData = await fetchGoldMine(params);
 
             if (isNewSearch) {
@@ -62,7 +70,7 @@ const GoldMine = () => {
         } finally {
             setLoading(false);
         }
-    }, [search, competitorRange, selectedCategory, offset, isVisualMode]);
+    }, [search, competitorRange, selectedCategory, minPrice, maxPrice, offset, isVisualMode]);
 
     // Disparar búsqueda al cambiar filtros (Debounce manual simple)
     useEffect(() => {
@@ -72,7 +80,7 @@ const GoldMine = () => {
             }, 500);
             return () => clearTimeout(timer);
         }
-    }, [search, competitorRange, selectedCategory, isVisualMode]);
+    }, [search, competitorRange, selectedCategory, minPrice, maxPrice, isVisualMode]);
 
     // Handle Visual Search
     const handleImageUpload = async (e) => {
@@ -169,6 +177,30 @@ const GoldMine = () => {
                         ))}
                     </select>
 
+                    {/* Price Range Filter */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <span style={{ fontSize: '0.85rem', color: '#94a3b8', marginLeft: '0.5rem' }}>Precio:</span>
+                        <input
+                            type="number"
+                            placeholder="Min"
+                            value={minPrice}
+                            onChange={(e) => setMinPrice(e.target.value)}
+                            disabled={isVisualMode}
+                            className="glass-select"
+                            style={{ width: '90px', padding: '0.4rem 0.5rem', fontSize: '0.85rem' }}
+                        />
+                        <span style={{ color: '#64748b' }}>-</span>
+                        <input
+                            type="number"
+                            placeholder="Max"
+                            value={maxPrice}
+                            onChange={(e) => setMaxPrice(e.target.value)}
+                            disabled={isVisualMode}
+                            className="glass-select"
+                            style={{ width: '90px', padding: '0.4rem 0.5rem', fontSize: '0.85rem' }}
+                        />
+                    </div>
+
                     <span style={{ fontSize: '0.9rem', color: '#94a3b8', marginLeft: '0.5rem' }}>Comp:</span>
                     <select
                         value={competitorRange}
@@ -254,8 +286,12 @@ const GoldMine = () => {
                                         </span>
                                     </td>
                                     <td>
-                                        <button className="btn-primary" style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem' }}>
-                                            Ver
+                                        <button
+                                            className="btn-primary"
+                                            onClick={() => window.open(`https://app.dropi.co/products/${op.id}`, '_blank')}
+                                            style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem' }}
+                                        >
+                                            Ver en Dropi
                                         </button>
                                     </td>
                                 </tr>

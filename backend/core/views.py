@@ -151,8 +151,16 @@ class GoldMineView(APIView):
         
         # Filtro opcional de precio si lo envían
         min_price = request.query_params.get('min_price')
+        max_price = request.query_params.get('max_price')
+        
+        # Debug logging
+        if min_price or max_price:
+            print(f"💰 Price filters - Min: {min_price}, Max: {max_price}")
+        
         if min_price: 
             filters &= Q(average_price__gte=min_price)
+        if max_price:
+            filters &= Q(average_price__lte=max_price)
 
         if search_query:
             filters &= Q(representative_product__title__icontains=search_query)
