@@ -147,6 +147,44 @@ class Command(BaseCommand):
                 "img": data.get("image_url")
             })
 
+            # --- 4. Categorías ---
+            categories = data.get("categories", [])
+            if categories and isinstance(categories, list):
+                for cat_name in categories:
+                    if not cat_name or not isinstance(cat_name, str):
+                        continue
+                    
+                    cat_name = cat_name.strip()
+                    if not cat_name:
+                        continue
+                    
+                    # Insertar categoría si no existe
+                    try:
+                        session.execute(text("""
+                            INSERT INTO categories (name)
+                            VALUES (:name)
+                            ON CONFLICT (name) DO NOTHING
+                        """), {"name": cat_name})
+                    except:
+                        pass
+                    
+                    # Obtener el ID de la categoría
+                    try:
+                        result = session.execute(text("""
+                            SELECT id FROM categories WHERE name = :name
+                        """), {"name": cat_name})
+                        cat_id = result.fetchone()[0]
+                        
+                        # Crear relación producto-categoría
+                        session.execute(text("""
+                            INSERT INTO product_categories (product_id, category_id)
+                            VALUES (:pid, :cid)
+                            ON CONFLICT (product_id, category_id) DO NOTHING
+                        """), {"pid": prod_id, "cid": cat_id})
+                    except:
+                        pass
+
+            # --- 5. Stock ---
             if wh_id:
                 try:
                     qty = int(data.get("stock") or 0)
