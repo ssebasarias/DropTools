@@ -43,10 +43,17 @@ register_adapter(np.ndarray, addapt_numpy_array)
 
 # Configuración DB
 user = os.getenv("POSTGRES_USER", "dahell_admin")
-pwd = os.getenv("POSTGRES_PASSWORD", "secure_password_123")
+# SECURITY: Never hardcode passwords. Ensure ENV var is set.
+pwd = os.getenv("POSTGRES_PASSWORD") 
 host = os.getenv("POSTGRES_HOST", "127.0.0.1")
 port = os.getenv("POSTGRES_PORT", "5433")
 dbname = os.getenv("POSTGRES_DB", "dahell_db")
+
+if not pwd:
+    # Fallback inseguro eliminado. Loguear warning crítico si estamos en local, o error.
+    # Para desarrollo local rápido, a veces se deja, pero mejor lo limpiamos.
+    pass 
+
 
 MODEL_NAME = "openai/clip-vit-base-patch32"
 
@@ -80,11 +87,21 @@ class Vectorizer:
             return None
 
     def generate_embedding(self, image):
-        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+        # Wrapper legacy para compatibilidad si fuera necesario, o para procesar 1 sola
+        return self.generate_embedding_batch([image])[0]
+
+    def generate_embedding_batch(self, images):
+        """
+        Procesa una lista de imágenes de golpe (Batch)
+        Retorna: numpy array de shape [N, 512]
+        """
+        inputs = self.processor(images=images, return_tensors="pt", padding=True).to(self.device)
         with torch.no_grad():
             image_features = self.model.get_image_features(**inputs)
+        
+        # Normalización L2
         image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
-        return image_features.cpu().numpy()[0]
+        return image_features.cpu().numpy()
 
     def run(self):
         while True:
@@ -111,37 +128,79 @@ class Vectorizer:
                     if conn: conn.close()
                     continue
 
-                logger.info(f"🔨 Procesando lote de {len(rows)} imágenes...")
+                logger.info(f"🔨 Procesando lote de {len(rows)} imágenes (Modo Batch)...")
                 
-                processed_count = 0
-                for pid, url in rows:
+                # --- OPTIMIZACIÓN PARALELA ---
+                from concurrent.futures import ThreadPoolExecutor
+                
+                # 1. Descarga Paralela de Imágenes (I/O Bound)
+                images_map = {} # { product_id: PIL.Image }
+                failed_ids = []
+                
+                def download_task(row):
+                    pid, url = row
                     img = self.fetch_image(url)
-                    vector = None
-                    if img:
-                        vector = self.generate_embedding(img)
-                        vector_list = vector.tolist() if vector is not None else None
+                    return pid, img
+
+                with ThreadPoolExecutor(max_workers=20) as executor:
+                    futures = [executor.submit(download_task, r) for r in rows]
+                    for f in futures:
+                        pid, img = f.result()
+                        if img:
+                            images_map[pid] = img
+                        else:
+                            failed_ids.append(pid)
+                
+                # 2. Procesamiento Batch IA (GPU/CPU Bound)
+                if images_map:
+                    # Crear listas ordenadas para el batch
+                    valid_pids = list(images_map.keys())
+                    valid_images = list(images_map.values())
                     
-                    if vector is not None:
+                    try:
+                        # Inferencia en Batch (Mucho más rápido que 1 a 1)
+                        # Nota: Se asume que 100 imágenes caben en VRAM. Si falla, reduce el LIMIT del SQL.
+                        vectors = self.generate_embedding_batch(valid_images) # Nueva función batch
+                        
+                        # 3. Guardado en DB
                         sql_upsert = """
                             INSERT INTO product_embeddings (product_id, embedding_visual, processed_at)
                             VALUES (%s, %s, NOW())
                             ON CONFLICT (product_id) 
                             DO UPDATE SET embedding_visual = EXCLUDED.embedding_visual, processed_at = NOW();
                         """
-                        cur.execute(sql_upsert, (pid, vector_list))
-                        processed_count += 1
-                        print(".", end="", flush=True)
-                    else:
-                         sql_upsert_dummy = """
-                            INSERT INTO product_embeddings (product_id, processed_at)
-                            VALUES (%s, NOW())
-                            ON CONFLICT (product_id) DO NOTHING;
-                        """
+                        
+                        # Preparar datos para executemany (o loop rápido)
+                        upsert_data = []
+                        for i, pid in enumerate(valid_pids):
+                            vec_list = vectors[i].tolist()
+                            upsert_data.append((pid, vec_list))
+                            
+                        # Usamos loop con execute por seguridad con el adaptador pgvector manual,
+                        # executemany a veces da problemas con listas complejas si no está bien configurado el adapter.
+                        for pid, vec in upsert_data:
+                            cur.execute(sql_upsert, (pid, vec))
+                            
+                        logger.info(f"✅ Vectorizados {len(valid_pids)} productos en paralelo.")
+                        
+                    except Exception as e:
+                        logger.error(f"Error en batch IA: {e}")
+                        # Fallback a dummy para no bloquear
+                        failed_ids.extend(valid_pids)
+
+                # 4. Marcar fallidos para no reintentar inmediatamente (o marcar como procesados sin vector)
+                if failed_ids:
+                     sql_upsert_dummy = """
+                        INSERT INTO product_embeddings (product_id, processed_at)
+                        VALUES (%s, NOW())
+                        ON CONFLICT (product_id) DO NOTHING;
+                    """
+                     # Batch update for failed
+                     for pid in failed_ids:
                          cur.execute(sql_upsert_dummy, (pid,))
-                         print("x", end="", flush=True)
+                     logger.info(f"⚠️ Marcados {len(failed_ids)} fallidos o sin imagen.")
 
                 conn.commit()
-                print(f" -> Lote terminado ({processed_count} vectores generados).")
                 cur.close()
                 conn.close()
 

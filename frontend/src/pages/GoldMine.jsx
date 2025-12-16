@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { fetchGoldMine, searchVisualGoldMine, fetchCategories } from '../services/api';
+import { fetchGoldMine, fetchGoldMineStats, searchVisualGoldMine, fetchCategories } from '../services/api';
 import { ShoppingBag, Users, Search, Filter, Camera, X } from 'lucide-react';
+import LazyImage from '../components/common/LazyImage';
 import './Dashboard.css';
 
 const GoldMine = () => {
@@ -10,7 +11,8 @@ const GoldMine = () => {
 
     // Filtros
     const [search, setSearch] = useState('');
-    const [competitorRange, setCompetitorRange] = useState('0-20');
+    const [competitorRange, setCompetitorRange] = useState('0-1000');
+    const [selectedCompetitor, setSelectedCompetitor] = useState(null); // null = All
     const [selectedCategory, setSelectedCategory] = useState('all');
     const [minPrice, setMinPrice] = useState('');
     const [maxPrice, setMaxPrice] = useState('');
@@ -55,13 +57,8 @@ const GoldMine = () => {
             setOpportunities(newData);
             setCurrentPage(page);
 
-            // Calcular estadísticas de competidores
-            const stats = {};
-            newData.forEach(product => {
-                const comp = product.competitors || 0;
-                stats[comp] = (stats[comp] || 0) + 1;
-            });
-            setCompetitorStats(stats);
+            // Stats are now fetched globally in a separate effect
+
 
             if (newData.length < ITEMS_PER_PAGE) {
                 setTotalResults(offset + newData.length);
@@ -84,6 +81,30 @@ const GoldMine = () => {
             return () => clearTimeout(timer);
         }
     }, [search, competitorRange, selectedCategory, minPrice, maxPrice, isVisualMode]);
+
+    // Cargar Estadísticas Globales (Independiente de la paginación y filtro de competidores actual)
+    useEffect(() => {
+        if (isVisualMode) return;
+
+        const loadStats = async () => {
+            try {
+                const params = {
+                    q: search,
+                    category: selectedCategory,
+                };
+                if (minPrice && Number(minPrice) > 0) params.min_price = minPrice;
+                if (maxPrice && Number(maxPrice) > 0) params.max_price = maxPrice;
+
+                const globalStats = await fetchGoldMineStats(params);
+                setCompetitorStats(globalStats);
+            } catch (error) {
+                console.error("Error loading stats", error);
+            }
+        };
+
+        const timer = setTimeout(loadStats, 500);
+        return () => clearTimeout(timer);
+    }, [search, selectedCategory, minPrice, maxPrice, isVisualMode]);
 
     const handleImageUpload = async (e) => {
         const file = e.target.files[0];
@@ -188,76 +209,136 @@ const GoldMine = () => {
                         <input type="number" placeholder="Max" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} disabled={isVisualMode} className="glass-select" style={{ width: '90px', padding: '0.4rem 0.5rem', fontSize: '0.85rem' }} />
                     </div>
 
-                    <span style={{ fontSize: '0.9rem', color: '#94a3b8', marginLeft: '0.5rem' }}>Comp:</span>
-                    <select value={competitorRange} onChange={(e) => setCompetitorRange(e.target.value)} disabled={isVisualMode} className="glass-select">
-                        <option value="0-1">Solo yo (0-1)</option>
-                        <option value="0-3">Baja (0-3)</option>
-                        <option value="0-5">Media (0-5)</option>
-                        <option value="0-20">Todas (0-20)</option>
-                    </select>
                 </div>
             </div>
 
-            {isVisualMode && visualImage && (
-                <div className="glass-card" style={{ marginBottom: '1rem', padding: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(16, 185, 129, 0.1)' }}>
-                    <div style={{ width: 60, height: 60, borderRadius: 8, overflow: 'hidden' }}>
-                        <img src={visualImage} alt="Search Query" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    </div>
-                    <div>
-                        <h4 style={{ color: '#10b981', marginBottom: 2 }}>Buscando visualmente...</h4>
-                        <span style={{ fontSize: '0.8rem', color: '#ccc' }}>Analizando patrones visuales con IA para encontrar similitudes.</span>
-                    </div>
-                </div>
-            )}
-
-            {/* Competitor Stats Panel */}
+            {/* Interactive Competitor Distribution Bar (Replacing the old Select) */}
             {!loading && !isVisualMode && Object.keys(competitorStats).length > 0 && (
-                <div className="glass-card" style={{ marginBottom: '1rem', padding: '1rem' }}>
-                    <h3 style={{ color: '#fff', fontSize: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Users size={20} color="#667eea" />
-                        Distribución por Competidores
-                    </h3>
-                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                <div className="glass-panel" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
+                    <div className="custom-scrollbar" style={{
+                        display: 'flex',
+                        overflowX: 'auto',
+                        gap: '1.5rem',
+                        alignItems: 'center',
+                        paddingBottom: '0.75rem' // Espacio para la scrollbar
+                    }}>
+                        <style>
+                            {`
+                                .custom-scrollbar::-webkit-scrollbar {
+                                    height: 6px;
+                                }
+                                .custom-scrollbar::-webkit-scrollbar-track {
+                                    background: rgba(255, 255, 255, 0.02);
+                                    border-radius: 10px;
+                                }
+                                .custom-scrollbar::-webkit-scrollbar-thumb {
+                                    background: rgba(255, 255, 255, 0.15);
+                                    border-radius: 10px;
+                                }
+                                .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                                    background: rgba(255, 255, 255, 0.25);
+                                }
+                            `}
+                        </style>
+
+                        {/* Option: ALL */}
+                        <div
+                            onClick={() => {
+                                setSelectedCompetitor(null);
+                                setCompetitorRange('0-1000');
+                            }}
+                            style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                cursor: 'pointer',
+                                opacity: selectedCompetitor === null ? 1 : 0.6,
+                                borderBottom: selectedCompetitor === null ? '2px solid #6366f1' : '2px solid transparent',
+                                paddingBottom: '0.5rem',
+                                transition: 'all 0.2s',
+                                minWidth: '70px'
+                            }}
+                        >
+                            <div style={{
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '50%',
+                                background: selectedCompetitor === null ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255,255,255,0.03)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                            }}>
+                                <Users size={18} color={selectedCompetitor === null ? '#6366f1' : '#94a3b8'} />
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.1 }}>
+                                <span style={{ fontWeight: 600, color: '#fff', fontSize: '0.85rem' }}>Todos</span>
+                                <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{totalResults}</span>
+                            </div>
+                        </div>
+
+                        {/* Divider */}
+                        <div style={{ width: 1, height: '30px', background: 'rgba(255,255,255,0.08)' }}></div>
+
+                        {/* Competitor Groups */}
                         {Object.entries(competitorStats)
                             .sort((a, b) => Number(a[0]) - Number(b[0]))
                             .map(([competitors, count]) => {
                                 const compNum = Number(competitors);
-                                let bgColor = 'rgba(16, 185, 129, 0.1)';
-                                let borderColor = 'rgba(16, 185, 129, 0.3)';
-                                let iconColor = '#10b981';
+                                const isSelected = selectedCompetitor === compNum;
 
-                                if (compNum > 2 && compNum <= 5) {
-                                    bgColor = 'rgba(245, 158, 11, 0.1)';
-                                    borderColor = 'rgba(245, 158, 11, 0.3)';
-                                    iconColor = '#f59e0b';
-                                } else if (compNum > 5) {
-                                    bgColor = 'rgba(239, 68, 68, 0.1)';
-                                    borderColor = 'rgba(239, 68, 68, 0.3)';
-                                    iconColor = '#ef4444';
-                                }
+                                let iconColor = '#10b981'; // Green (Low)
+                                if (compNum > 2) iconColor = '#f59e0b'; // Medium
+                                if (compNum > 5) iconColor = '#ef4444'; // High
+
+                                let glowColor = `rgba(${compNum > 5 ? '239, 68, 68' : (compNum > 2 ? '245, 158, 11' : '16, 185, 129')}, 0.15)`;
 
                                 return (
                                     <div
                                         key={competitors}
+                                        onClick={() => {
+                                            setSelectedCompetitor(compNum);
+                                            setCompetitorRange(`${compNum}-${compNum}`);
+                                        }}
                                         style={{
-                                            background: bgColor,
-                                            border: `1px solid ${borderColor}`,
-                                            borderRadius: '8px',
-                                            padding: '0.75rem 1rem',
                                             display: 'flex',
+                                            flexDirection: 'column',
                                             alignItems: 'center',
-                                            gap: '0.75rem',
-                                            minWidth: '120px'
+                                            gap: '0.25rem',
+                                            cursor: 'pointer',
+                                            minWidth: '70px',
+                                            paddingBottom: '0.5rem',
+                                            borderBottom: isSelected ? `2px solid ${iconColor}` : '2px solid transparent',
+                                            opacity: (selectedCompetitor !== null && !isSelected) ? 0.4 : 1,
+                                            transform: isSelected ? 'scale(1.05)' : 'scale(1)',
+                                            transition: 'all 0.2s'
                                         }}
                                     >
-                                        <Users size={24} color={iconColor} />
-                                        <div>
-                                            <div style={{ color: iconColor, fontSize: '1.25rem', fontWeight: 'bold' }}>
-                                                {compNum}
-                                            </div>
-                                            <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
-                                                {count} producto{count !== 1 ? 's' : ''}
-                                            </div>
+                                        <div style={{
+                                            width: '36px',
+                                            height: '36px',
+                                            borderRadius: '50%',
+                                            background: isSelected ? glowColor : 'rgba(255,255,255,0.03)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            boxShadow: isSelected ? `0 0 10px ${glowColor}` : 'none'
+                                        }}>
+                                            <Users size={18} color={iconColor} />
+                                        </div>
+
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.1 }}>
+                                            <span style={{
+                                                color: iconColor,
+                                                fontSize: '0.85rem',
+                                                fontWeight: '600',
+                                                textShadow: isSelected ? `0 0 8px ${iconColor}` : 'none'
+                                            }}>
+                                                {compNum} Comp.
+                                            </span>
+                                            <span style={{ color: '#94a3b8', fontSize: '0.7rem' }}>
+                                                {count}
+                                            </span>
                                         </div>
                                     </div>
                                 );
@@ -265,6 +346,7 @@ const GoldMine = () => {
                     </div>
                 </div>
             )}
+
 
             <div className="glass-card">
                 {!loading && opportunities.length > 0 && (
@@ -293,7 +375,11 @@ const GoldMine = () => {
                                     <td>
                                         <div style={{ width: 50, height: 50, borderRadius: 8, overflow: 'hidden', background: '#222' }}>
                                             {op.image ? (
-                                                <img src={op.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                <LazyImage
+                                                    src={op.image}
+                                                    alt=""
+                                                    style={{ width: '100%', height: '100%' }}
+                                                />
                                             ) : (
                                                 <ShoppingBag size={24} style={{ margin: 12, color: '#666' }} />
                                             )}
@@ -368,7 +454,7 @@ const GoldMine = () => {
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 };
 

@@ -46,11 +46,12 @@ services:
       - ./backend:/app/backend # Código fuente actualizado
       - ./logs:/app/logs
     # No inicia solo, tú lo lanzas cuando quieras scrapear
+    profiles: [ "workers" ]
     networks:
       - dahell_net
     # Comando por defecto (opcional, o se corre manual)
     command: python backend/manage.py scraper
-    restart: always
+    restart: no
     depends_on:
       - db
 
@@ -58,6 +59,7 @@ services:
     build:
       context: .
       target: selenium
+    container_name: dahell_loader
     env_file:
       - .env.docker
     volumes:
@@ -67,7 +69,8 @@ services:
     networks:
       - dahell_net
     command: python backend/manage.py loader
-    restart: always
+    profiles: [ "workers" ]
+    restart: no
     depends_on:
       - db
 
@@ -75,6 +78,7 @@ services:
     build:
       context: .
       target: selenium
+    container_name: dahell_vectorizer
     env_file:
       - .env.docker
     volumes:
@@ -92,7 +96,8 @@ services:
     networks:
       - dahell_net
     command: python backend/manage.py vectorizer
-    restart: always
+    profiles: [ "workers" ]
+    restart: no
     depends_on:
       - db
 
@@ -100,6 +105,7 @@ services:
     build:
       context: .
       target: selenium # Reusamos la imagen que ya tiene python y librerias
+    container_name: dahell_clusterizer
     env_file:
       - .env.docker
     volumes:
@@ -108,9 +114,29 @@ services:
     networks:
       - dahell_net
     command: python backend/manage.py clusterizer
-    restart: always
+    profiles: [ "workers" ]
+    restart: no
     depends_on:
       - db
+
+  ai_trainer:
+    build:
+      context: .
+      target: selenium # Reusamos imagen completa porsiacaso, aunque no usa chrome
+    container_name: dahell_ai_trainer
+    env_file:
+      - .env.docker
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    networks:
+      - dahell_net
+    command: python backend/manage.py ai_trainer
+    profiles: [ "workers" ]
+    restart: "no"
+    depends_on:
+      - db
+      - backend # Renamed from "backend API (Django REST Framework)" to match service name
 
   # 5. Backend API (Django REST Framework)
   backend:
@@ -125,6 +151,7 @@ services:
       - ./backend:/app/backend
       - ./logs:/app/logs
       - ./cache_huggingface:/app/cache_huggingface
+      - /var/run/docker.sock:/var/run/docker.sock # Control Docker from within container
     ports:
       - "8000:8000"
     command: python backend/manage.py runserver 0.0.0.0:8000

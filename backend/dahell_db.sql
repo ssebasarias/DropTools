@@ -185,3 +185,87 @@ JOIN products p ON c.representative_product_id = p.product_id
 WHERE c.total_competitors <= 3  -- Menos de 3 vendedores (Poco saturado)
 AND p.profit_margin > 20000;    -- Ganancia de m√°s de 20k (Vale la pena el env√≠o)
 
+
+-- =======================================================================================
+-- 6 NIVEL DE MACHINE LEARNING & FEEDBACK (CEREBRO DIN¡MICO)
+-- =======================================================================================
+
+-- TABLA: cluster_config (ConfiguraciÛn Din·mica del Clusterizer)
+-- -----------------------------------------------------------
+-- Guarda los 'pesos' actuales que usa el algoritmo.
+-- Esta tabla es leÌda por el Clusterizer y escrita por el AI Trainer.
+CREATE TABLE IF NOT EXISTS cluster_config (
+    id SERIAL PRIMARY KEY,
+    weight_visual FLOAT DEFAULT 0.6,      -- Peso Visual Actual
+    weight_text FLOAT DEFAULT 0.4,        -- Peso Texto Actual
+    threshold_visual_rescue FLOAT DEFAULT 0.15, -- Umbral Rescate Visual
+    threshold_text_rescue FLOAT DEFAULT 0.95,   -- Umbral Rescate Texto
+    threshold_hybrid FLOAT DEFAULT 0.68,        -- Umbral AceptaciÛn Final
+    updated_at TIMESTAMP DEFAULT NOW(),
+    version_note VARCHAR(100) DEFAULT 'Initial Config'
+);
+
+-- Inicializar con valores por defecto (Si la tabla est· vacÌa)
+INSERT INTO cluster_config (weight_visual, weight_text, threshold_visual_rescue, threshold_text_rescue, threshold_hybrid, version_note)
+SELECT 0.6, 0.4, 0.15, 0.95, 0.68, 'Calibracion Manual V4'
+WHERE NOT EXISTS (SELECT 1 FROM cluster_config);
+
+
+-- TABLA: ai_feedback (Historial de AuditorÌa Humana)
+-- -----------------------------------------------------------
+-- Guarda cada decisiÛn que tomas en el 'Cluster Lab'.
+-- Sirve de dataset de entrenamiento para calibrar los pesos.
+CREATE TABLE IF NOT EXISTS ai_feedback (
+    id SERIAL PRIMARY KEY,
+    product_id BIGINT,          -- Producto A
+    candidate_id BIGINT,        -- Producto B (Candidato)
+    
+    -- Evidencia (Snapshot del momento)
+    visual_score FLOAT,         -- Similitud visual calculada (0-1)
+    text_score FLOAT,           -- Similitud texto calculada (0-1)
+    final_score FLOAT,          -- Score final que dio el sistema
+    match_method VARCHAR(50),   -- QuÈ regla se usÛ ('TEXT_RESCUE', 'HYBRID', etc.)
+    active_weights JSONB,       -- QuÈ pesos estaban vigentes {v:0.6, t:0.4}
+    
+    -- Veredicto Humano
+    decision VARCHAR(20),       -- 'MATCH' o 'NO_MATCH' (Lo que decidiÛ la m·quina)
+    feedback VARCHAR(20),       -- 'CORRECT' o 'INCORRECT' (Lo que dijiste t˙)
+    
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Õndices para entrenamiento r·pido
+CREATE INDEX idx_feedback_created ON ai_feedback(created_at DESC);
+
+-- ============================================================================
+-- OPTIMIZACION DE BASE DE DATOS - INDICES FALTANTES
+-- Ejecutar este script para mejorar dr√°sticamente el rendimiento de lectura
+-- ============================================================================
+
+-- 1. √çndices para Dashboard y Filtrado de Productos
+-- Acelera: "ORDER BY profit_margin" y busquedas por fecha de creaci√≥n
+CREATE INDEX IF NOT EXISTS idx_products_profit_created 
+ON products (profit_margin DESC, created_at DESC);
+
+-- Acelera: Filtros de nulos en imagenes (usado en vectorizer y dashboard)
+CREATE INDEX IF NOT EXISTS idx_products_image_not_null 
+ON products (product_id) 
+WHERE url_image_s3 IS NOT NULL;
+
+-- 2. √çndices para Clusters y Competencia
+-- Acelera: "competitors <= 10" y ordenamiento por precio
+CREATE INDEX IF NOT EXISTS idx_clusters_competitors_price 
+ON unique_product_clusters (total_competitors, average_price);
+
+-- Acelera: B√∫squedas de texto en t√≠tulos de productos (ILOVE operator)
+-- Nota: Requiere extensi√≥n pg_trgm para mejor rendimiento, pero el √≠ndice btree ayuda en prefix scan
+CREATE INDEX IF NOT EXISTS idx_products_title_lower 
+ON products ((lower(title)));
+
+-- 3. √çndices para Membres√≠a
+-- Acelera: Joins entre Productos y Clusters (Crucial para eliminar N+1)
+CREATE INDEX IF NOT EXISTS idx_cluster_membership_composite 
+ON product_cluster_membership (product_id, cluster_id);
+
+-- 4. Optimizaciones de Mantenimiento
+VACUUM ANALYZE;

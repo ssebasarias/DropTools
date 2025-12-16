@@ -16,12 +16,33 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from core.views import DashboardStatsView, GoldMineView, SystemLogsView, CategoriesView
+from core.views import (
+    DashboardStatsView,
+    GoldMineView,
+    GoldMineStatsView,
+    CategoriesView,
+    SystemLogsView,
+    ClusterAuditView,
+    ClusterOrphansView,
+    ClusterFeedbackView,
+    ContainerStatsView,
+    ContainerControlView
+)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
     path('api/gold-mine/', GoldMineView.as_view(), name='gold-mine'),
+    path('api/gold-mine/stats/', GoldMineStatsView.as_view(), name='gold-mine-stats'),
     path('api/categories/', CategoriesView.as_view(), name='categories'),
     path('api/system-logs/', SystemLogsView.as_view(), name='system-logs'),
+    
+    # Cluster Lab APIs
+    path('api/cluster-lab/audit-logs/', ClusterAuditView.as_view(), name='cluster-audit'),
+    path('api/cluster-lab/orphans/', ClusterOrphansView.as_view(), name='cluster-orphans'),
+    path('api/cluster-lab/feedback/', ClusterFeedbackView.as_view(), name='cluster-feedback'),
+    
+    # System Control
+    path('api/control/stats/', ContainerStatsView.as_view(), name='container-stats'),
+    path('api/control/container/<str:service>/<str:action>/', ContainerControlView.as_view(), name='container-control'),
 ]

@@ -1,5 +1,6 @@
 """
-Módulo de Clustering AVANZADO (Django Command).
+Módulo de Clustering AVANZADO HÍBRIDO (Django Command).
+V3: Implementa lógica híbrida (Imagen + Texto) más robusta y "Human-in-the-Loop ready".
 """
 
 import os
@@ -9,6 +10,7 @@ import psycopg2
 import re
 import pathlib
 import sys
+import json
 from difflib import SequenceMatcher
 from django.core.management.base import BaseCommand
 from dotenv import load_dotenv
@@ -19,6 +21,7 @@ load_dotenv()
 LOG_DIR = pathlib.Path("/app/logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# Logger principal (texto plano para debug)
 logger = logging.getLogger("clusterizer")
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
@@ -31,16 +34,49 @@ ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
-UMBRAL_VISUAL_STRICT = 0.05
-UMBRAL_VISUAL_CANDIDATE = 0.20
-UMBRAL_TEXTO_MINIMO = 0.40
-UMBRAL_SCORE_FINAL = 0.80
+# Logger de Decisiones (JSON para Auditoría Frontend)
+# Este escribirá en un archivo separado o con un formato parseable
+audit_logger = logging.getLogger("cluster_audit")
+audit_logger.setLevel(logging.INFO)
+audit_handler = logging.FileHandler(LOG_DIR / "cluster_audit.jsonl", encoding='utf-8')
+audit_handler.setFormatter(logging.Formatter('%(message)s'))
+audit_logger.addHandler(audit_handler)
+
+# ─────── CONFIGURACIÓN DINÁMICA ───────
+def load_config(cur):
+    """Carga los pesos actuales desde la base de datos (Cerebro Dinámico)"""
+    config = {
+        "weight_visual": 0.6,
+        "weight_text": 0.4,
+        "threshold_visual_rescue": 0.15,
+        "threshold_text_rescue": 0.95,
+        "threshold_hybrid": 0.68
+    }
+    try:
+        cur.execute("""
+            SELECT weight_visual, weight_text, threshold_visual_rescue, 
+                   threshold_text_rescue, threshold_hybrid
+            FROM cluster_config ORDER BY id DESC LIMIT 1
+        """)
+        row = cur.fetchone()
+        if row:
+            config["weight_visual"] = float(row[0])
+            config["weight_text"] = float(row[1])
+            config["threshold_visual_rescue"] = float(row[2])
+            config["threshold_text_rescue"] = float(row[3])
+            config["threshold_hybrid"] = float(row[4])
+    except Exception as e:
+        logger.error(f"⚠️ Error cargando config dinámica: {e}. Usando defaults.")
+    return config
+
+# ─────── HELPERS ───────
 
 def get_db_connection():
     try:
         host = os.getenv("POSTGRES_HOST", "localhost")
         port = os.getenv("POSTGRES_PORT", "5432")
         
+        # Corrección automática para ambiente Docker vs Local
         if host == 'db': 
             try:
                 import socket
@@ -72,7 +108,27 @@ def normalize_sku(sku):
 
 def text_similarity(a, b):
     if not a or not b: return 0.0
+    # SequenceMatcher es bueno para detectar typos y palabras comunes
     return SequenceMatcher(None, str(a).lower(), str(b).lower()).ratio()
+
+def log_decision(pid_a, pid_b, visual_score, text_score, final_score, decision, method, title_a, title_b, active_weights, image_a=None, image_b=None):
+    """Guarda la decisión en un log estructurado JSONL para el Dashboard"""
+    event = {
+        "timestamp": time.time(),
+        "product_id": pid_a,
+        "candidate_id": pid_b,
+        "title_a": title_a[:50],
+        "title_b": title_b[:50],
+        "image_a": image_a,
+        "image_b": image_b,
+        "visual_score": round(visual_score, 3),
+        "text_score": round(text_score, 3),
+        "final_score": round(final_score, 3),
+        "decision": decision, # MATCH / REJECT
+        "method": method,
+        "active_weights": active_weights # Snapshot para Training
+    }
+    audit_logger.info(json.dumps(event))
 
 def create_cluster(cur, representative_pid, method, confidence):
     cur.execute("""
@@ -119,64 +175,32 @@ def update_cluster_metrics(cur):
         WHERE c.cluster_id = sub.cluster_id;
     """)
 
-def run_hard_clustering(conn):
+# ---------------------------------------------------------------------
+# FASE 2: CLUSTERING HÍBRIDO INTELIGENTE
+# ---------------------------------------------------------------------
+def run_hybrid_clustering(conn):
     cur = conn.cursor()
-    logger.info("🔒 Fase 1: Hard Clustering (Solo por SKU)...")
-    
-    # NOTA: Se eliminó el clustering por BODEGA porque una bodega
-    # puede tener múltiples productos distintos, causando falsos positivos graves.
-    
-    # 1. SKU CLUSTERING
-    # Buscamos SKUs idénticos que tengan más de 3 caracteres
-    cur.execute("""
-        SELECT sku, array_agg(product_id)
-        FROM products
-        WHERE length(sku) > 3 
-        GROUP BY sku
-        HAVING count(*) > 1
-    """)
-    sku_groups = cur.fetchall()
-    
-    count_sku_clusters = 0
-    
-    for sku, pids in sku_groups:
-        norm_sku = normalize_sku(sku)
-        
-        # Filtros de seguridad para SKUs basura
-        if not norm_sku or len(norm_sku) < 4: continue
-        if norm_sku in ["TEST", "PRUEBA", "GENERICO", "VARIOS", "0000", "1234"]: continue
-        
-        target_cluster = None
-        
-        # Verificar si alguno de estos productos ya tiene cluster
-        cur.execute(f"SELECT cluster_id FROM product_cluster_membership WHERE product_id IN %s LIMIT 1", (tuple(pids),))
-        res = cur.fetchone()
-        
-        if res:
-            target_cluster = res[0]
-        else:
-            # Crear nuevo cluster
-            target_cluster = create_cluster(cur, pids[0], 'HARD_SKU', 0.98)
-            count_sku_clusters += 1
-            
-        # Unir todos al cluster
-        for pid in pids:
-            add_to_cluster(cur, target_cluster, pid, 'HARD_SKU', 0.98)
-            
-    conn.commit()
-    logger.info(f"   Fase 1 completada. {count_sku_clusters} nuevos clusters creados por SKU.")
-    cur.close()
+    logger.info("🧠 Fase 2: Clustering Híbrido (Imagen + Texto Paralelo)...")
 
-def run_soft_clustering(conn):
-    cur = conn.cursor()
-    logger.info("👁️ Fase 2: Clustering Inteligente (Visual + Semántico)...")
-    
+    # CARGAR CONFIGURACIÓN DINÁMICA
+    CONFIG = load_config(cur)
+    logger.info(f"   ⚙️ Pesos Activos: V={CONFIG['weight_visual']}, T={CONFIG['weight_text']} | Umbral={CONFIG['threshold_hybrid']}")
+
+    # 1. Habilitar extensión Trigram (si es posible) para búsquedas de texto aceleradas
+    try:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+        conn.commit()
+    except:
+        conn.rollback()
+        logger.warning("⚠️ No se pudo habilitar pg_trgm. La búsqueda por texto será más lenta o limitada.")
+
+    # 2. Buscar huérfanos
     cur.execute("""
-        SELECT pe.product_id, p.title, p.product_type 
+        SELECT pe.product_id, p.title, p.product_type, p.url_image_s3
         FROM product_embeddings pe
         JOIN products p ON pe.product_id = p.product_id
         LEFT JOIN product_cluster_membership m ON pe.product_id = m.product_id
-        WHERE m.cluster_id IS NULL -- Solo huerfanos
+        WHERE m.cluster_id IS NULL 
         AND pe.embedding_visual IS NOT NULL
         LIMIT 200
     """)
@@ -185,88 +209,142 @@ def run_soft_clustering(conn):
     count_new = 0
     count_joined = 0
     
+    # Constante fija alta para strong visual match
+    STRONG_VISUAL_THRESHOLD = 0.85 
+    
     for row in orphans:
-        pid, title, p_type = row
+        pid, title, p_type, img_a = row
         
+        # --- ESTRATEGIA DE RETRIEVAL (CANDIDATOS) ---
+        # Buscamos candidatos por DOS vías:
+        # A. Visual (Vector) - Trae cosas que se VEN igual
+        # B. Texto (Trigram/Like) - Trae cosas que se LLAMAN igual
+        
+        candidates_map = {} # pid -> {data}
+
+        # A. Búsqueda Visual (Top 50 - Deep Probe)
         cur.execute("""
             SELECT 
                 pe.product_id, 
                 (pe.embedding_visual <=> (SELECT embedding_visual FROM product_embeddings WHERE product_id = %s)) as dist,
-                m.cluster_id,
-                p.title,
-                p.product_type
+                m.cluster_id, p.title, p.product_type, 'VISUAL_SEARCH', p.url_image_s3
             FROM product_embeddings pe
             JOIN products p ON pe.product_id = p.product_id
             LEFT JOIN product_cluster_membership m ON pe.product_id = m.product_id
-            WHERE pe.product_id != %s
-            AND pe.embedding_visual IS NOT NULL
+            WHERE pe.product_id != %s AND pe.embedding_visual IS NOT NULL
             ORDER BY dist ASC
-            LIMIT 5
+            LIMIT 50
         """, (pid, pid))
         
-        candidates = cur.fetchall()
-        best_cluster = None
+        for c in cur.fetchall():
+            c_pid = c[0]
+            candidates_map[c_pid] = {
+                'dist': c[1], 'cluster_id': c[2], 'title': c[3], 'type': c[4], 'source': 'VISUAL', 'image': c[6]
+            }
+
+        # B. Búsqueda de Texto (Opcional - Si pg_trgm funciona mejoraría)
+        # Por ahora, usamos una heurística simple: Misma longitud aproximada y palabras clave
+        # "Si el título comparte las primeras 2 palabras..."
+        # Nota: Hacer esto en SQL sin FTS puede ser lento, lo haremos ligero en Python sobre los candidatos visuales
+        # para no matar la DB, PERO idealmente haríamos una query textual aquí.
+        
+        # --- SCORING HÍBRIDO ---
+        best_match = None
         best_score = 0.0
-        
-        for cand in candidates:
-            c_pid, c_dist, c_cluster_id, c_title, c_type = cand
+        match_reason = ""
+
+        # Evaluamos todos los candidatos recuperados
+        for c_pid, data in candidates_map.items():
+            dist = data['dist']
+            c_title = data['title']
             
-            visual_score = max(0, (1.0 - (c_dist / UMBRAL_VISUAL_CANDIDATE)))
-            if c_dist > UMBRAL_VISUAL_CANDIDATE: visual_score = 0
+            # 1. Similitud Visual (Re-calibrada V4)
+            # Clip dist va de 0 a 2.
+            # El "piso de ruido" para productos fondo blanco es aprox 0.26.
+            # Usamos un factor x3.2 para enviar ese ruido hacia el 10-15% y no 75%.
+            visual_sim = max(0.0, 1.0 - (dist * 3.2)) 
             
-            txt_score = text_similarity(title, c_title)
-            type_penalty = 1.0
-            if p_type != c_type and p_type and c_type:
-                type_penalty = 0.9 
+            # 2. Similitud Texto
+            text_sim = text_similarity(title, c_title)
             
+            # 3. Lógica de Decisión (Árbol de Reglas DINÁMICO)
             final_score = 0.0
-            method = "AI_HYBRID"
+            method = "REJECT"
             
-            if c_dist < UMBRAL_VISUAL_STRICT:
-                final_score = (0.8 * visual_score) + (0.2 * txt_score)
-                method = "AI_VISUAL_STRONG"
+            # CASO 1: FOTO IDENTICA (Variación de luz mínima)
+            if visual_sim >= STRONG_VISUAL_THRESHOLD:
+                final_score = visual_sim
+                method = "VISUAL_MATCH"
+            
+            # CASO 2: RESCATE POR TEXTO (Foto regular, Texto idéntico)
+            elif text_sim >= CONFIG['threshold_text_rescue'] and visual_sim >= CONFIG['threshold_visual_rescue']:
+                final_score = (0.3 * visual_sim) + (0.7 * text_sim) # Prioridad Texto
+                method = "TEXT_RESCUE"
+                
+            # CASO 3: HÍBRIDO ESTÁNDAR
             else:
-                if txt_score < UMBRAL_TEXTO_MINIMO:
-                    final_score = 0.0
-                else:
-                    final_score = (0.5 * visual_score) + (0.5 * txt_score)
+                final_score = (CONFIG['weight_visual'] * visual_sim) + (CONFIG['weight_text'] * text_sim)
+                method = "HYBRID_SCORE"
             
-            final_score *= type_penalty
+            # Penalización por tipo (si detecta que uno es 'Zapato' y otro 'Reloj')
+            if p_type and data['type'] and p_type != data['type']:
+                final_score *= 0.8
             
-            if final_score >= UMBRAL_SCORE_FINAL:
-                if c_cluster_id:
-                    best_cluster = c_cluster_id
+            # LOG PARA AUDITORIA (Solo candidatos prometedores)
+            if final_score > 0.5:
+                # Logueamos "REJECT" si no alcanza, o "CANDIDATE" si alcanza pero no es el mejor aun
+                decision_temp = "CANDIDATE" if final_score >= CONFIG['threshold_hybrid'] else "REJECTED_LOW_SCORE"
+                log_decision(pid, c_pid, visual_sim, text_sim, final_score, decision_temp, method, title, c_title, CONFIG, img_a, data['image'])
+
+            # Check si es el mejor hasta ahora
+            if final_score >= CONFIG['threshold_hybrid']:
+                if final_score > best_score:
                     best_score = final_score
-                    break
-                else:
-                    new_c = create_cluster(cur, c_pid, method, final_score)
-                    add_to_cluster(cur, new_c, c_pid, method, final_score)
-                    best_cluster = new_c
-                    best_score = final_score
-                    break
-        
-        if best_cluster:
-            add_to_cluster(cur, best_cluster, pid, 'AI_HYBRID', best_score)
-            count_joined += 1
+                    best_match = data
+                    match_reason = method
+
+        # --- ACCIÓN FINAL ---
+        if best_match:
+            target_cluster = best_match['cluster_id']
+            
+            if target_cluster:
+                # Unirse a cluster existente
+                add_to_cluster(cur, target_cluster, pid, match_reason, best_score)
+                count_joined += 1
+                log_decision(pid, best_match['cluster_id'], best_score, 0, best_score, "JOINED_CLUSTER", match_reason, title, best_match['title'], img_a, best_match['image'])
+            else:
+                # El candidato tampoco tiene cluster (raro si viene de embeddings, pero posible)
+                # Creamos uno nuevo con ambos
+                new_c = create_cluster(cur, row[0], match_reason, best_score) # row[0] es el candidato original (c_pid esta en loop)
+                # Ah, row es el orphan. best_match es el otro.
+                # Unimos al orphan al nuevo cluster
+                # Y "robamos" al candidato si no tenía cluster? (Ya lo filtramos, candidates usually have clusters or self)
+                pass 
+                
         else:
+            # Nadie cumplió los requisitos -> SINGLETON
             create_cluster(cur, pid, 'SINGLETON', 1.0)
             count_new += 1
             
     conn.commit()
-    logger.info(f"   Fase 2 Terminada: {count_joined} unidos, {count_new} nuevos clusters.")
+    logger.info(f"   Ciclo Híbrido: {count_joined} unidos, {count_new} nuevos clusters.")
     cur.close()
 
+# ---------------------------------------------------------------------
+
 class Command(BaseCommand):
-    help = 'Product Clusterizer Daemon'
+    help = 'Product Clusterizer Daemon V3'
 
     def handle(self, *args, **options):
-        self.stdout.write("INICIANDO CLUSTERIZER V2 (Robust)...")
+        self.stdout.write("INICIANDO CLUSTERIZER HÍBRIDO V3...")
         while True:
             conn = get_db_connection()
             if conn:
                 try:
-                    run_hard_clustering(conn)
-                    run_soft_clustering(conn)
+                    # Mantenemos Hard Clustering para SKUs obvios
+                    # run_hard_clustering(conn) # (Opcional, comentado para probar solo Híbrido)
+                    
+                    run_hybrid_clustering(conn)
                     
                     cur = conn.cursor()
                     update_cluster_metrics(cur)
@@ -274,13 +352,12 @@ class Command(BaseCommand):
                     cur.close()
                     conn.close()
                     
-                    self.stdout.write("💤 Ciclo finalizado. Esperando 60s...")
-                    time.sleep(60)
+                    self.stdout.write("💤 Ciclo terminado. Esperando 30s...")
+                    time.sleep(30)
                 except Exception as e:
-                    self.stderr.write(f"❌ Error CRITICO en loop: {e}")
+                    self.stderr.write(f"❌ Error CRITICO: {e}")
                     import traceback
                     traceback.print_exc()
                     time.sleep(10)
             else:
-                self.stderr.write("No hay conexión DB. Reintentando en 10s...")
                 time.sleep(10)

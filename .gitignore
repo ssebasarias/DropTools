@@ -23,6 +23,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
 # --- Entorno Virtual ---
 venv/
@@ -35,17 +36,23 @@ env/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
-/static/
-/media/
+# Media content (user uploads)
+media/
+# Static collection (unless commited for deployment without build step)
+staticfiles/
 
 # --- Variables de Entorno (CRÍTICO) ---
+# Ignore all .env files
 .env
-.env.local
-.env.*.local
-# Mantener .env.docker visible para despliegue (asegúrate de no poner secretos reales ahí)
-!.env.docker
+.env.*
+# Exception: Examples or templates for dev setup
+!.env.example
+!.env.template
+!.env.*.example
+
 
 # --- Datos Crudos y Procesados ---
+# Evitar subir datasets grandes o scraping temporal
 raw_data/*.jsonl
 raw_data/*.json
 !raw_data/.gitkeep
@@ -53,19 +60,21 @@ raw_data/*.json
 # --- Backups de Base de Datos ---
 backups/*.sql
 !backups/.gitkeep
+*.dump
 
 # --- Logs ---
-logs/*.log
-logs/*.txt
+logs/
 !logs/.gitkeep
+# Ignore root logs if any appear
 *.log
-*.log.*
 
 # --- Caché de Modelos IA ---
 cache_huggingface/
+.cache/
 *.pt
 *.pth
 *.ckpt
+*.onnx
 
 # --- IDEs y Editores ---
 .vscode/
@@ -76,11 +85,14 @@ cache_huggingface/
 .DS_Store
 
 # --- Node.js (Frontend) ---
+frontend/node_modules/
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+frontend/dist/
+frontend/build/
 
 # --- Archivos Temporales ---
 *.tmp
@@ -94,13 +106,11 @@ desktop.ini
 
 # --- Jupyter Notebooks ---
 .ipynb_checkpoints/
-*.ipynb
 
 # --- Coverage y Tests ---
 htmlcov/
 .tox/
 .coverage
 .coverage.*
-.cache
 nosetests.xml
 coverage.xml

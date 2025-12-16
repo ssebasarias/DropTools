@@ -83,6 +83,7 @@ DATABASES = {
         'PASSWORD': env('POSTGRES_PASSWORD', default='secure_password_123'),
         'HOST': env('POSTGRES_HOST', default='localhost'),
         'PORT': env('POSTGRES_PORT', default='5432'),
+        'CONN_MAX_AGE': 60, # Persist connections for 60s (Huge Perf Boost)
         'OPTIONS': {
             'client_encoding': 'UTF8',
         },
@@ -120,6 +121,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # CORS Settings
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173", # Vite Frontend
+    "http://localhost:5174",
     "http://localhost:3000",
 ]
 CORS_ALLOW_ALL_ORIGINS = DEBUG # Allow all in debug mode
