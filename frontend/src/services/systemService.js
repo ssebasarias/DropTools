@@ -1,5 +1,11 @@
+/**
+ * System Service - Dahell Frontend
+ * Servicios para System Status y control de contenedores
+ */
+import { API_BASE_URL, API_ENDPOINTS } from '../config/constants';
+
 // URL Base del Backend
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const API_URL = API_BASE_URL;
 
 export const fetchSystemLogs = async () => {
     try {

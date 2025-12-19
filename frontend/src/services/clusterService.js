@@ -1,5 +1,11 @@
+/**
+ * Cluster Service - Dahell Frontend
+ * Servicios para Cluster Lab
+ */
+import { API_BASE_URL } from '../config/constants';
+
 // URL Base del Backend
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const API_URL = API_BASE_URL;
 
 // --- CLUSTER LAB SERVICES ---
 

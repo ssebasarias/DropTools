@@ -73,6 +73,19 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# --- Debug y Test Files ---
+*debug*.py
+*debug*.txt
+*test_*.py
+*test_*.txt
+crash_*.log
+run_*.log
+fix_*.py
+
+# Excepción: Permitir tests oficiales de Django
+!backend/core/tests/test_*.py
+!backend/*/tests/test_*.py
+
 # --- Caché de Modelos IA ---
 cache_huggingface/
 .cache/
