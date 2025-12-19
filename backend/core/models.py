@@ -249,8 +249,8 @@ class ProductEmbedding(models.Model):
         db_column='product_id', 
         primary_key=True
     )
-    # Vector Visual (512 dim for CLIP)
-    embedding_visual = VectorField(dimensions=512, null=True, blank=True)
+    # Vector Visual (768 dim for CLIP Large)
+    embedding_visual = VectorField(dimensions=768, null=True, blank=True)
     
     processed_at = models.DateTimeField(null=True, blank=True)
 

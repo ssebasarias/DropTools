@@ -1,4 +1,4 @@
-"""
+v"""
 Módulo de Vectorización (Django Command).
 """
 
@@ -11,7 +11,7 @@ import sys
 from io import BytesIO
 import torch
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
+from transformers import AutoProcessor, SiglipModel
 import psycopg2
 from psycopg2.extensions import register_adapter, AsIs
 import numpy as np
@@ -55,17 +55,18 @@ if not pwd:
     pass 
 
 
-MODEL_NAME = "openai/clip-vit-base-patch32"
+MODEL_NAME = "google/siglip-so400m-patch14-384" # 384px - Estado del Arte (1152 dims)
 
 class Vectorizer:
     def __init__(self):
-        logger.info(f"🧠 Cargando modelo de IA ({MODEL_NAME})...")
+        logger.info(f"🧠 Cargando modelo SigLIP ({MODEL_NAME})...")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"   Hardware detectado: {self.device.upper()}")
         
-        self.model = CLIPModel.from_pretrained(MODEL_NAME).to(self.device)
-        self.processor = CLIPProcessor.from_pretrained(MODEL_NAME)
-        logger.info("✅ Modelo cargado y listo.")
+        # Usamos AutoProcessor para manejar automáticamente el resize a 384x384
+        self.model = SiglipModel.from_pretrained(MODEL_NAME).to(self.device)
+        self.processor = AutoProcessor.from_pretrained(MODEL_NAME)
+        logger.info("✅ Modelo SigLIP cargado y listo para alta resolución.")
 
     def get_db_connection(self):
         return psycopg2.connect(
@@ -92,14 +93,17 @@ class Vectorizer:
 
     def generate_embedding_batch(self, images):
         """
-        Procesa una lista de imágenes de golpe (Batch)
-        Retorna: numpy array de shape [N, 512]
+        Procesa una lista de imágenes de golpe (Batch) con SigLIP
+        Retorna: numpy array de shape [N, 1152]
         """
+        # SigLIP AutoProcessor maneja el resize y normalización
         inputs = self.processor(images=images, return_tensors="pt", padding=True).to(self.device)
+        
         with torch.no_grad():
+            # SigLIP: get_image_features retorna los embeddings ya proyectados
             image_features = self.model.get_image_features(**inputs)
         
-        # Normalización L2
+        # Normalización L2 (Importante para búsqueda por coseno)
         image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
         return image_features.cpu().numpy()
 
