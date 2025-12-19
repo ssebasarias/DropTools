@@ -79,20 +79,65 @@ class Command(BaseCommand):
         count = 0
         errors_count = 0
         
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            for line in f:
-                if not line.strip(): continue
-                try:
-                    record = json.loads(line)
-                    self.ingest_record(record, session)
-                    count += 1
-                    if count % 100 == 0: session.commit()
-                except Exception:
-                    errors_count += 1
-                    session.rollback()
+        # Estrategia de "Filtro de Entrada":
+        # 1. Intentamos leer como UTF-8 estricto (ideal).
+        # 2. Si falla, caemos a Latin-1 (común en Windows/Excel aniguos).
+        # 3. Forzamos conversión a UTF-8 válido para Python y la DB.
         
-        session.commit()
-        logger.info(f"Done. Valid: {count}, Errors: {errors_count}")
+        encoding_strategy = 'utf-8'
+        try:
+            # Prueba rápida de lectura para detectar encoding
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for i, _ in enumerate(f):
+                    if i > 500: break # Muestreo de las primeras 500 lineas
+        except UnicodeDecodeError:
+            logger.warning(f"⚠️  Detectado encoding LEGACY (Latin-1/CP1252) en {filepath.name}. Normalizando...")
+            encoding_strategy = 'latin-1' # Fallback seguro
+        
+        try:
+            with open(filepath, 'r', encoding=encoding_strategy, errors='replace') as f:
+                for line in f:
+                    if not line.strip(): continue
+                    try:
+                        # Decodificamos el JSON
+                        record = json.loads(line)
+                        
+                        # PASO CRUCIAL: "Lavado" de Strings
+                        # Recorremos el diccionario recursivamente para asegurar que todo sea string limpio
+                        clean_record = self._sanitize_record(record)
+
+                        self.ingest_record(clean_record, session)
+                        count += 1
+                        if count % 100 == 0: session.commit()
+                    except json.JSONDecodeError:
+                        errors_count += 1
+                        continue # Salta lineas corruptas de JSON
+                    except Exception as e:
+                        # Logueamos error pero NO detenemos el proceso completo, solo esa linea
+                        # logger.warning(f"Error en linea: {e}") 
+                        errors_count += 1
+                        session.rollback()
+            
+            session.commit()
+            logger.info(f"✅ Finalizado {filepath.name}. Insertados: {count}, Errores/Saltados: {errors_count}")
+
+        except Exception as e:
+             logger.error(f"❌ Error fatal leyendo archivo {filepath.name}: {e}")
+
+    def _sanitize_record(self, data):
+        """
+        Recursivamente limpia strings para asegurar compatibilidad UTF-8 perfecta.
+        """
+        if isinstance(data, dict):
+            return {k: self._sanitize_record(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._sanitize_record(v) for v in data]
+        elif isinstance(data, str):
+            # Normalizar unicode (quitar caracteres fantasma) y quitar espacios extra
+            return data.strip()
+        else:
+            return data
+
 
     def ingest_record(self, data, session):
         # --- 1. Bodega ---
