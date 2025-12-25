@@ -11,7 +11,6 @@ from django.core.management.base import BaseCommand
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from urllib.parse import quote
 
 load_dotenv()
 
@@ -31,8 +30,8 @@ ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
+# Modificado para apuntar a la ruta correcta en Docker
 RAW_DIR = pathlib.Path(os.getenv("RAW_DIR", "/app/raw_data"))
-
 
 class Command(BaseCommand):
     help = 'ETL Loader Daemon'
@@ -76,83 +75,82 @@ class Command(BaseCommand):
         return Session()
 
     def process_file(self, filepath, session):
-        logger.info(f"Processing: {filepath.name}")
-        count = 0
-        errors_count = 0
+        logger.info(f"📂 Procesando: {filepath.name}")
         
-        # Estrategia de "Filtro de Entrada":
-        # 1. Intentamos leer como UTF-8 estricto (ideal).
-        # 2. Si falla, caemos a Latin-1 (común en Windows/Excel aniguos).
-        # 3. Forzamos conversión a UTF-8 válido para Python y la DB.
+        stats = {"ok": 0, "error": 0, "total": 0}
         
+        # Estrategia de lectura robusta
         encoding_strategy = 'utf-8'
         try:
-            # Prueba rápida de lectura para detectar encoding
             with open(filepath, 'r', encoding='utf-8') as f:
-                for i, _ in enumerate(f):
-                    if i > 500: break # Muestreo de las primeras 500 lineas
+                f.read(1024)
         except UnicodeDecodeError:
-            logger.warning(f"⚠️  Detectado encoding LEGACY (Latin-1/CP1252) en {filepath.name}. Normalizando...")
-            encoding_strategy = 'latin-1' # Fallback seguro
-        
+             encoding_strategy = 'latin-1'
+
         try:
             with open(filepath, 'r', encoding=encoding_strategy, errors='replace') as f:
                 for line in f:
                     if not line.strip(): continue
+                    stats["total"] += 1
+                    
                     try:
-                        # Decodificamos el JSON
                         record = json.loads(line)
+                        self.ingest_record(record, session)
+                        stats["ok"] += 1
                         
-                        # PASO CRUCIAL: "Lavado" de Strings
-                        # Recorremos el diccionario recursivamente para asegurar que todo sea string limpio
-                        clean_record = self._sanitize_record(record)
-
-                        self.ingest_record(clean_record, session)
-                        count += 1
-                        if count % 100 == 0: session.commit()
-                    except json.JSONDecodeError:
-                        errors_count += 1
-                        continue # Salta lineas corruptas de JSON
+                        # Commit por lotes
+                        if stats["ok"] % 100 == 0: 
+                            session.commit()
+                            self.print_batch_summary(filepath.name, stats)
+                            
                     except Exception as e:
-                        # Logueamos error pero NO detenemos el proceso completo, solo esa linea
-                        logger.warning(f"Error en linea: {e}") 
-                        errors_count += 1
+                        # Si es error de DB, rollback y cuenta como error sin ensuciar log
+                        # La mayoria son Transaction Aborted o Datos Sucios.
+                        stats["error"] += 1
                         session.rollback()
-            
+
             session.commit()
-            logger.info(f"✅ Finalizado {filepath.name}. Insertados: {count}, Errores/Saltados: {errors_count}")
+            self.print_batch_summary(filepath.name, stats, final=True)
 
         except Exception as e:
-             logger.error(f"❌ Error fatal leyendo archivo {filepath.name}: {e}")
+            logger.error(f"❌ Error fatal en archivo {filepath.name}: {e}")
 
-    def _sanitize_record(self, data):
-        """
-        Recursivamente limpia strings para asegurar compatibilidad UTF-8 perfecta.
-        """
-        if isinstance(data, dict):
-            return {k: self._sanitize_record(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self._sanitize_record(v) for v in data]
-        elif isinstance(data, str):
-            # Normalizar unicode (quitar caracteres fantasma) y quitar espacios extra
-            return data.strip()
-        else:
-            return data
+    def print_batch_summary(self, filename, stats, final=False):
+        """Imprime una tabla bonita en el log"""
+        icon = "🏁" if final else "📦"
+        status = "COMPLETADO" if final else "EN PROGRESO"
+        
+        msg = (
+            f"\n{icon} Lote {filename} [{status}]\n"
+            f"✅ Insertados/Actualizados: {stats['ok']}\n"
+            f"⚠️  Omitidos (Errores/Sucios): {stats['error']}\n"
+            f"----------------------------------------"
+        )
+        logger.info(msg)
 
 
     def ingest_record(self, data, session):
         # --- 1. Bodega ---
         wh_id = data.get("warehouse_id")
         if wh_id:
-            session.execute(text("""
-                INSERT INTO warehouses (warehouse_id, first_seen_at, last_seen_at) 
-                VALUES (:wid, NOW(), NOW())
-                ON CONFLICT (warehouse_id) DO UPDATE SET last_seen_at = NOW()
-            """), {"wid": wh_id})
+            try:
+                session.execute(text("""
+                    INSERT INTO warehouses (warehouse_id, first_seen_at, last_seen_at) 
+                    VALUES (:wid, NOW(), NOW())
+                    ON CONFLICT (warehouse_id) DO UPDATE SET last_seen_at = NOW()
+                """), {"wid": wh_id})
+            except Exception:
+                pass 
 
         # --- 2. Proveedor ---
         supp = data.get("supplier", {})
         if supp and supp.get("id"):
+            p_name = None
+            if isinstance(supp.get("plan"), dict):
+                p_name = supp.get("plan", {}).get("name")
+            else:
+                p_name = supp.get("plan_name")
+
             session.execute(text("""
                 INSERT INTO suppliers (supplier_id, name, store_name, plan_name, is_verified, created_at, updated_at)
                 VALUES (:sid, :name, :store, :plan, FALSE, NOW(), NOW())
@@ -160,9 +158,9 @@ class Command(BaseCommand):
                 SET name = EXCLUDED.name, store_name = EXCLUDED.store_name, plan_name = EXCLUDED.plan_name, updated_at = NOW()
             """), {
                 "sid": supp.get("id"),
-                "name": supp.get("name"),
-                "store": supp.get("store_name"),
-                "plan": supp.get("plan_name")
+                "name": str(supp.get("name") or "")[:255],
+                "store": str(supp.get("store_name") or "")[:255],
+                "plan": str(p_name or "")[:100]
             })
 
         # --- 3. Producto ---
@@ -187,19 +185,18 @@ class Command(BaseCommand):
             """), {
                 "pid": prod_id,
                 "sid": supp.get("id") if supp else None,
-                "sku": data.get("sku"),
-                "title": data.get("name"),
-                "desc": data.get("description") or None, # <-- Send None if empty, so COALESCE keeps existing DB value
+                "sku": str(data.get("sku") or "")[:100],
+                "title": data.get("name") or "Sin Nombre",
+                "desc": data.get("description"),
                 "price": data.get("sale_price"),
                 "sugg": data.get("suggested_price"),
-                "type": data.get("type"),
-                "img": self._extract_image(data)
+                "type": str(data.get("type") or "")[:50],
+                "img": data.get("image_url") 
+                       or (data.get("gallery") and data.get("gallery")[0].get("urlS3"))
+                       or (data.get("gallery") and data.get("gallery")[0].get("url"))
             })
 
-            # --- 4. Categorías ---
-            self.process_categories(session, prod_id, data.get("categories", []))
-
-            # --- 5. Stock ---
+            # --- 4. Stock ---
             if wh_id:
                 try:
                     qty = int(data.get("stock") or 0)
@@ -208,61 +205,3 @@ class Command(BaseCommand):
                         VALUES (:pid, :wid, :qty)
                     """), {"pid": prod_id, "wid": wh_id, "qty": qty})
                 except: pass
-
-    def _extract_image(self, data):
-        # 1. Try processed field
-        img = data.get("image_url")
-        if img: return img
-
-        # 2. Try raw gallery
-        gallery = data.get("gallery", [])
-        if gallery and isinstance(gallery, list):
-            first = gallery[0]
-            if isinstance(first, dict):
-                raw = first.get("urlS3") or first.get("url")
-                if raw:
-                    # Cloudfront domain from scraper.py
-                    return f"https://d39ru7awumhhs2.cloudfront.net/{quote(raw, safe='/')}"
-        return None
-
-    def _extract_category_name(self, item):
-        if isinstance(item, str):
-            return item
-        if isinstance(item, dict):
-            return item.get("name")
-        return None
-
-    def process_categories(self, session, prod_id, categories):
-        if not categories or not isinstance(categories, list):
-            return
-
-        for item in categories:
-            cat_name = self._extract_category_name(item)
-            if not cat_name: continue
-            
-            cat_name = cat_name.strip()
-            if not cat_name: continue
-            
-            # Insertar categoría si no existe
-            try:
-                session.execute(text("""
-                    INSERT INTO categories (name)
-                    VALUES (:name)
-                    ON CONFLICT (name) DO NOTHING
-                """), {"name": cat_name})
-            except: pass
-            
-            # Obtener el ID y Relacionar
-            try:
-                result = session.execute(text("""
-                    SELECT id FROM categories WHERE name = :name
-                """), {"name": cat_name})
-                row = result.fetchone()
-                if row:
-                    cat_id = row[0]
-                    session.execute(text("""
-                        INSERT INTO product_categories (product_id, category_id)
-                        VALUES (:pid, :cid)
-                        ON CONFLICT (product_id, category_id) DO NOTHING
-                    """), {"pid": prod_id, "cid": cat_id})
-            except: pass

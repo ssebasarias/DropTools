@@ -612,8 +612,7 @@ CREATE TABLE public.product_cluster_membership (
 
 CREATE TABLE public.product_embeddings (
     product_id bigint NOT NULL,
-    embedding_visual public.vector(512),
-    embedding_text public.vector(512),
+    embedding_visual public.vector(1152),
     processed_at timestamp without time zone DEFAULT now()
 );
 
