@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { fetchGoldMine, fetchGoldMineStats, searchVisualGoldMine, fetchCategories } from '../services/api';
-import { ShoppingBag, Search, Filter, Camera, X } from 'lucide-react';
+import { ShoppingBag, Search, Filter, Camera, X, Users } from 'lucide-react';
 import LazyImage from '../components/common/LazyImage';
 import GlassCard from '../components/common/GlassCard';
 import Pagination from '../components/common/Pagination';

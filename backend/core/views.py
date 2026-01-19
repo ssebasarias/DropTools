@@ -470,70 +470,47 @@ class CategoriesView(APIView):
         data = [{"id": c.id, "name": c.name} for c in cats]
         return Response(data)
 
+from .docker_utils import get_container_stats, control_container, get_docker_logs
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 class SystemLogsView(APIView):
     def get(self, request):
-        log_dir = pathlib.Path("/app/logs")
-        logs = []
-        
-        # Archivos a leer
-        files = {
-            "scraper": "scraper.log",
-            "clusterizer": "clusterizer.log",
-            "loader": "loader.log",
-            "vectorizer": "vectorizer.log",
-            "classifier": "classifier.log",
-            "market_agent": "market_agent.log", # Assuming default log file logic
-            "amazon_explorer": "amazon_explorer.log", # Logic check needed here
-            "ai_trainer": "ai_trainer.log"
+        """
+        Retorna logs directamente desde Docker (Paralelizado).
+        Devuelve Diccionario: { "scraper": [line1, line2...], ... }
+        """
+        # Mapeo Service ID -> Container Name
+        services = {
+            "scraper": "dahell_scraper",
+            "loader": "dahell_loader",
+            "vectorizer": "dahell_vectorizer",
+            "classifier": "dahell_classifier",
+            "clusterizer": "dahell_clusterizer",
+            "shopify": "dahell_shopify", 
+            "ai_trainer": "dahell_ai_trainer"
         }
         
-        def tail(f, lines=50):
-            total_lines_wanted = lines
-            BLOCK_SIZE = 1024
-            f.seek(0, 2)
-            block_end_byte = f.tell()
-            lines_to_go = total_lines_wanted
-            block_number = -1
-            blocks = []
-            
-            # Leer bloques desde el final hacia atras (Binary Mode)
-            while lines_to_go > 0 and block_end_byte > 0:
-                if (block_end_byte - BLOCK_SIZE > 0):
-                    f.seek(block_number*BLOCK_SIZE, 2)
-                    blocks.append(f.read(BLOCK_SIZE))
-                else:
-                    f.seek(0,0)
-                    blocks.append(f.read(block_end_byte))
-                
-                lines_found = blocks[-1].count(b'\n')
-                lines_to_go -= lines_found
-                block_end_byte -= BLOCK_SIZE
-                block_number -= 1
-            
-            all_read_bytes = b''.join(reversed(blocks))
-            return all_read_bytes.decode('utf-8', errors='replace').splitlines()[-total_lines_wanted:]
+        results = {}
 
-        for service, filename in files.items():
-            fpath = log_dir / filename
-            if fpath.exists():
-                try:
-                    # Abrir en BINARY mode para soportar seek negativo
-                    with open(fpath, 'rb') as f:
-                        last_lines = tail(f, lines=30)
-                        
-                        for line in last_lines:
-                            if line.strip():
-                                logs.append({
-                                    "service": service,
-                                    "message": line.strip(),
-                                    "raw": line
-                                })
-                except Exception as e:
-                    logs.append({"service": service, "message": f"Error reading log: {str(e)}"})
-            else:
-                 pass
+        def fetch_logs(service_id, container_name):
+            try:
+                raw_lines = get_docker_logs(container_name, tail=50)
+                return service_id, [{"message": l, "service": service_id} for l in raw_lines]
+            except Exception as e:
+                return service_id, [{"message": f"Error fetching logs: {str(e)}", "service": service_id}]
+
+        with ThreadPoolExecutor(max_workers=len(services)) as executor:
+            future_map = {
+                executor.submit(fetch_logs, s_id, c_name): s_id 
+                for s_id, c_name in services.items()
+            }
+            
+            for future in as_completed(future_map):
+                s_id, logs = future.result()
+                results[s_id] = logs
         
-        return Response(logs)
+        return Response(results)
 
 class ClusterFeedbackView(APIView):
     def post(self, request):
@@ -596,26 +573,35 @@ class ContainerControlView(APIView):
         Controla encendido/apagado de servicios.
         URL: /api/control/container/<service>/<action>
         """
+        # Map logical service ids -> container names
         mapping = {
-            "scraper": "dahell_scraper",
-            "loader": "dahell_loader",
-            "vectorizer": "dahell_vectorizer",
-            "classifier": "dahell_classifier",
-            "clusterizer": "dahell_clusterizer",
-            "market_agent": "dahell_market_agent",
-            "amazon_explorer": "dahell_amazon_explorer",
-            "ai_trainer": "dahell_ai_trainer"
+            "scraper": ["dahell_scraper"],
+            "loader": ["dahell_loader"],
+            "vectorizer": ["dahell_vectorizer"],
+            # For 'classifier' we intentionally map to BOTH classifier containers
+            "classifier": ["dahell_classifier", "dahell_classifier_2"],
+            "clusterizer": ["dahell_clusterizer"],
+            "market_agent": ["dahell_market_agent"],
+            "amazon_explorer": ["dahell_amazon_explorer"],
+            "ai_trainer": ["dahell_ai_trainer"]
         }
-        
-        container_name = mapping.get(service)
-        if not container_name:
+
+        container_names = mapping.get(service)
+        if not container_names:
             return Response({"error": "Invalid service"}, status=400)
-            
-        success, msg = control_container(container_name, action)
-        if success:
-            return Response({"status": "ok", "message": msg})
+
+        results = {}
+        any_success = False
+        for c_name in container_names:
+            success, msg = control_container(c_name, action)
+            results[c_name] = {"success": success, "message": msg}
+            any_success = any_success or success
+
+        if any_success:
+            return Response({"status": "ok", "results": results})
         else:
-            return Response({"error": msg}, status=500)
+            # If none of the requested actions succeeded, return error with details
+            return Response({"error": "All actions failed", "results": results}, status=500)
 
 
 class ClusterOrphanActionView(APIView):

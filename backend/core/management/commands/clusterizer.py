@@ -16,6 +16,8 @@ from difflib import SequenceMatcher
 from django.core.management.base import BaseCommand
 from dotenv import load_dotenv
 
+from django.db.models import F
+from django.db.models.functions import Now
 load_dotenv()
 
 # ─────── Configuración de Logs ───────
@@ -142,34 +144,45 @@ def log_decision(pid_a, pid_b, visual_score, text_score, final_score, decision, 
 
 # ─────── FUNCIONES CORE DE CLUSTERING ───────
 
+from core.models import UniqueProductCluster, ProductClusterMembership, Product
+
 def create_cluster(cur, pid, saturation_score, avg_price):
-    cur.execute("""
-        INSERT INTO unique_product_clusters (representative_product_id, total_competitors, saturation_score, average_price, created_at, updated_at)
-        VALUES (%s, 1, %s, %s, NOW(), NOW())
-        RETURNING cluster_id
-    """, (pid, saturation_score, avg_price))
-    cluster_id = cur.fetchone()[0]
+    # Use ORM to avoid missing default columns in raw SQL
+    # Note: 'cur' is ignored here, we use Django DB connection implicitly
+    new_cluster = UniqueProductCluster.objects.create(
+        representative_product_id=pid,
+        total_competitors=1,
+        saturation_score=saturation_score,
+        average_price=avg_price
+        # All other fields (analysis_level, etc.) use their defaults from models.py
+    )
     
-    cur.execute("""
-        INSERT INTO product_cluster_membership (product_id, cluster_id, match_confidence, match_method)
-        VALUES (%s, %s, 1.0, 'REPRESENTATIVE')
-        ON CONFLICT (product_id) DO UPDATE SET cluster_id = EXCLUDED.cluster_id
-    """, (pid, cluster_id))
-    return cluster_id
+    ProductClusterMembership.objects.update_or_create(
+        product_id=pid,
+        defaults={
+            'cluster': new_cluster,
+            'match_confidence': 1.0,
+            'match_method': 'REPRESENTATIVE'
+        }
+    )
+    return new_cluster.cluster_id
 
 def add_to_cluster(cur, cluster_id, pid, method, confidence):
-    cur.execute("""
-        INSERT INTO product_cluster_membership (product_id, cluster_id, match_confidence, match_method)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (product_id) DO UPDATE SET cluster_id = EXCLUDED.cluster_id
-    """, (pid, cluster_id, confidence, method))
+    # Use ORM
+    ProductClusterMembership.objects.update_or_create(
+        product_id=pid,
+        defaults={
+            'cluster_id': cluster_id,
+            'match_confidence': confidence,
+            'match_method': method
+        }
+    )
     
-    # Actualizar contador del cluster
-    cur.execute("""
-        UPDATE unique_product_clusters 
-        SET total_competitors = total_competitors + 1, updated_at = NOW()
-        WHERE cluster_id = %s
-    """, (cluster_id,))
+    # Update counter
+    UniqueProductCluster.objects.filter(cluster_id=cluster_id).update(
+        total_competitors=F('total_competitors') + 1,
+        updated_at=Now()
+    )
 
 def update_cluster_metrics(cur):
     """Recalcula precio promedio y saturación para clusters modificados recientemente"""

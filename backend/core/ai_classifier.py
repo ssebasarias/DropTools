@@ -23,7 +23,7 @@ class TaxonomyClassification(BaseModel):
 
 # --- 2. El Taxónomo ---
 class TaxonomistAI:
-    def __init__(self, model_name="llama3.1"):
+    def __init__(self, model_name="llama3.2:3b"):
         # URL de host.docker.internal para conectar desde Docker al Windows Host
         # Si corre local fuera de docker, usar localhost.
         self.llm = ChatOllama(
@@ -70,11 +70,6 @@ class TaxonomistAI:
                 "reason": "Explicación breve citando patrones encontrados en Títulos y Categorías vecinas"
             }}
             """),
-                "parent_industry": "Industria Madre",
-                "reason": "Explicación breve citando las pistas usadas"
-            }}
-            """),
-            ("user", """
             ("user", """
             Clasifica este producto:
             Título Objetivo: '{input}'

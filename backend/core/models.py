@@ -1,4 +1,12 @@
+
 from django.db import models
+from django.contrib.postgres.fields import ArrayField
+
+# -----------------------------------------------------------------------------
+# CONSTANTS CONTRACT (DSA v1.0)
+# -----------------------------------------------------------------------------
+EMBED_DIM = 1152 # SigLIP SO400M patch14-384
+EMBED_NORMALIZE = True
 
 class Warehouse(models.Model):
     warehouse_id = models.BigIntegerField(primary_key=True)
@@ -40,6 +48,14 @@ except ImportError:
         def __init__(self, *args, **kwargs):
             kwargs.pop('dimensions', None) # Swallow dimensions arg
             super().__init__(*args, **kwargs)
+# Require pgvector for correct VectorField support. Fail fast if missing
+try:
+    from pgvector.django import VectorField
+except Exception as e:
+    raise RuntimeError(
+        "pgvector.django.VectorField is required. Install 'pgvector' and enable the 'vector' extension in Postgres. "
+        f"Original error: {e}"
+    )
 
 
 class Category(models.Model):
@@ -101,10 +117,22 @@ class FutureEvent(models.Model):
         return f"{self.name} ({self.date_start})"
 
 
+
 class Product(models.Model):
-    product_id = models.BigIntegerField(primary_key=True)
-    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, db_column='supplier_id', null=True, blank=True)
+    # Clave compuesta: (product_id, supplier_id)
+    # Permite que múltiples proveedores vendan el mismo producto
+    product_id = models.BigIntegerField(primary_key=True)  # RESTORED PK to avoid migration hell
+
+    supplier = models.ForeignKey(
+        Supplier, 
+        on_delete=models.CASCADE, 
+        db_column='supplier_id',
+        null=True, # Restore to avoid interactive prompt
+        blank=True
+    )
+
     sku = models.CharField(max_length=100, null=True, blank=True)
+
     title = models.TextField()
     description = models.TextField(null=True, blank=True)
     sale_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
@@ -129,12 +157,20 @@ class Product(models.Model):
 
     class Meta:
         db_table = 'products'
+        # Clave compuesta: Un proveedor puede vender un producto solo UNA vez
+        # Diferentes proveedores pueden vender el MISMO producto (competencia)
+        unique_together = ('product_id', 'supplier')
         indexes = [
             models.Index(fields=['-profit_margin', '-created_at']),
+            models.Index(fields=['product_id']),  # Para búsquedas por producto
+            models.Index(fields=['supplier']),     # Para búsquedas por proveedor
         ]
 
     def __str__(self):
-        return f"{self.title[:50]}"
+        supplier_name = self.supplier.store_name if self.supplier else 'N/A'
+        return f"{self.title[:50]} (Proveedor: {supplier_name})"
+
+
 
 
 class ProductCategory(models.Model):
@@ -146,6 +182,9 @@ class ProductCategory(models.Model):
         unique_together = ('product', 'category')
 
 
+
+
+
 class ProductStockLog(models.Model):
     id = models.AutoField(primary_key=True)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, db_column='product_id')
@@ -153,9 +192,39 @@ class ProductStockLog(models.Model):
     stock_qty = models.IntegerField()
     snapshot_at = models.DateTimeField(auto_now_add=True)
 
+
     class Meta:
         db_table = 'product_stock_log'
 
+
+
+
+
+
+
+
+class ConceptWeights(models.Model):
+    """
+    Tabla de Pesos Dinámicos por Concepto (Personalidad del Clusterizer).
+    Usa COSINE SIMILARITY (Mayor es mejor).
+    """
+    concept = models.CharField(max_length=255, primary_key=True) # "Tenis Deportivos", "DEFAULT"
+    
+    weight_visual = models.FloatField(default=0.6)
+    weight_text = models.FloatField(default=0.4)
+    
+    # Clustering Thresholds
+    threshold_hybrid = models.FloatField(default=0.68)
+    
+    # Verification Thresholds (DSA v1.0 - Cosine Similarity)
+    similarity_threshold_direct = models.FloatField(default=0.80) # Very high similarity
+    similarity_threshold_indirect = models.FloatField(default=0.65) # Broad similarity
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'concept_weights'
 
 class UniqueProductCluster(models.Model):
     cluster_id = models.BigAutoField(primary_key=True)
@@ -174,6 +243,18 @@ class UniqueProductCluster(models.Model):
     
     # Identidad Humana (V2)
     concept_name = models.CharField(max_length=255, null=True, blank=True)
+
+
+    # Identidad Visual Avanzada (DSA v1.0)
+    visual_centroid = VectorField(dimensions=EMBED_DIM, null=True, blank=True) # Promedio del cluster
+    
+    # 3 Medoids Explicit (VectorFields for Robustness)
+    visual_medoid_1 = VectorField(dimensions=EMBED_DIM, null=True, blank=True)
+    visual_medoid_2 = VectorField(dimensions=EMBED_DIM, null=True, blank=True)
+    visual_medoid_3 = VectorField(dimensions=EMBED_DIM, null=True, blank=True)
+    
+    medoid_meta = models.JSONField(default=dict, blank=True) # {"ids": [101, 202, 303], "origins": [...]}
+
 
     # Maquina de Estados (V2 - Critical)
     analysis_level = models.IntegerField(default=0) # 0=Nuevo, 1=Trends Checked, 2=Shopify Checked, 3=Full Audit
@@ -206,8 +287,12 @@ class UniqueProductCluster(models.Model):
     class Meta:
         db_table = 'unique_product_clusters'
 
+
+
     def __str__(self):
         return f"Cluster {self.cluster_id} - {self.concept_name or 'Unknown'} ({self.total_competitors} sellers)"
+
+
 
 
 class ProductClusterMembership(models.Model):
@@ -241,8 +326,11 @@ class ProductEmbedding(models.Model):
         db_column='product_id', 
         primary_key=True
     )
-    # Vector Visual (1152 dim for SigLIP)
-    embedding_visual = VectorField(dimensions=1152, null=True, blank=True)
+
+
+    # Vector Visual (Use Config Contract)
+    embedding_visual = VectorField(dimensions=EMBED_DIM, null=True, blank=True)
+
     
     processed_at = models.DateTimeField(null=True, blank=True)
 
@@ -317,3 +405,105 @@ class MarketIntelligenceLog(models.Model):
 
     class Meta:
         db_table = 'market_intelligence_logs'
+
+
+
+# -----------------------------------------------------------------------------
+# MARKET SATURATION ANALYZER MODELS (ADDED V8)
+# -----------------------------------------------------------------------------
+
+
+class DomainReputation(models.Model):
+    """
+    Tabla maestra de dominios detectados (Cache Layer).
+    Evita re-analizar la misma tienda 100 veces.
+    """
+    domain = models.CharField(max_length=255, unique=True, db_index=True)
+    is_shopify = models.BooleanField(null=True, blank=True) # None=Not Checked, True=Shopify, False=Other
+    
+    # Pre-Filter Score & Audit (DSA v1.0)
+    shopify_likely_score = models.FloatField(default=0.0) # 0.0 - 1.0
+    shopify_likely_reasons = models.JSONField(default=dict, blank=True) # {"cdn": true, "cart": false...}
+    
+    shopify_last_checked_at = models.DateTimeField(null=True, blank=True)
+    shopify_cache_expires_at = models.DateTimeField(null=True, blank=True) # TTL Explicito
+    
+    # Metadata fija del dominio
+    pixel_ids = ArrayField(models.CharField(max_length=50), blank=True, null=True)
+    detected_apps = ArrayField(models.CharField(max_length=50), blank=True, null=True)
+    
+    # Ads Cache (TTL 7 dias conceptual)
+    has_active_ads = models.BooleanField(default=False)
+    ads_last_checked_at = models.DateTimeField(null=True, blank=True)
+    ads_cache_expires_at = models.DateTimeField(null=True, blank=True) # TTL Explicito
+    ads_library_url = models.URLField(max_length=500, blank=True, null=True)
+    
+    # Ads Evidence (DSA v1.0)
+    ads_count_recent = models.IntegerField(default=0) # Anuncios activos ultimos 30 dias
+    ads_evidence = models.JSONField(default=dict, blank=True) # {"screenshot": "...", "copy": "..."}
+
+    class Meta:
+        db_table = 'domain_reputation'
+
+class MarketAnalysisReport(models.Model):
+    """
+    Cabecera de un análisis de saturación para un cluster.
+    """
+    cluster = models.ForeignKey(UniqueProductCluster, on_delete=models.CASCADE, related_name='market_reports')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Fingerprint usado
+    search_fingerprint = models.JSONField(default=dict) # Keywords, queries usadas
+    
+    # Métricas Raw
+    candidates_found_raw = models.IntegerField(default=0) # Total URLs antes de verificar
+    shopify_likely_candidates_count = models.IntegerField(default=0) # Circuit Breaker Counter (DSA v1.0)
+    candidates_processed = models.IntegerField(default=0) # Cuantos pasaron a verificacion
+    
+
+    # Resultados Verificados
+    direct_competitors_count = models.IntegerField(default=0) # Match Visual >= Threshold (Direct)
+    indirect_competitors_count = models.IntegerField(default=0) # Match Visual >= Threshold (Indirect)
+
+    
+    # Validación de Mercado
+    competitors_with_ads = models.IntegerField(default=0)
+    
+    # Scores Finales
+    supplier_saturation_score = models.FloatField(default=0.0) # Base Dropi
+    market_saturation_score = models.FloatField(default=0.0) # Base Shopify Findings
+    final_score = models.FloatField(default=0.0)
+    
+    # Audit Log (DSA v1.0 - Debugging y Trazabilidad)
+    audit_log = models.JSONField(default=list, blank=True) # Logs del proceso de discovery
+    
+    # Estado (Enum: 'LOW_OPP', 'TESTABLE', 'HIGH_SAT', 'WINNER')
+    market_state = models.CharField(max_length=50, default='PENDING')
+
+    class Meta:
+        db_table = 'market_analysis_reports'
+
+
+class CompetitorFinding(models.Model):
+    """
+    Detalle: Un competidor encontrado para un análisis específico.
+    """
+    report = models.ForeignKey(MarketAnalysisReport, on_delete=models.CASCADE, related_name='findings')
+    domain_ref = models.ForeignKey(DomainReputation, on_delete=models.SET_NULL, null=True)
+    
+    url_found = models.URLField(max_length=1000)
+    title_detected = models.CharField(max_length=500, blank=True)
+    price_detected = models.DecimalField(max_digits=10, decimal_places=2, null=True)
+    
+
+    # Evidencia Visual
+    image_url = models.URLField(max_length=1000, blank=True)
+    visual_similarity = models.FloatField(null=True) # Cosine Similarity (1.0 = Idéntico)
+    match_type = models.CharField(max_length=20) # DIRECT, INDIRECT, REJECTED
+
+    
+    class Meta:
+        db_table = 'competitor_findings'
+        indexes = [
+            models.Index(fields=['report', 'match_type']),
+        ]

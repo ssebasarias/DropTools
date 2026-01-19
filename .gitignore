@@ -4,7 +4,7 @@
 
 # --- Python ---
 __pycache__/
-*.py[cod]
+# *.py[cod]
 *$py.class
 *.so
 .Python
@@ -41,22 +41,16 @@ media/
 # Static collection
 staticfiles/
 
-# --- Variables de Entorno (CRÍTICO) ---
-# Ignore all .env files and local overrides
-.env
-.env.*
-*.local
-# Exception: Examples or templates for dev setup
-!.env.example
-!.env.template
-!.env.*.example
-!.env.docker.example
-
 # --- Datos Crudos y Procesados ---
 # Evitar subir datasets grandes o scraping temporal
 raw_data/*.jsonl
 raw_data/*.json
+raw_data/processed/
+raw_data/failed/
+raw_data_old/
 !raw_data/.gitkeep
+!raw_data/processed/.gitkeep
+!raw_data/failed/.gitkeep
 
 # --- Backups de Base de Datos ---
 backups/*.sql
@@ -64,9 +58,11 @@ backups/*.sql
 *.dump
 
 # --- Logs ---
-logs/
+logs/*.log
+logs/*.png
+logs/*.jpg
+logs/*.jsonl
 !logs/.gitkeep
-*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -78,13 +74,32 @@ lerna-debug.log*
 *debug*.txt
 *test_*.py
 *test_*.txt
+*audit*.py
+*audit*.txt
+*check*.py
+*cleanup*.py
+*recover*.py
+*fix_*.py
 crash_*.log
 run_*.log
-fix_*.py
+loader_logs*.txt
+loader_status*.txt
+candidates*.log
+products_table_details.txt
 
 # Excepción: Permitir tests oficiales de Django
 !backend/core/tests/test_*.py
 !backend/*/tests/test_*.py
+
+# --- Screenshots y Capturas ---
+screenshots_docker/
+*.png
+*.jpg
+*.jpeg
+!docs/**/*.png
+!docs/**/*.jpg
+!frontend/public/**/*.png
+!frontend/public/**/*.jpg
 
 # --- Caché de Modelos IA ---
 cache_huggingface/
@@ -136,3 +151,26 @@ htmlcov/
 .coverage.*
 nosetests.xml
 coverage.xml
+
+# --- Project-specific large artifacts ---
+# Screenshots, raw backend data and model caches
+screenshots_docker/
+backend/raw_data/
+!backend/raw_data/.gitkeep
+cache_huggingface/**
+raw_data/processed/
+raw_data/processed/**
+
+# Additional explicit ignores to ensure large artifacts are not tracked
+# Logs and large JSONL datasets
+*.log
+*.jsonl
+logs/
+backend/raw_data/*.jsonl
+*.csv
+
+# Environment files (sensitive)
+.env
+.env.local
+.env.*
+

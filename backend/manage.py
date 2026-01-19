@@ -20,21 +20,18 @@ def main():
     try:
         execute_from_command_line(sys.argv)
     except UnicodeDecodeError as e:
-        print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", file=sys.stderr)
-        print(f"CRITICO: UNICODE DECODE ERROR CAPTURADO", file=sys.stderr)
-        print(f"Error: {e}", file=sys.stderr)
+        # PostgreSQL con SQL_ASCII puede devolver mensajes en latin-1
+        # Intentamos reconfigurar y reintentar
+        print("⚠️  Warning: Unicode decode error detected. Attempting workaround...", file=sys.stderr)
         try:
-            # Imprimir contexto hex
-            obj = e.object
-            start = max(0, e.start - 20)
-            end = min(len(obj), e.end + 20)
-            print(f"Contexto (Bytes): {obj[start:end]}", file=sys.stderr)
-            print(f"Contexto (Hex): {obj[start:end].hex()}", file=sys.stderr)
-            # Intentar decodificar como latin-1 para leer texto
-            print(f"Contexto (Latin-1): {obj[start:end].decode('latin-1', errors='replace')}", file=sys.stderr)
-        except:
-            print("No se pudo extraer contexto", file=sys.stderr)
-        sys.exit(1)
+            # Configurar encoding para manejar SQL_ASCII
+            import locale
+            locale.setlocale(locale.LC_ALL, 'C')
+            # Reintentar con configuración ajustada
+            execute_from_command_line(sys.argv)
+        except Exception as retry_error:
+            print(f"❌ Error after retry: {retry_error}", file=sys.stderr)
+            sys.exit(1)
     except Exception:
         import traceback
         sys.stderr.buffer.write(traceback.format_exc().encode('utf-8', 'replace'))

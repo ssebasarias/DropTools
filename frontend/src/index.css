@@ -16,14 +16,19 @@
   /* Acentos */
   --primary: #6366f1;
   /* Indigo 500 */
+  --primary-rgb: 99,102,241;
   --primary-glow: rgba(99, 102, 241, 0.4);
   --secondary: #ec4899;
+  --secondary-rgb: 236,72,153;
   /* Pink 500 */
   --success: #10b981;
+  --success-rgb: 16,185,129;
   /* Emerald 500 */
   --warning: #f59e0b;
+  --warning-rgb: 245,158,11;
   /* Amber 500 */
   --danger: #ef4444;
+  --danger-rgb: 239,68,68;
   /* Red 500 */
 
   /* Texto */
@@ -36,6 +41,94 @@
   /* Layout */
   --sidebar-width: 260px;
   --header-height: 70px;
+}
+
+/* Light theme overrides (keeps same design language but claro) */
+:root[data-theme="light"] {
+  --bg-app: #f7f9fb; /* very light */
+  --bg-sidebar: #ffffff;
+  --glass-bg: rgba(15, 23, 42, 0.04);
+  --glass-bg-hover: rgba(15, 23, 42, 0.06);
+  --glass-border: rgba(15, 23, 42, 0.06);
+  --glass-shadow: 0 6px 24px rgba(15,23,42,0.06);
+
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --text-dark: #0f172a;
+
+  /* Slightly desaturated accents to keep the visual harmony */
+  --primary: #4f46e5;
+  --primary-glow: rgba(79, 70, 229, 0.18);
+  --secondary: #db2777;
+}
+
+/* Eye protection overlay: a subtle warm/yellow tint to reduce blue light */
+:root[data-eye="on"]::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  /* warm amber tint with low opacity */
+  background: rgba(var(--eye-rgb), var(--eye-opacity));
+  mix-blend-mode: overlay;
+}
+
+/* Theme toggle basic styles */
+.theme-toggle {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.theme-toggle button {
+  background: transparent;
+  color: var(--text-main);
+  border: 1px solid rgba(255,255,255,0.06);
+  padding: 0.4rem 0.6rem;
+  border-radius: 10px;
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.theme-toggle button.active {
+  box-shadow: 0 6px 18px var(--primary-glow);
+  border-color: rgba(99,102,241,0.18);
+}
+
+/* Theme transition helpers */
+:root {
+  --eye-rgb: 255,183,77;
+  --eye-opacity: 0.06;
+  --theme-transition: 220ms ease;
+}
+
+body,
+.glass-card,
+.glass-panel,
+.candidate-card-mini,
+.cluster-item,
+.btn-primary,
+.btn-secondary,
+.btn-danger,
+.nav-item,
+.logo {
+  transition: background-color var(--theme-transition), color var(--theme-transition), box-shadow var(--theme-transition), border-color var(--theme-transition), transform var(--theme-transition), filter var(--theme-transition);
+}
+
+.theme-toggle input[type="range"] {
+  width: 90px;
+  accent-color: var(--primary);
+}
+
+.theme-toggle .eye-slider {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.theme-toggle .eye-level {
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 * {
@@ -166,4 +259,75 @@ button {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* --- Form Elements --- */
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.glass-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 1rem;
+  transition: all 0.2s;
+  outline: none;
+}
+
+.glass-input:focus {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+}
+
+.glass-input::placeholder {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.glass-select {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    color: var(--text-main);
+    font-family: inherit;
+    font-size: 1rem;
+    transition: all 0.2s;
+    outline: none;
+    cursor: pointer;
+}
+
+.glass-select option {
+    background: var(--bg-app);
+    color: var(--text-main);
+}
+
+.auth-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: radial-gradient(circle at top left, rgba(99,102,241,0.15), transparent 40%),
+              radial-gradient(circle at bottom right, rgba(236,72,153,0.15), transparent 40%);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 2.5rem;
 }

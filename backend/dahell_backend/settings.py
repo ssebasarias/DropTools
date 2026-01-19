@@ -13,20 +13,23 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 try:
     env_path = os.path.join(BASE_DIR.parent, '.env')
     print(f"DEBUG: Loading .env from {env_path}")
-    with open(env_path, encoding='utf-8') as f:
-        environ.Env.read_env(f)
+    environ.Env.read_env(env_path) # Let django-environ handle opening
 except Exception as e:
-    print(f"DEBUG: Error loading .env utf-8: {e}")
-    try:
-        # Fallback to default loading (system encoding)
-        print(f"DEBUG: Attempting to load .env with system encoding from {os.path.join(BASE_DIR.parent, '.env')}")
-        environ.Env.read_env(os.path.join(BASE_DIR.parent, '.env'))
-    except Exception as e2:
-        print(f"DEBUG: Error loading .env legacy: {e2}")
+    print(f"DEBUG: Error loading .env: {e}")
 
-SECRET_KEY = env('SECRET_KEY', default='django-insecure-wwjbiw8bz)!cc3ec&dq2fqe486=3go)za3+l_bq-n^!ttvbfj(')
-DEBUG = env.bool('DEBUG', default=True)
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '0.0.0.0', 'backend', 'dahell_backend']
+# SECURITY: Do not keep a production SECRET_KEY in source control.
+# Require `SECRET_KEY` via env in non-debug environments.
+DEBUG = env.bool('DEBUG', default=False)
+if DEBUG:
+    # In debug mode allow a local insecure default to make development easier.
+    SECRET_KEY = env('SECRET_KEY', default='django-insecure-dev-placeholder')
+else:
+    # In production require SECRET_KEY to be provided explicitly.
+    SECRET_KEY = env('SECRET_KEY')
+
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['127.0.0.1', 'localhost'])
+
+
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -35,10 +38,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.postgres', # Required for ArrayField & VectorField
     'rest_framework',
     'corsheaders',
     'core',
 ]
+
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -76,9 +81,15 @@ DATABASES = {
         'NAME': env('POSTGRES_DB', default='dahell_db'),
         'USER': env('POSTGRES_USER', default='dahell_admin'),
         'PASSWORD': env('POSTGRES_PASSWORD', default='secure_password_123'),
-        'HOST': env('POSTGRES_HOST', default='127.0.0.1'),
-        'PORT': env('POSTGRES_PORT', default='5433'),
+        # When running under docker-compose the DB service hostname is usually 'db'
+        'HOST': env('POSTGRES_HOST', default='db'),
+        # The DB container listens on 5432 internally; host mapping may vary.
+        'PORT': env('POSTGRES_PORT', default='5432'),
         'CONN_MAX_AGE': 60,
+        'OPTIONS': {
+            # Workaround para SQL_ASCII encoding (temporal hasta migrar a UTF8)
+            'client_encoding': 'LATIN1',
+        }
     }
 }
 

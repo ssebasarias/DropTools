@@ -1,0 +1,505 @@
+# ============================================================================
+# DOCKER COMPOSE - PRODUCCIÓN VPS
+# Dahell Intelligence - Configuración Optimizada para 24/7
+# ============================================================================
+version: '3.8'
+
+services:
+  # ========================================
+  # 1. BASE DE DATOS (PostgreSQL 17 + pgvector)
+  # ========================================
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: dahell_db
+    restart: always
+    env_file:
+      - .env.production
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./docs/dahell_db.sql:/docker-entrypoint-initdb.d/init.sql
+      - backups_data:/app/backups
+    ports:
+      - "127.0.0.1:5433:5432"  # Solo accesible desde localhost
+    networks:
+      - dahell_net
+    # Optimizaciones PostgreSQL para 32GB RAM
+    command: >
+      postgres
+      -c shared_buffers=8GB
+      -c effective_cache_size=24GB
+      -c maintenance_work_mem=2GB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=64MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c max_worker_processes=8
+      -c max_parallel_workers_per_gather=4
+      -c max_parallel_workers=8
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dahell_admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+        compress: "true"
+
+  # ========================================
+  # 2. PGADMIN (Gestión de DB)
+  # ========================================
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: dahell_pgadmin
+    restart: always
+    env_file:
+      - .env.production
+    ports:
+      - "127.0.0.1:5050:80"  # Solo accesible desde localhost
+    depends_on:
+      - db
+    networks:
+      - dahell_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+        compress: "true"
+
+  # ========================================
+  # 3. BACKEND API (Django REST Framework)
+  # ========================================
+  backend:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_backend
+    restart: always
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+      - ./cache_huggingface:/app/cache_huggingface
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "127.0.0.1:8000:8000"  # Solo accesible desde localhost (Nginx hará proxy)
+    command: python backend/manage.py runserver 0.0.0.0:8000
+    networks:
+      - dahell_net
+    depends_on:
+      - db
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # ========================================
+  # 4. FRONTEND (React + Vite)
+  # ========================================
+  frontend:
+    image: node:20-alpine
+    container_name: dahell_frontend
+    restart: always
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"  # Solo accesible desde localhost (Nginx hará proxy)
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    command: sh -c "npm install && npm run dev -- --host"
+    networks:
+      - dahell_net
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # ========================================
+  # 5. NGINX (Reverse Proxy + SSL)
+  # ========================================
+  nginx:
+    image: nginx:alpine
+    container_name: dahell_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - dahell_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+        compress: "true"
+
+  # ========================================
+  # 6. PORTAINER (Gestión Docker con UI)
+  # ========================================
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: dahell_portainer
+    restart: always
+    ports:
+      - "127.0.0.1:9000:9000"  # Solo accesible desde localhost
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks:
+      - dahell_net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+        compress: "true"
+
+  # ========================================
+  # WORKERS (Procesamiento 24/7)
+  # ========================================
+
+  # Worker 1: Scraper (Extracción de Dropi)
+  scraper:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_scraper
+    restart: unless-stopped  # Auto-reinicio continuo
+    env_file:
+      - .env.production
+    volumes:
+      - ./raw_data:/app/raw_data
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    shm_size: '1g'
+    networks:
+      - dahell_net
+    command: python backend/manage.py scraper
+    profiles: ["workers"]
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # Worker 2: Loader (Carga a DB)
+  loader:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_loader
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./raw_data:/app/raw_data
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 500M
+    networks:
+      - dahell_net
+    command: python backend/manage.py loader
+    profiles: ["workers"]
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # Worker 3: Vectorizer (Embeddings Visuales)
+  vectorizer:
+    build:
+      context: .
+      target: vectorizer
+    container_name: dahell_vectorizer
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./cache_huggingface:/app/cache_huggingface
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        # GPU (comentar si no hay GPU en el VPS)
+        # reservations:
+        #   devices:
+        #     - driver: nvidia
+        #       count: 1
+        #       capabilities: [ gpu ]
+    networks:
+      - dahell_net
+    command: python backend/manage.py vectorizer
+    profiles: ["workers"]
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # Worker 4: Clusterizer (Agrupación de Productos)
+  clusterizer:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_clusterizer
+    restart: "no"  # Ejecución manual
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    networks:
+      - dahell_net
+    command: python backend/manage.py clusterizer
+    profiles: ["workers"]
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # Worker 5: Classifier (Clasificación IA)
+  classifier:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_classifier
+    restart: "no"  # Ejecución manual
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.2G
+    networks:
+      - dahell_net
+    command: python backend/manage.py classifier
+    profiles: ["workers"]
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # Worker 6: Classifier 2 (Clasificación Paralela)
+  classifier_2:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_classifier_2
+    restart: "no"  # Ejecución manual
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.2G
+    networks:
+      - dahell_net
+    command: python backend/manage.py classifier
+    profiles: ["workers"]
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # Worker 7: Market Trender (Análisis de Tendencias)
+  market_trender:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_market_trender
+    restart: "no"  # Ejecución manual
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    networks:
+      - dahell_net
+    command: python backend/manage.py market_trender
+    profiles: ["workers"]
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # Worker 8: Meta Scholar (Espía de Publicidad)
+  meta_scholar:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_meta_scholar
+    restart: "no"  # Ejecución manual
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+      - ./cache_huggingface:/app/cache_huggingface
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+    networks:
+      - dahell_net
+    command: python backend/manage.py meta_scholar
+    profiles: ["workers"]
+    depends_on:
+      - db
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+  # Worker 9: Shopify Auditor (Auditoría de Competidores)
+  shopify_auditor:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_shopify_auditor
+    restart: "no"  # Ejecución manual
+    env_file:
+      - .env.production
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+      - ./raw_data:/app/raw_data
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    networks:
+      - dahell_net
+    command: python backend/manage.py shopify_auditor
+    profiles: ["workers"]
+    depends_on:
+      - db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+        compress: "true"
+
+# ========================================
+# VOLÚMENES PERSISTENTES
+# ========================================
+volumes:
+  pg_data:
+    driver: local
+  backups_data:
+    driver: local
+  portainer_data:
+    driver: local
+
+# ========================================
+# RED INTERNA
+# ========================================
+networks:
+  dahell_net:
+    driver: bridge

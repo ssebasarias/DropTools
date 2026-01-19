@@ -16,12 +16,11 @@ CACHE_LOCK = threading.Lock()
 MONITORING_INTERVAL = 3  # Seconds between updates
 CONTAINERS_TO_MONITOR = [
     "dahell_scraper", 
+    "dahell_shopify",  # Changed from dahell_market_agent / dahell_amazon_explorer
     "dahell_loader", 
     "dahell_vectorizer", 
     "dahell_classifier",
     "dahell_clusterizer", 
-    "dahell_market_agent",
-    "dahell_amazon_explorer",
     "dahell_ai_trainer",
     "dahell_db"
 ]
@@ -155,4 +154,23 @@ def control_container(container_name, action):
                 
         return True, f"Action {action} executed"
     except Exception as e:
+        # Better error handling for already stopped/started containers
+        if "No such container" in str(e):
+             return False, "Container not found"
         return False, str(e)
+
+# NEW: Helper to get logs directly from Docker (No files)
+def get_docker_logs(container_name, tail=50):
+    client = get_docker_client()
+    if not client: return []
+    
+    try:
+        container = client.containers.get(container_name)
+        # Get logs as bytes
+        raw_logs = container.logs(tail=tail, stderr=True, stdout=True)
+        # Decode and split
+        decoded = raw_logs.decode('utf-8', errors='replace').splitlines()
+        return [line for line in decoded if line.strip()]
+    except Exception as e:
+        logger.warning(f"Error fetching logs for {container_name}: {e}")
+        return []

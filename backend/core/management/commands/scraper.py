@@ -54,14 +54,14 @@ logger.addHandler(console_handler)
 
 # ─────── Helper Functions ───────
 
-def jsonl_path():
-    fname = f"raw_products_{datetime.utcnow():%Y%m%d}.jsonl"
-    return RAW_DIR_PATH / fname
-
 def build_driver() -> webdriver.Chrome:
     opts = Options()
+    # Modo headless activado (ahorra RAM)
     if HEADLESS:
         opts.add_argument("--headless=new")
+        logger.info("🔇 MODO HEADLESS ACTIVADO - Navegador oculto (ahorra RAM)")
+    else:
+        logger.info("🔍 MODO VISIBLE ACTIVADO - Navegador visible")
     opts.add_argument("--window-size=1920,1080")
     opts.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     
@@ -84,26 +84,57 @@ def build_driver() -> webdriver.Chrome:
 
 def login(driver: webdriver.Chrome, timeout: int = 60) -> bool:
     try:
+        logger.info("=" * 60)
+        logger.info("🔐 INICIANDO PROCESO DE LOGIN")
+        logger.info("=" * 60)
+        
         logger.info("1) Abriendo página de login…")
         driver.get("https://app.dropi.co/login")
+        logger.info(f"   ✅ Página cargada: {driver.current_url}")
         wait = WebDriverWait(driver, timeout)
 
-        logger.info("2) Escribiendo credenciales...")
+        logger.info("2) Buscando campo de email...")
         email_el = wait.until(EC.visibility_of_element_located((By.NAME, "email")))
+        logger.info("   ✅ Campo email encontrado")
+        
+        logger.info(f"   📧 Escribiendo email: {EMAIL}")
         email_el.clear()
         email_el.send_keys(EMAIL)
+        logger.info("   ✅ Email ingresado")
 
+        logger.info("   🔑 Buscando campo de password...")
         pwd_el = driver.find_element(By.NAME, "password")
+        logger.info("   ✅ Campo password encontrado")
+        
+        logger.info("   🔑 Escribiendo password...")
         pwd_el.clear()
         pwd_el.send_keys(PASSWORD)
+        logger.info("   ✅ Password ingresado")
+        
+        logger.info("   ⏎ Presionando ENTER para enviar...")
         pwd_el.send_keys(Keys.RETURN)
+        logger.info("   ✅ Formulario enviado")
 
-        logger.info("3) Esperando acceso (token o redirección)...")
+        logger.info("3) Esperando validación (token o redirección)...")
         # Esperar validación: Token en Storage O Redirección exitosa
         wait.until(lambda d: d.execute_script("return !!localStorage.getItem('DROPI_token')") or "/dashboard" in d.current_url)
+        logger.info(f"   ✅ Validación exitosa - URL actual: {driver.current_url}")
         
         driver.get_log("performance") # Limpiar logs
-        logger.info("✅ Login exitoso")
+        logger.info("✅ Login exitoso - Esperando 20s para que cargue completamente...")
+        logger.info("   ⏳ Esperando... (ventana de carga de Dropi)")
+        time.sleep(20)  # Aumentado a 20s para Docker (era 15s)
+        logger.info("   ✅ Espera completada")
+        
+        # Screenshot para debugging en Docker
+        try:
+            screenshot_path = "/app/logs/01_after_login.png"
+            driver.save_screenshot(screenshot_path)
+            logger.info(f"   📸 Screenshot guardado: {screenshot_path}")
+        except Exception as e:
+            logger.warning(f"   ⚠️ No se pudo guardar screenshot: {e}")
+        
+        logger.info("=" * 60)
         return True
     except Exception as e:
         import traceback
@@ -116,39 +147,65 @@ def login(driver: webdriver.Chrome, timeout: int = 60) -> bool:
         logger.error(traceback.format_exc())
         return False
 
-def navigate_to_catalog(driver: webdriver.Chrome) -> None:
-    logger.info("4) Navegando al catálogo (Modo Humano)...")
-    time.sleep(5)
-    wait = WebDriverWait(driver, 20)
+def navigate_to_catalog(driver: webdriver.Chrome, wait_time: int = 10) -> None:
+    """
+    Navega al catálogo DIRECTAMENTE por URL, esperando primero para asegurar sesión.
+    
+    Args:
+        driver: Instancia de Chrome WebDriver
+        wait_time: Tiempo de espera inicial antes de navegar
+    """
+    logger.info("=" * 60)
+    logger.info("🗂️ NAVEGANDO AL CATÁLOGO (Direct URL)")
+    logger.info("=" * 60)
+    logger.info(f"⏳ Esperando {wait_time}s antes de navegar (ventana de carga)...")
+    
+    # Espera inicial para que la ventana de carga termine
+    for i in range(wait_time):
+        logger.info(f"   ⏱️ {i+1}/{wait_time} segundos...")
+        time.sleep(1)
+    logger.info("   ✅ Espera completada")
     
     try:
-        # Intento 1: Navegación por menú
-        # Buscamos "Productos" de forma más flexible
-        prod_xpath = "//span[contains(text(), 'Productos')]"
-        prod_el = wait.until(EC.element_to_be_clickable((By.XPATH, prod_xpath)))
+        # Navegación Directa
+        target_url = "https://app.dropi.co/dashboard/search"
+        logger.info(f"   🚀 Navegando directamente a: {target_url}")
+        driver.get(target_url)
         
-        # Intentar click en el ancestro 'a' si existe, sino en el elemento mismo
+        wait = WebDriverWait(driver, 40) # 40s timeout para seguridad en Docker
+        
+        # Validar que estemos en la URL correcta
+        # A veces Dropi redirecciona, así que aseguramos que se mantenga o cargue
+        wait.until(EC.url_contains("/dashboard/search"))
+        
+        # Esperar carga de elementos (productos)
+        logger.info("   ⏳ Esperando 15s adicionales para carga de lista de productos...")
+        time.sleep(15)
+        logger.info("   ✅ Catálogo cargado exitosamente (Direct URL)")
+        
+        # Screenshot del catálogo cargado
         try:
-            prod_el.find_element(By.XPATH, "./ancestor::a").click()
-        except:
-            prod_el.click()
+            screenshot_path = "/app/logs/04_catalog_loaded_direct.png"
+            driver.save_screenshot(screenshot_path)
+            logger.info(f"   📸 Screenshot guardado: {screenshot_path}")
+        except Exception as e:
+            logger.warning(f"   ⚠️ No se pudo guardar screenshot: {e}")
             
-        time.sleep(2) # Espera humana
-        
-        # Clic en "Catálogo"
-        cat_xpath = "//a[contains(@href, '/dashboard/search') and contains(text(), 'Catálogo')]"
-        cat_btn = wait.until(EC.element_to_be_clickable((By.XPATH, cat_xpath)))
-        cat_btn.click()
-        
-        time.sleep(5)
-        logger.info("🔍 Catálogo abierto (Navegación manual exitosa).")
-        
     except Exception as e:
-        # Log limpio sin stacktrace gigante
-        err_msg = str(e).split('\n')[0]
-        logger.warning(f"⚠️ No se pudo navegar el menú ({err_msg}). Abriendo URL directa para rescatar la sesión.")
-        driver.get("https://app.dropi.co/dashboard/search")
-        time.sleep(5)
+        logger.error(f"❌ FALLÓ LA NAVEGACIÓN DIRECTA: {e}")
+        
+        # Screenshot del error
+        try:
+            screenshot_path = "/app/logs/ERROR_navigation.png"
+            driver.save_screenshot(screenshot_path)
+            logger.error(f"   📸 Screenshot de error guardado: {screenshot_path}")
+        except:
+            pass
+        
+        raise e
+        
+
+
 
 def grab_new_products(driver: WebDriver, seen: set) -> list:
     new = []
@@ -197,6 +254,11 @@ def click_show_more(driver: WebDriver) -> bool:
 
 class Command(BaseCommand):
     help = 'Scraper de Dropi (Daemon)'
+    
+    def generate_batch_filename(self):
+        """Genera nombre de archivo con timestamp para fácil lectura y ordenamiento"""
+        fname = f"raw_products_{datetime.utcnow():%Y%m%d_%H%M%S}.jsonl"
+        return RAW_DIR_PATH / fname
 
     def handle(self, *args, **options):
         logger.info("🚀 SCRAPER DAEMON INICIADO (Modo Infinito)")
@@ -211,44 +273,114 @@ class Command(BaseCommand):
                 if not login(driver):
                     raise Exception("Login fallido")
 
-                navigate_to_catalog(driver)
+                # Intentar navegar al catálogo con retry
+                navigation_success = False
+                for attempt, wait_time in enumerate([25, 30], start=1):  # Aumentado: 25s y 30s (era 15s y 20s)
+                    try:
+                        logger.info(f"📍 Intento {attempt} de navegación al catálogo (espera: {wait_time}s)...")
+                        navigate_to_catalog(driver, wait_time=wait_time)
+                        navigation_success = True
+                        break
+                    except Exception as nav_error:
+                        if attempt == 1:
+                            logger.warning(f"⚠️ Primer intento falló. Reintentando con 30s de espera...")
+                            # Cerrar sesión y volver a intentar
+                            try:
+                                driver.quit()
+                            except:
+                                pass
+                            time.sleep(5)
+                            driver = build_driver()
+                            driver.execute_cdp_cmd("Network.enable", {})
+                            if not login(driver):
+                                raise Exception("Login fallido en retry")
+                        else:
+                            logger.error(f"❌ Navegación falló después de {attempt} intentos")
+                            raise nav_error
+                
+                if not navigation_success:
+                    raise Exception("No se pudo navegar al catálogo")
                 
                 seen = set()
                 consecutive_no_button = 0
+                
+                # Batch control vars
+                BATCH_TIME_LIMIT = 300  # 5 minutos
+                
+                # Variables para control de archivo
+                current_batch_file = None
+                batch_file_handle = None
+                batch_start_time = None
+                batch_count = 0
 
-                with open(jsonl_path(), 'a', encoding='utf-8') as f:
-                    while True:
-                        nuevos = grab_new_products(driver, seen)
-                        if nuevos:
-                            for p in nuevos:
-                                record = self.process_product(p)
-                                f.write(json.dumps(record, ensure_ascii=False) + '\n')
-                                f.flush()
-                            logger.info(f"📦 +{len(nuevos)} productos (Total: {len(seen)})")
+                while True:  # Main Scraping Loop (Chrome session active)
+                    # 1. Scraping Logic (capturar productos)
+                    nuevos = grab_new_products(driver, seen)
+                    
+                    if nuevos:
+                        # Si es el primer producto del batch, abrir nuevo archivo e iniciar cronómetro
+                        if batch_file_handle is None:
+                            current_batch_file = self.generate_batch_filename()
+                            batch_file_handle = open(current_batch_file, 'a', encoding='utf-8')
+                            batch_start_time = time.time()
+                            batch_count = 0
+                            logger.info(f"📂 Nuevo archivo abierto: {current_batch_file.name}")
                         
-                        # Navegación
-                        scroll_to_bottom(driver)
-                        found = False
-                        for _ in range(3):
-                            if click_show_more(driver):
-                                found = True
-                                break
-                            time.sleep(1)
+                        # Escribir productos al archivo
+                        for p in nuevos:
+                            record = self.process_product(p)
+                            batch_file_handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+                            batch_file_handle.flush()
+                            batch_count += 1
                         
-                        if not found:
-                            consecutive_no_button += 1
-                            if consecutive_no_button >= 5:
-                                logger.info("🛑 Fin del catálogo o error. Reiniciando...")
-                                break
-                        else:
-                            consecutive_no_button = 0
+                        logger.info(f"📦 +{len(nuevos)} productos (Lote: {batch_count} | Total: {len(seen)})")
                         
-                        # Reinicio preventivo de Chrome cada 1000 productos
-                        if len(seen) % 1000 == 0 and len(seen) > 0:
-                            logger.info(f"🔄 Reiniciando Chrome (mantenimiento preventivo - {len(seen)} productos procesados)...")
+                        # 2. Check Rotation Conditions (solo si hay archivo abierto)
+                        if batch_start_time is not None:
+                            elapsed = time.time() - batch_start_time
+                            if elapsed > BATCH_TIME_LIMIT:
+                                logger.info(f"⏱️ Rotando archivo por tiempo ({int(elapsed)}s, {batch_count} productos)...")
+                                # Cerrar archivo actual
+                                if batch_file_handle:
+                                    batch_file_handle.close()
+                                    logger.info(f"✅ Archivo cerrado: {current_batch_file.name}")
+                                # Resetear variables para el próximo batch
+                                batch_file_handle = None
+                                batch_start_time = None
+                                current_batch_file = None
+                                batch_count = 0
+
+                    # 3. Navigation
+                    scroll_to_bottom(driver)
+                    found = False
+                    for _ in range(3):
+                        if click_show_more(driver):
+                            found = True
                             break
-                        
                         time.sleep(1)
+                    
+                    if not found:
+                        consecutive_no_button += 1
+                        if consecutive_no_button >= 5:
+                            logger.info("🛑 Fin del catálogo o error. Reiniciando sesión...")
+                            # Cerrar archivo si está abierto
+                            if batch_file_handle:
+                                batch_file_handle.close()
+                                logger.info(f"✅ Archivo cerrado antes de reiniciar: {current_batch_file.name}")
+                            raise Exception("End of catalog or navigation stuck")  # Force restart driver
+                    else:
+                        consecutive_no_button = 0
+                    
+                    time.sleep(1)
+                    
+                    # Check for Driver Restart (Long running maintenance)
+                    if len(seen) % 1000 == 0 and len(seen) > 0:
+                        logger.info(f"🔄 Reiniciando Chrome (mantenimiento preventivo - {len(seen)} productos)...")
+                        # Cerrar archivo si está abierto
+                        if batch_file_handle:
+                            batch_file_handle.close()
+                            logger.info(f"✅ Archivo cerrado antes de mantenimiento: {current_batch_file.name}")
+                        break  # Break Main Loop -> Rebuild Driver
 
             except KeyboardInterrupt:
                 logger.info("⏹️ Deteniendo scraper (Ctrl+C)...")

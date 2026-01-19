@@ -19,6 +19,7 @@ numpy
 pandas
 pillow
 psutil
+openpyxl
 
 # --- Machine Learning / AI ---
 torch
@@ -44,3 +45,6 @@ pytrends
 pgvector
 langchain
 langchain-ollama
+duckduckgo-search
+tldextract
+playwright

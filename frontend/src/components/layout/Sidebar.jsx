@@ -1,14 +1,14 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Pickaxe, Boxes, Server, Settings, Zap } from 'lucide-react';
+import { LayoutDashboard, Pickaxe, Boxes, Server, Settings as SettingsIcon, Zap } from 'lucide-react';
 import './Sidebar.css';
 
 const Sidebar = () => {
     const navItems = [
-        { path: '/', label: 'Overview', icon: LayoutDashboard },
-        { path: '/gold-mine', label: 'Gold Mine', icon: Pickaxe, glow: true },
-        { path: '/cluster-lab', label: 'Cluster Lab', icon: Boxes },
-        { path: '/system-status', label: 'System Status', icon: Server },
+        { path: '/admin', label: 'Overview', icon: LayoutDashboard },
+        { path: '/admin/gold-mine', label: 'Gold Mine', icon: Pickaxe, glow: true },
+        { path: '/admin/cluster-lab', label: 'Cluster Lab', icon: Boxes },
+        { path: '/admin/system-status', label: 'System Status', icon: Server },
     ];
 
     return (
@@ -31,6 +31,7 @@ const Sidebar = () => {
                         className={({ isActive }) =>
                             `nav-item ${isActive ? 'active' : ''} ${item.glow ? 'glow-effect' : ''}`
                         }
+                        end={item.path === '/admin'} // Add 'end' prop to avoid Overview being active for nested routes
                     >
                         <item.icon size={20} />
                         <span>{item.label}</span>
@@ -39,10 +40,14 @@ const Sidebar = () => {
             </nav>
 
             <div className="sidebar-footer">
-                <button className="nav-item">
-                    <Settings size={20} />
+                <NavLink
+                    to="/admin/settings"
+                    className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+                    style={{ justifyContent: 'flex-start', border: 'none' }}
+                >
+                    <SettingsIcon size={20} />
                     <span>Settings</span>
-                </button>
+                </NavLink>
                 <div className="user-profile">
                     <div className="avatar">AD</div>
                     <div className="user-info">

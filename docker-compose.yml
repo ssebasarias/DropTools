@@ -45,6 +45,16 @@ services:
       - ./raw_data:/app/raw_data # Persistir JSONs y fotos descargadas
       - ./backend:/app/backend # Código fuente actualizado
       - ./logs:/app/logs
+    # Límites de recursos AUMENTADOS
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    shm_size: '1g' # Aumentado de 512m a 1 GB (Chrome necesita más)
     # No inicia solo, tú lo lanzas cuando quieras scrapear
     profiles: [ "workers" ]
     networks:
@@ -66,6 +76,11 @@ services:
       - ./backend:/app/backend
       - ./raw_data:/app/raw_data
       - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 500M
     networks:
       - dahell_net
     command: python backend/manage.py loader
@@ -88,6 +103,9 @@ services:
     # ⚡ Habilitar acceso a la GPU NVIDIA
     deploy:
       resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
         reservations:
           devices:
             - driver: nvidia
@@ -111,6 +129,11 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
     networks:
       - dahell_net
     command: python backend/manage.py clusterizer
@@ -118,25 +141,6 @@ services:
     restart: no
     depends_on:
       - db
-
-  ai_trainer:
-    build:
-      context: .
-      target: selenium # Reusamos imagen completa porsiacaso, aunque no usa chrome
-    container_name: dahell_ai_trainer
-    env_file:
-      - .env.docker
-    volumes:
-      - .:/app
-      - ./logs:/app/logs
-    networks:
-      - dahell_net
-    command: python backend/manage.py ai_trainer
-    profiles: [ "workers" ]
-    restart: "no"
-    depends_on:
-      - db
-      - backend # Renamed from "backend API (Django REST Framework)" to match service name
 
   classifier:
     build:
@@ -148,52 +152,109 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.2G
     networks:
       - dahell_net
-    command: python backend/manage.py classify_products
+    command: python backend/manage.py classifier
     profiles: [ "workers" ]
     restart: no
     depends_on:
       - db
-    # Opcional: Si usa mucho CPU (LLM), podriamos limitar recursos, 
-    # pero confiamos en que Ollama corre fuera o en otro servicio.
-    # Si Ollama es local en el host, necesita acceder a host.docker.internal si usas Windows/Mac
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
 
-  market_agent:
+  classifier_2:
     build:
       context: .
-      target: vectorizer
-    container_name: dahell_market_agent
+      target: selenium
+    container_name: dahell_classifier_2
     env_file:
       - .env.docker
     volumes:
       - ./backend:/app/backend
       - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.2G
     networks:
       - dahell_net
-    command: python backend/manage.py market_agent
+    command: python backend/manage.py classifier
     profiles: [ "workers" ]
     restart: no
     depends_on:
       - db
-    environment:
-      - MELI_SITE=MCO # Colombia by default
 
-  amazon_explorer:
+  market_trender:
     build:
       context: .
-      target: vectorizer
-    container_name: dahell_amazon_explorer
+      target: selenium
+    container_name: dahell_market_trender
     env_file:
       - .env.docker
     volumes:
       - ./backend:/app/backend
       - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
     networks:
       - dahell_net
-    command: python backend/manage.py amazon_explorer
+    command: python backend/manage.py market_trender
+    profiles: [ "workers" ]
+    restart: no
+    depends_on:
+      - db
+
+  meta_scholar:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_meta_scholar
+    env_file:
+      - .env.docker
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+      - ./cache_huggingface:/app/cache_huggingface
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+    networks:
+      - dahell_net
+    command: python backend/manage.py meta_scholar
+    profiles: [ "workers" ]
+    restart: "no"
+    depends_on:
+      - db
+      - backend
+
+  shopify_auditor:
+    build:
+      context: .
+      target: selenium
+    container_name: dahell_shopify_auditor
+    env_file:
+      - .env.docker
+    volumes:
+      - ./backend:/app/backend
+      - ./logs:/app/logs
+      - ./raw_data:/app/raw_data
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    networks:
+      - dahell_net
+    command: python backend/manage.py shopify_auditor
     profiles: [ "workers" ]
     restart: no
     depends_on:
