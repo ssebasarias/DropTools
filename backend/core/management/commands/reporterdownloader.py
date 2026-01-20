@@ -1,10 +1,19 @@
 """
 Bot Descargador de Reportes para Dropi
-Este bot descarga dos reportes de órdenes:
-- Reporte BASE: un mes exacto (desde día 16 hasta día 16)
-- Reporte ACTUAL: desde día 16 hasta hoy
 
-Los archivos se guardan con nombres descriptivos que incluyen las fechas.
+Este bot descarga reportes de órdenes de un mes exacto (día X a día X del mes siguiente).
+
+Lógica de ejecución:
+- Si la carpeta está vacía: descarga 2 reportes (día anterior y día actual)
+- Si la carpeta tiene archivos: descarga solo 1 reporte (día actual)
+
+Ejemplo si hoy es 20/01/2026:
+- Si carpeta vacía: descarga reporte del 19 (19/12/2025 a 19/01/2026) y del 20 (20/12/2025 a 20/01/2026)
+- Si carpeta tiene archivos: descarga solo reporte del 20 (20/12/2025 a 20/01/2026)
+
+Los archivos se guardan con formato: reporte_YYYYMMDD_YYYYMMDD.xlsx
+Ejemplo: reporte_20251219_20260119.xlsx (desde 19/12/2025 hasta 19/01/2026)
+
 Para comparar los reportes y generar el Excel con órdenes sin movimiento,
 usa el comando: python manage.py reportcomparer
 """
@@ -32,13 +41,13 @@ from django.conf import settings
 
 class DropiDownloaderReporterBot:
     """
-    Bot para descargar y comparar reportes de Dropi
+    Bot para descargar reportes de Dropi
     
     Funcionalidad:
-    1. Descarga dos reportes: uno actual y uno de 2 días antes
-    2. Compara ambos reportes para encontrar órdenes sin movimiento
-    3. Genera un Excel con las órdenes sin movimiento (>46 horas)
-    4. Pasa el Excel al reporter para generar observaciones
+    1. Descarga reportes de un mes exacto (día X a día X del mes siguiente)
+    2. Detecta si la carpeta está vacía para decidir cuántos reportes descargar
+    3. Nombra los archivos con formato: reporte_YYYYMMDD_YYYYMMDD.xlsx
+    4. Los reportes pueden ser comparados posteriormente con reportcomparer
     """
     
     # Credenciales
@@ -56,25 +65,27 @@ class DropiDownloaderReporterBot:
         
         Args:
             headless: Si True, ejecuta el navegador sin interfaz gráfica
-            download_dir: Directorio donde se guardarán los archivos descargados
+            download_dir: Directorio base donde se guardarán los archivos descargados (results/downloads)
         """
         self.headless = headless
         self.driver = None
         self.wait = None
         self.logger = self._setup_logger()
         
-        # Configurar directorio de descargas
+        # Configurar directorio base de descargas
         if download_dir is None:
             # Directorio por defecto: results/downloads
             base_dir = Path(__file__).parent.parent.parent.parent
             download_dir = base_dir / 'results' / 'downloads'
         
-        self.download_dir = Path(download_dir)
-        self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.download_dir_base = Path(download_dir)
+        self.download_dir_base.mkdir(parents=True, exist_ok=True)
         
-        # Configurar preferencias de descarga para Chrome
+        # El directorio específico del mes se creará dinámicamente
+        self.download_dir = None
+        
+        # Las preferencias de descarga se configurarán después de crear la carpeta del mes
         self.download_prefs = {
-            "download.default_directory": str(self.download_dir),
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
             "safebrowsing.enabled": True
@@ -158,16 +169,27 @@ class DropiDownloaderReporterBot:
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
         
-        # Preferencias incluyendo descargas
+        # Verificar que el directorio de descarga esté configurado
+        if self.download_dir is None:
+            self.logger.warning("   ⚠️ Directorio del mes no configurado, usando directorio base temporalmente")
+            download_directory = str(self.download_dir_base)
+        else:
+            self.logger.info(f"   📁 Directorio de descarga configurado: {self.download_dir}")
+            download_directory = str(self.download_dir)
+        
+        # Preferencias incluyendo descargas (actualizar con el directorio correcto)
         prefs = {
             "profile.default_content_setting_values.notifications": 2,
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False,
-            **self.download_prefs  # Agregar preferencias de descarga
+            "download.default_directory": download_directory,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True
         }
         options.add_experimental_option("prefs", prefs)
         
-        self.logger.info(f"   📁 Directorio de descargas: {self.download_dir}")
+        self.logger.info(f"   📂 Directorio de descarga para Chrome: {download_directory}")
         self.logger.info("   📦 Creando instancia de Chrome...")
         
         try:
@@ -306,64 +328,136 @@ class DropiDownloaderReporterBot:
             self.logger.error(f"   ❌ Error al navegar a Mis Pedidos: {str(e)}")
             return False
     
-    def _calculate_dates(self):
+    def _calculate_dates_for_day(self, target_day):
         """
-        Calcula las fechas para los filtros de reportes
+        Calcula las fechas para un reporte de un mes exacto (día X a día X del mes siguiente)
         
-        Lógica:
-        - Reporte actual: desde 16 del mes anterior hasta hoy (un mes y algunos días)
-        - Reporte base: desde 16 del mes anterior hasta el día 16 del mes actual (exactamente un mes)
+        Ejemplo si target_day es 19/01/2026:
+        - Fecha inicio: 19/12/2025
+        - Fecha fin: 19/01/2026
+        - Duración: 1 mes exacto
         
-        Ejemplo si hoy es 18/01/2026:
-        - Reporte actual: desde 16/12/2025 hasta 18/01/2026
-        - Reporte base: desde 16/12/2025 hasta 16/01/2026
-        
-        PASO 4: Calcular fechas para los filtros
+        Args:
+            target_day: datetime del día objetivo (ej: hoy o ayer)
         
         Returns:
-            tuple: (fecha_inicio_actual, fecha_fin_actual, fecha_inicio_base, fecha_fin_base)
+            tuple: (fecha_inicio, fecha_fin)
         """
-        self.logger.info("="*80)
-        self.logger.info("📅 PASO 4: CALCULANDO FECHAS PARA LOS FILTROS")
-        self.logger.info("="*80)
+        # Obtener el día del mes
+        dia_mes = target_day.day
         
-        hoy = datetime.now()
-        
-        # Calcular día 16 del mes actual
-        dia_base = 16
-        fecha_fin_base = datetime(hoy.year, hoy.month, dia_base)
-        
-        # Si hoy es antes del día 16, usar el día 16 del mes anterior
-        if hoy.day < dia_base:
-            # Si estamos antes del día 16, el reporte base termina el día 16 del mes anterior
-            if hoy.month == 1:
-                fecha_fin_base = datetime(hoy.year - 1, 12, dia_base)
-            else:
-                fecha_fin_base = datetime(hoy.year, hoy.month - 1, dia_base)
-        
-        # Calcular fecha de inicio (día 16 del mes anterior al del reporte base)
-        if fecha_fin_base.month == 1:
-            fecha_inicio = datetime(fecha_fin_base.year - 1, 12, dia_base)
+        # Calcular fecha de inicio (mismo día del mes anterior)
+        if target_day.month == 1:
+            fecha_inicio = datetime(target_day.year - 1, 12, dia_mes)
         else:
-            fecha_inicio = datetime(fecha_fin_base.year, fecha_fin_base.month - 1, dia_base)
+            # Manejar casos donde el día no existe en el mes anterior (ej: 31 de marzo -> 28/29 de febrero)
+            try:
+                fecha_inicio = datetime(target_day.year, target_day.month - 1, dia_mes)
+            except ValueError:
+                # Si el día no existe en el mes anterior, usar el último día de ese mes
+                import calendar
+                ultimo_dia = calendar.monthrange(target_day.year, target_day.month - 1)[1]
+                fecha_inicio = datetime(target_day.year, target_day.month - 1, ultimo_dia)
         
-        # Reporte actual: desde día 16 del mes anterior hasta hoy
-        fecha_inicio_actual = fecha_inicio
-        fecha_fin_actual = hoy
+        # Fecha fin es el mismo día del mes actual
+        fecha_fin = datetime(target_day.year, target_day.month, dia_mes)
         
-        # Reporte base: desde día 16 del mes anterior hasta día 16 del mes actual (exactamente un mes)
-        fecha_inicio_base = fecha_inicio
-        fecha_fin_base = fecha_fin_base
+        return fecha_inicio, fecha_fin
+    
+    def _get_month_folder_name(self, fecha=None):
+        """
+        Obtiene el nombre de la carpeta del mes en español + año
         
-        self.logger.info(f"   📊 Reporte ACTUAL (desde {fecha_inicio_actual.strftime('%d/%m/%Y')} hasta hoy):")
-        self.logger.info(f"      Desde: {fecha_inicio_actual.strftime('%d/%m/%Y')}")
-        self.logger.info(f"      Hasta: {fecha_fin_actual.strftime('%d/%m/%Y')}")
-        self.logger.info(f"   📊 Reporte BASE (un mes exacto, para comparación):")
-        self.logger.info(f"      Desde: {fecha_inicio_base.strftime('%d/%m/%Y')}")
-        self.logger.info(f"      Hasta: {fecha_fin_base.strftime('%d/%m/%Y')}")
-        self.logger.info("="*80)
+        Args:
+            fecha: datetime opcional (default: fecha actual)
         
-        return fecha_inicio_actual, fecha_fin_actual, fecha_inicio_base, fecha_fin_base
+        Returns:
+            str: Nombre de la carpeta (ej: "enero_2026")
+        """
+        if fecha is None:
+            fecha = datetime.now()
+        
+        meses_espanol = {
+            1: 'enero', 2: 'febrero', 3: 'marzo', 4: 'abril',
+            5: 'mayo', 6: 'junio', 7: 'julio', 8: 'agosto',
+            9: 'septiembre', 10: 'octubre', 11: 'noviembre', 12: 'diciembre'
+        }
+        
+        mes_nombre = meses_espanol[fecha.month]
+        año = fecha.year
+        
+        return f"{mes_nombre}_{año}"
+    
+    def _get_month_folder_path(self, fecha=None):
+        """
+        Obtiene la ruta completa de la carpeta del mes
+        
+        Args:
+            fecha: datetime opcional (default: fecha actual)
+        
+        Returns:
+            Path: Ruta completa de la carpeta del mes
+        """
+        nombre_carpeta = self._get_month_folder_name(fecha)
+        return self.download_dir_base / nombre_carpeta
+    
+    def _ensure_month_folder_exists(self, fecha=None):
+        """
+        Crea la carpeta del mes si no existe y configura el directorio de descarga
+        
+        Args:
+            fecha: datetime opcional (default: fecha actual)
+        
+        Returns:
+            Path: Ruta de la carpeta del mes creada/verificada
+        """
+        if fecha is None:
+            fecha = datetime.now()
+        
+        carpeta_mes = self._get_month_folder_path(fecha)
+        nombre_carpeta = self._get_month_folder_name(fecha)
+        
+        self.logger.info(f"   📂 Verificando carpeta del mes: {nombre_carpeta}")
+        
+        if not carpeta_mes.exists():
+            self.logger.info(f"      ⚠️ Carpeta no existe, creando: {carpeta_mes}")
+            carpeta_mes.mkdir(parents=True, exist_ok=True)
+            self.logger.info(f"      ✅ Carpeta creada exitosamente")
+        else:
+            self.logger.info(f"      ✅ Carpeta ya existe")
+        
+        # Actualizar directorio de descarga y preferencias de Chrome
+        self.download_dir = carpeta_mes
+        self.download_prefs["download.default_directory"] = str(self.download_dir)
+        
+        self.logger.info(f"      📁 Directorio de descarga configurado: {self.download_dir}")
+        
+        return carpeta_mes
+    
+    def _is_download_dir_empty(self):
+        """
+        Verifica si el directorio base de descargas está vacío (sin archivos .xlsx en toda la carpeta)
+        
+        Busca recursivamente en toda la carpeta downloads/ para verificar si hay algún archivo .xlsx
+        
+        Returns:
+            bool: True si está vacío, False si tiene archivos
+        """
+        if not self.download_dir_base.exists():
+            self.logger.info("   📂 Carpeta base no existe, se considera vacía")
+            return True
+        
+        # Buscar archivos .xlsx recursivamente en toda la carpeta downloads/
+        xlsx_files = list(self.download_dir_base.rglob("*.xlsx"))
+        
+        cantidad_archivos = len(xlsx_files)
+        
+        if cantidad_archivos == 0:
+            self.logger.info("   📂 Carpeta base está vacía (0 archivos .xlsx encontrados)")
+            return True
+        else:
+            self.logger.info(f"   📂 Carpeta base tiene {cantidad_archivos} archivo(s) .xlsx")
+            return False
     
     def _open_filters(self):
         """
@@ -835,33 +929,42 @@ class DropiDownloaderReporterBot:
         
         return None
     
-    def _rename_downloaded_file(self, downloaded_file, fecha_inicio, fecha_fin, tipo_reporte):
+    def _rename_downloaded_file(self, downloaded_file, fecha_inicio, fecha_fin):
         """
-        Renombra el archivo descargado con un nombre descriptivo que incluye las fechas
+        Renombra el archivo descargado con un nombre descriptivo que incluye las fechas desde y hasta
+        
+        Formato: reporte_YYYYMMDD_YYYYMMDD.xlsx
+        Ejemplo: reporte_20251219_20260119.xlsx (desde 19/12/2025 hasta 19/01/2026)
         
         Args:
             downloaded_file: Ruta del archivo descargado
             fecha_inicio: Fecha de inicio (datetime)
             fecha_fin: Fecha de fin (datetime)
-            tipo_reporte: Tipo de reporte ('base' o 'actual')
         
         Returns:
             str: Ruta del archivo renombrado
         """
         try:
-            # Crear nombre descriptivo con timestamp para evitar conflictos
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            # Crear nombre descriptivo con fechas desde y hasta
             fecha_inicio_str = fecha_inicio.strftime('%Y%m%d')
             fecha_fin_str = fecha_fin.strftime('%Y%m%d')
-            nuevo_nombre = f"reporte_{tipo_reporte}_{fecha_inicio_str}_{fecha_fin_str}_{timestamp}.xlsx"
+            nuevo_nombre = f"reporte_{fecha_inicio_str}_{fecha_fin_str}.xlsx"
             
             # Ruta completa del nuevo archivo
             nuevo_path = self.download_dir / nuevo_nombre
+            
+            # Verificar si el archivo ya existe (por si acaso)
+            if nuevo_path.exists():
+                # Agregar timestamp para evitar conflictos
+                timestamp = datetime.now().strftime('%H%M%S')
+                nuevo_nombre = f"reporte_{fecha_inicio_str}_{fecha_fin_str}_{timestamp}.xlsx"
+                nuevo_path = self.download_dir / nuevo_nombre
             
             # Renombrar archivo
             if os.path.exists(downloaded_file):
                 os.rename(downloaded_file, nuevo_path)
                 self.logger.info(f"   📝 Archivo renombrado: {nuevo_nombre}")
+                self.logger.info(f"      Desde: {fecha_inicio.strftime('%d/%m/%Y')} hasta {fecha_fin.strftime('%d/%m/%Y')}")
                 return str(nuevo_path)
             else:
                 self.logger.warning(f"   ⚠️ Archivo original no encontrado: {downloaded_file}")
@@ -871,7 +974,7 @@ class DropiDownloaderReporterBot:
             self.logger.warning(f"   ⚠️ Error al renombrar archivo: {str(e)}")
             return downloaded_file
     
-    def _download_single_report(self, fecha_inicio, fecha_fin, reporte_nombre, tipo_reporte):
+    def _download_single_report(self, fecha_inicio, fecha_fin):
         """
         Descarga un reporte completo con las fechas especificadas y lo renombra
         
@@ -880,12 +983,12 @@ class DropiDownloaderReporterBot:
         Args:
             fecha_inicio: Fecha de inicio (datetime)
             fecha_fin: Fecha de fin (datetime)
-            reporte_nombre: Nombre descriptivo del reporte (para logs)
-            tipo_reporte: Tipo de reporte ('base' o 'actual')
         
         Returns:
             str: Ruta del archivo descargado y renombrado o None si falló
         """
+        reporte_nombre = f"Reporte desde {fecha_inicio.strftime('%d/%m/%Y')} hasta {fecha_fin.strftime('%d/%m/%Y')}"
+        
         self.logger.info("="*80)
         self.logger.info(f"📊 DESCARGANDO REPORTE: {reporte_nombre}")
         self.logger.info("="*80)
@@ -915,7 +1018,7 @@ class DropiDownloaderReporterBot:
         
         if downloaded_file:
             # Paso 6: Renombrar archivo con nombre descriptivo
-            renamed_file = self._rename_downloaded_file(downloaded_file, fecha_inicio, fecha_fin, tipo_reporte)
+            renamed_file = self._rename_downloaded_file(downloaded_file, fecha_inicio, fecha_fin)
             
             self.logger.info("="*80)
             self.logger.info(f"✅ REPORTE DESCARGADO EXITOSAMENTE: {reporte_nombre}")
@@ -933,73 +1036,160 @@ class DropiDownloaderReporterBot:
         """
         Ejecuta el proceso de descarga de reportes
         
-        Flujo:
-        1. Inicializar navegador
-        2. Login
-        3. Calcular fechas
-        4. Descargar reporte BASE (un mes exacto, desde día 16 hasta día 16)
-        5. Descargar reporte ACTUAL (desde día 16 hasta hoy)
-        6. Renombrar archivos con nombres descriptivos que incluyen las fechas
+        Lógica:
+        - Descarga reportes de un mes exacto (día X a día X del mes siguiente)
+        - Si la carpeta está vacía: descarga 2 reportes (día anterior y día actual)
+        - Si la carpeta tiene archivos: descarga solo 1 reporte (día actual)
+        - Los archivos se nombran: reporte_YYYYMMDD_YYYYMMDD.xlsx
         """
         self.logger.info("="*80)
         self.logger.info("🤖 INICIANDO BOT DESCARGADOR DE REPORTES")
         self.logger.info("="*80)
-        self.logger.info(f"   📁 Directorio de descargas: {self.download_dir}")
+        self.logger.info(f"   📁 Directorio base: {self.download_dir_base}")
         self.logger.info("="*80)
         
         try:
-            # Paso 1: Inicializar navegador
+            # Paso 1: Verificar estado de la carpeta base
+            self.logger.info("")
+            self.logger.info("="*80)
+            self.logger.info("📂 PASO 1: VERIFICANDO ESTADO DE LA CARPETA BASE")
+            self.logger.info("="*80)
+            carpeta_vacia = self._is_download_dir_empty()
+            
+            if carpeta_vacia:
+                self.logger.info("   ✅ RESULTADO: Carpeta vacía")
+                self.logger.info("   📋 ACCIÓN: Se descargarán 2 reportes (día anterior y día actual)")
+            else:
+                self.logger.info("   ✅ RESULTADO: Carpeta con archivos existentes")
+                self.logger.info("   📋 ACCIÓN: Se descargará 1 reporte (día actual)")
+            self.logger.info("="*80)
+            
+            # Paso 2: Obtener fecha actual y crear/verificar carpeta del mes
+            self.logger.info("")
+            self.logger.info("="*80)
+            self.logger.info("📅 PASO 2: CONFIGURANDO CARPETA DEL MES ACTUAL")
+            self.logger.info("="*80)
+            hoy = datetime.now()
+            nombre_carpeta_mes = self._get_month_folder_name(hoy)
+            self.logger.info(f"   📆 Fecha actual: {hoy.strftime('%d/%m/%Y')}")
+            self.logger.info(f"   📂 Carpeta del mes: {nombre_carpeta_mes}")
+            
+            carpeta_mes = self._ensure_month_folder_exists(hoy)
+            self.logger.info(f"   ✅ Carpeta del mes configurada: {carpeta_mes}")
+            self.logger.info("="*80)
+            
+            # Paso 3: Inicializar navegador (después de configurar carpeta del mes)
+            self.logger.info("")
+            self.logger.info("="*80)
+            self.logger.info("🚀 PASO 3: INICIALIZANDO NAVEGADOR")
+            self.logger.info("="*80)
             self._init_driver()
             
-            # Paso 2: Login
+            # Paso 4: Login
+            self.logger.info("")
+            self.logger.info("="*80)
+            self.logger.info("🔐 PASO 4: INICIANDO SESIÓN")
+            self.logger.info("="*80)
             if not self._login():
                 self.logger.error("❌ Login fallido. Abortando.")
                 return False
             
-            # Paso 3: Calcular fechas
-            fecha_inicio_actual, fecha_fin_actual, fecha_inicio_base, fecha_fin_base = self._calculate_dates()
-            
-            # Paso 4: Descargar reporte BASE (un mes exacto, para comparación)
+            # Paso 5: Calcular fechas
             self.logger.info("")
-            self.reporte_anterior_path = self._download_single_report(
-                fecha_inicio_base,
-                fecha_fin_base,
-                f"REPORTE BASE (desde {fecha_inicio_base.strftime('%d/%m/%Y')} hasta {fecha_fin_base.strftime('%d/%m/%Y')})",
-                'base'
-            )
+            self.logger.info("="*80)
+            self.logger.info("📅 PASO 5: CALCULANDO FECHAS PARA LOS REPORTES")
+            self.logger.info("="*80)
+            ayer = hoy - timedelta(days=1)
             
-            if not self.reporte_anterior_path:
-                self.logger.error("❌ No se pudo descargar el reporte base. Abortando.")
+            # Calcular fechas para el reporte del día actual
+            fecha_inicio_hoy, fecha_fin_hoy = self._calculate_dates_for_day(hoy)
+            
+            self.logger.info(f"   📊 Reporte HOY ({hoy.strftime('%d/%m/%Y')}):")
+            self.logger.info(f"      Desde: {fecha_inicio_hoy.strftime('%d/%m/%Y')}")
+            self.logger.info(f"      Hasta: {fecha_fin_hoy.strftime('%d/%m/%Y')}")
+            
+            reportes_descargados = []
+            
+            # Paso 6: Descargar reportes según el estado de la carpeta
+            self.logger.info("")
+            self.logger.info("="*80)
+            self.logger.info("📥 PASO 6: DESCARGANDO REPORTES")
+            self.logger.info("="*80)
+            
+            if carpeta_vacia:
+                # Descargar reporte del día anterior
+                fecha_inicio_ayer, fecha_fin_ayer = self._calculate_dates_for_day(ayer)
+                
+                self.logger.info(f"   📊 Reporte AYER ({ayer.strftime('%d/%m/%Y')}):")
+                self.logger.info(f"      Desde: {fecha_inicio_ayer.strftime('%d/%m/%Y')}")
+                self.logger.info(f"      Hasta: {fecha_fin_ayer.strftime('%d/%m/%Y')}")
+                self.logger.info("="*80)
+                
+                self.logger.info("")
+                self.logger.info("   📥 Descargando reporte del día ANTERIOR...")
+                reporte_ayer = self._download_single_report(fecha_inicio_ayer, fecha_fin_ayer)
+                
+                if not reporte_ayer:
+                    self.logger.error("   ❌ No se pudo descargar el reporte del día anterior. Abortando.")
+                    return False
+                
+                self.logger.info("   ✅ Reporte del día anterior descargado exitosamente")
+                reportes_descargados.append({
+                    'tipo': 'día anterior',
+                    'path': reporte_ayer,
+                    'fecha_inicio': fecha_inicio_ayer,
+                    'fecha_fin': fecha_fin_ayer
+                })
+                self.stats['reporte_anterior_descargado'] = True
+                
+                # Pequeña pausa entre descargas
+                self.logger.info("   ⏳ Esperando 5 segundos antes de la siguiente descarga...")
+                time.sleep(5)
+            
+            # Descargar reporte del día actual
+            self.logger.info("")
+            self.logger.info("   📥 Descargando reporte del día ACTUAL...")
+            reporte_hoy = self._download_single_report(fecha_inicio_hoy, fecha_fin_hoy)
+            
+            if not reporte_hoy:
+                self.logger.error("   ❌ No se pudo descargar el reporte del día actual. Abortando.")
                 return False
             
-            self.stats['reporte_anterior_descargado'] = True
-            
-            # Paso 5: Descargar reporte ACTUAL (hasta hoy)
-            # Nota: Este método siempre navega desde cero a Mis Pedidos para estado limpio
-            self.logger.info("")
-            self.reporte_actual_path = self._download_single_report(
-                fecha_inicio_actual,
-                fecha_fin_actual,
-                f"REPORTE ACTUAL (desde {fecha_inicio_actual.strftime('%d/%m/%Y')} hasta {fecha_fin_actual.strftime('%d/%m/%Y')})",
-                'actual'
-            )
-            
-            if not self.reporte_actual_path:
-                self.logger.error("❌ No se pudo descargar el reporte actual. Abortando.")
-                return False
-            
+            self.logger.info("   ✅ Reporte del día actual descargado exitosamente")
+            reportes_descargados.append({
+                'tipo': 'día actual',
+                'path': reporte_hoy,
+                'fecha_inicio': fecha_inicio_hoy,
+                'fecha_fin': fecha_fin_hoy
+            })
             self.stats['reporte_actual_descargado'] = True
+            self.logger.info("="*80)
             
-            # Paso 6: Mostrar resumen final
+            # Paso 7: Mostrar resumen final
             self.logger.info("")
             self.logger.info("="*80)
-            self.logger.info("✅ PROCESO DE DESCARGA COMPLETADO EXITOSAMENTE")
+            self.logger.info("✅ PASO 7: RESUMEN FINAL")
             self.logger.info("="*80)
-            self.logger.info(f"   📁 Reporte BASE: {self.reporte_anterior_path}")
-            self.logger.info(f"   📁 Reporte ACTUAL: {self.reporte_actual_path}")
+            self.logger.info("   🎉 PROCESO DE DESCARGA COMPLETADO EXITOSAMENTE")
             self.logger.info("")
-            self.logger.info("   💡 Próximo paso: Ejecutar el comparador de reportes:")
-            self.logger.info(f"      python manage.py reportcomparer --base \"{self.reporte_anterior_path}\" --actual \"{self.reporte_actual_path}\"")
+            self.logger.info(f"   📂 Carpeta del mes: {nombre_carpeta_mes}")
+            self.logger.info(f"   📁 Ubicación: {carpeta_mes}")
+            self.logger.info("")
+            self.logger.info(f"   📊 Total de reportes descargados: {len(reportes_descargados)}")
+            self.logger.info("")
+            
+            for idx, reporte in enumerate(reportes_descargados, 1):
+                self.logger.info(f"   {idx}. Reporte {reporte['tipo'].upper()}:")
+                self.logger.info(f"      📄 Archivo: {Path(reporte['path']).name}")
+                self.logger.info(f"      📅 Período: {reporte['fecha_inicio'].strftime('%d/%m/%Y')} - {reporte['fecha_fin'].strftime('%d/%m/%Y')}")
+                self.logger.info(f"      📁 Ruta completa: {reporte['path']}")
+                self.logger.info("")
+            
+            if len(reportes_descargados) == 2:
+                self.logger.info("   💡 Próximo paso: Ejecutar el comparador de reportes:")
+                self.logger.info(f"      python manage.py reportcomparer --base \"{reportes_descargados[0]['path']}\" --actual \"{reportes_descargados[1]['path']}\"")
+            else:
+                self.logger.info("   💡 Reporte del día actual descargado. El comparador buscará automáticamente el reporte base.")
             self.logger.info("="*80)
             return True
             

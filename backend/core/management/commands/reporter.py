@@ -6,8 +6,10 @@ Este bot automatiza la generación de observaciones en Dropi para productos sin 
 import os
 import time
 import logging
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 from pathlib import Path
+import glob
 
 import pandas as pd
 from selenium import webdriver
@@ -52,8 +54,23 @@ class DropiReporterBot:
         "TELEMERCADEO"
     ]
     
-    # Mensaje de observación
-    OBSERVATION_TEXT = "Pedido sin movimiento por mucho tiempo, favor salir a reparto urgente."
+    # Diccionario de textos de observación variados para evitar detección como spam
+    OBSERVATION_TEXTS = [
+        "Pedido sin movimiento por mucho tiempo, favor salir a reparto urgente.",
+        "Pedido sin avance, requerimos despacho inmediato.",
+        "Orden estancada, requerimos envío con urgencia.",
+        "Pedido sin movimiento, necesitamos salida a reparto urgente.",
+        "Orden detenida, favor procesar envío con prioridad.",
+        "Pedido sin avance, requerimos despacho urgente.",
+        "Orden estancada, necesitamos salida a reparto inmediato.",
+        "Pedido detenido, favor gestionar envío urgente.",
+        "Orden sin movimiento, requerimos despacho con urgencia.",
+        "Pedido estancado, necesitamos salida a reparto urgente.",
+        "Orden sin avance, favor procesar envío inmediato.",
+        "Pedido detenido, requerimos despacho urgente por favor.",
+        "Orden sin movimiento, necesitamos envío con prioridad.",
+        "Pedido estancado, favor gestionar salida a reparto urgente."
+    ]
     
     def __init__(self, excel_path, headless=False):
         """
@@ -74,8 +91,15 @@ class DropiReporterBot:
             'procesados': 0,
             'ya_tienen_caso': 0,
             'errores': 0,
-            'no_encontrados': 0
+            'no_encontrados': 0,
+            'saltados_por_tiempo': 0,
+            'reintentos': 0
         }
+        # Timeout global de 15 segundos para detectar sesión expirada
+        self.TIMEOUT_SECONDS = 15
+        # Estado para tracking de sesión
+        self.session_expired = False
+        self.current_processing_step = None  # Para saber dónde retomar después de relogear
         
     def _setup_logger(self):
         """Configura el logger para el bot"""
@@ -108,6 +132,171 @@ class DropiReporterBot:
         logger.addHandler(file_handler)
         
         return logger
+    
+    def _check_session_expired(self):
+        """Verifica si la sesión está expirada"""
+        try:
+            # Verificar token en localStorage o URL de login
+            token_exists = self.driver.execute_script("return !!localStorage.getItem('DROPI_token')")
+            is_login_page = "/login" in self.driver.current_url
+            
+            if not token_exists or is_login_page:
+                self.logger.warning("⚠️ Sesión expirada detectada")
+                return True
+            return False
+        except:
+            # Si hay error al verificar, asumir que está expirada
+            return True
+    
+    def _relogin_and_retry(self):
+        """Reloguea, navega a Mis Pedidos y retorna True si fue exitoso"""
+        self.logger.info("="*60)
+        self.logger.info("🔄 RELOGUEANDO DESPUÉS DE TIMEOUT")
+        self.logger.info("="*60)
+        
+        try:
+            # Cerrar navegador actual
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
+            
+            # Reinicializar navegador
+            self._init_driver()
+            
+            # Relogear
+            if not self._login():
+                self.logger.error("❌ Error al relogear")
+                return False
+            
+            # SIEMPRE navegar a Mis Pedidos después de relogear
+            self.logger.info("📍 Navegando a Mis Pedidos después de relogin...")
+            if not self._navigate_to_orders():
+                self.logger.error("❌ Error al navegar a Mis Pedidos después de relogin")
+                return False
+            
+            self.session_expired = False
+            self.logger.info("✅ Relogin exitoso - Navegado a Mis Pedidos - Continuando desde donde se quedó")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error en relogin: {str(e)}")
+            return False
+    
+    def _get_results_dir(self):
+        """Obtiene el directorio de resultados"""
+        base_dir = Path(__file__).parent.parent.parent.parent
+        results_dir = base_dir / 'results' / 'reporter'
+        results_dir.mkdir(parents=True, exist_ok=True)
+        return results_dir
+    
+    def _get_today_results_file(self):
+        """Obtiene el archivo de resultados del día actual"""
+        results_dir = self._get_results_dir()
+        today = datetime.now().strftime('%Y%m%d')
+        pattern = f'dropi_reporter_results_{today}*.csv'
+        files = list(results_dir.glob(pattern))
+        
+        if files:
+            # Retornar el más reciente
+            return max(files, key=lambda f: f.stat().st_mtime)
+        return None
+    
+    def _load_checkpoint(self, df_input):
+        """Carga el checkpoint desde el último CSV del día actual"""
+        results_file = self._get_today_results_file()
+        
+        if not results_file:
+            self.logger.info("📋 No hay checkpoint - Comenzando desde el inicio")
+            return 0
+        
+        try:
+            df_checkpoint = pd.read_csv(results_file)
+            
+            if df_checkpoint.empty:
+                self.logger.info("📋 Checkpoint vacío - Comenzando desde el inicio")
+                return 0
+            
+            # Obtener la última línea procesada
+            if 'line_number' not in df_checkpoint.columns:
+                self.logger.info("📋 Checkpoint sin line_number - Comenzando desde el inicio")
+                return 0
+            
+            last_line = df_checkpoint['line_number'].max()
+            
+            if pd.isna(last_line):
+                self.logger.info("📋 Checkpoint sin line_number válido - Comenzando desde el inicio")
+                return 0
+            
+            start_line = int(last_line) + 1
+            
+            if start_line >= len(df_input):
+                self.logger.info("📋 Ya se procesaron todas las líneas del CSV")
+                return len(df_input)
+            
+            self.logger.info(f"📋 Checkpoint encontrado: Continuando desde línea {start_line + 1}")
+            return start_line
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ Error al cargar checkpoint: {str(e)} - Comenzando desde el inicio")
+            return 0
+    
+    def _check_order_can_be_processed(self, phone, df_checkpoint):
+        """Verifica si una orden puede ser procesada según tiempos requeridos"""
+        if df_checkpoint.empty:
+            return True, None
+        
+        # Buscar la orden en el checkpoint
+        order_records = df_checkpoint[df_checkpoint['phone'] == str(phone)]
+        
+        if order_records.empty:
+            return True, None
+        
+        # Obtener el registro más reciente
+        latest_record = order_records.iloc[-1]
+        
+        # Verificar next_attempt_time
+        next_attempt_time = latest_record.get('next_attempt_time')
+        if pd.notna(next_attempt_time) and str(next_attempt_time).strip() != '':
+            try:
+                # Convertir a datetime si es string
+                if isinstance(next_attempt_time, str):
+                    next_attempt = pd.to_datetime(next_attempt_time)
+                else:
+                    next_attempt = pd.to_datetime(next_attempt_time)
+                
+                now = datetime.now()
+                
+                if now < next_attempt:
+                    hours_remaining = (next_attempt - now).total_seconds() / 3600
+                    return False, {
+                        'status': latest_record.get('status', 'unknown'),
+                        'hours_remaining': hours_remaining,
+                        'next_attempt_time': next_attempt
+                    }
+            except Exception as e:
+                self.logger.warning(f"⚠️ Error al parsear next_attempt_time: {str(e)}")
+                pass
+        
+        return True, None
+    
+    def _calculate_next_attempt_time(self, status, retry_count=0):
+        """Calcula el tiempo del próximo intento según el estado"""
+        now = datetime.now()
+        
+        if status == 'success' or status == 'already_has_case':
+            # 46 horas
+            return now + timedelta(hours=46)
+        elif status == 'cannot_generate_yet':
+            # 24 horas
+            return now + timedelta(hours=24)
+        elif status == 'in_movement':
+            # Si ya está en movimiento y falla de nuevo, esperar 46 horas más
+            return now + timedelta(hours=46)
+        else:
+            # Para errores, puede reintentar inmediatamente
+            return now
     
     def _init_driver(self):
         """
@@ -159,8 +348,8 @@ class DropiReporterBot:
         # Anti-detección
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        # Configurar timeouts
-        self.wait = WebDriverWait(self.driver, 20)
+        # Configurar timeouts con máximo de 15 segundos para detectar sesión expirada
+        self.wait = WebDriverWait(self.driver, self.TIMEOUT_SECONDS)
         
         self.logger.info(f"   🌐 Navegador listo - Versión: Chrome")
         self.logger.info(f"   💻 Ejecutando en: PC LOCAL (no Docker)")
@@ -610,7 +799,7 @@ class DropiReporterBot:
                 type_dropdown.click()
             except:
                 self.driver.execute_script("arguments[0].click();", type_dropdown)
-            time.sleep(2)
+            time.sleep(1)  # Reducido de 2s a 1s
             self.logger.info("   ✅ Dropdown abierto")
             
             # Seleccionar "Transportadora"
@@ -631,11 +820,16 @@ class DropiReporterBot:
                 transportadora_option.click()
             except:
                 self.driver.execute_script("arguments[0].click();", transportadora_option)
-            time.sleep(2)
+            time.sleep(1)  # Reducido de 2s a 1s
             
             self.logger.info("✅ Tipo de consulta seleccionado: Transportadora")
+            self.current_processing_step = None
             return True
             
+        except TimeoutException:
+            self.logger.error("❌ Timeout al seleccionar tipo de consulta - Sesión probablemente expirada")
+            self.session_expired = True
+            return False
         except Exception as e:
             self.logger.error(f"❌ Error al seleccionar tipo de consulta: {str(e)}")
             
@@ -652,6 +846,7 @@ class DropiReporterBot:
     def _select_consultation_reason(self):
         """Selecciona el motivo de consulta: Ordenes sin movimiento"""
         self.logger.info("Seleccionando motivo: Ordenes sin movimiento...")
+        self.current_processing_step = 'select_consultation_reason'
         
         try:
             self.logger.info("   1) Buscando dropdown de motivo...")
@@ -666,14 +861,14 @@ class DropiReporterBot:
             
             # Scroll al elemento
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", reason_dropdown)
-            time.sleep(1)
+            time.sleep(0.5)
             
             self.logger.info("   2) Haciendo click en dropdown...")
             try:
                 reason_dropdown.click()
             except:
                 self.driver.execute_script("arguments[0].click();", reason_dropdown)
-            time.sleep(2)
+            time.sleep(1)  # Reducido de 2s a 1s
             self.logger.info("   ✅ Dropdown abierto")
             
             # Seleccionar "Ordenes sin movimiento"
@@ -693,11 +888,29 @@ class DropiReporterBot:
                 no_movement_option.click()
             except:
                 self.driver.execute_script("arguments[0].click();", no_movement_option)
-            time.sleep(2)
+            time.sleep(1)  # Reducido de 2s a 1s
             
             self.logger.info("✅ Motivo seleccionado: Ordenes sin movimiento")
+            
+            # Esperar un momento para que aparezca el alert si existe
+            time.sleep(1)
+            
+            # Verificar si aparece el alert de "Debes esperar al menos un día sin movimiento"
+            alert_detected = self._check_wait_time_alert()
+            
+            if alert_detected:
+                self.logger.warning("⚠️ Alert detectado: 'Debes esperar al menos un día sin movimiento'")
+                self.logger.warning("   El botón 'Siguiente' estará bloqueado - Orden requiere más tiempo")
+                self.current_processing_step = None
+                return 'wait_required'  # Retornar código especial para indicar que necesita esperar
+            
+            self.current_processing_step = None
             return True
             
+        except TimeoutException:
+            self.logger.error("❌ Timeout al seleccionar motivo - Sesión probablemente expirada")
+            self.session_expired = True
+            return False
         except Exception as e:
             self.logger.error(f"❌ Error al seleccionar motivo: {str(e)}")
             
@@ -711,13 +924,39 @@ class DropiReporterBot:
             
             return False
     
+    def _check_wait_time_alert(self):
+        """
+        Verifica si aparece el alert que indica que se debe esperar un día sin movimiento
+        
+        Returns:
+            True si el alert está presente, False en caso contrario
+        """
+        try:
+            # Buscar el alert con el texto específico
+            alert = self.driver.find_element(
+                By.XPATH,
+                "//app-alert//p[contains(text(), 'Debes esperar al menos un día sin movimiento para iniciar una conversación sobre la orden')]"
+            )
+            
+            if alert.is_displayed():
+                return True
+            return False
+            
+        except NoSuchElementException:
+            # No se encontró el alert, está bien
+            return False
+        except Exception as e:
+            self.logger.debug(f"   Error al verificar alert: {str(e)}")
+            return False
+    
     def _click_next_button(self):
-        """Click en el botón Siguiente (con fallback a Cancelar si falla)"""
+        """Click en el botón Siguiente (con fallback a Cancelar si falla en 5 segundos)"""
         self.logger.info("Haciendo click en 'Siguiente'...")
+        self.current_processing_step = 'click_next_button'
         
         try:
             self.logger.info("   1) Buscando botón 'Siguiente'...")
-            # Usar un wait más corto (5 segundos) para no esperar tanto si no aparece
+            # Usar timeout corto de 5 segundos para evitar esperas innecesarias
             short_wait = WebDriverWait(self.driver, 5)
             next_button = short_wait.until(
                 EC.element_to_be_clickable((
@@ -736,10 +975,49 @@ class DropiReporterBot:
                 next_button.click()
             except:
                 self.driver.execute_script("arguments[0].click();", next_button)
-            time.sleep(2)
+            time.sleep(1)  # Reducido de 2s a 1s
             
             self.logger.info("✅ Click en 'Siguiente' exitoso")
+            self.current_processing_step = None
             return True
+            
+        except TimeoutException:
+            # Timeout de 5 segundos - El botón no está disponible (probablemente bloqueado por alert)
+            self.logger.warning("⚠️ Timeout de 5s al buscar botón 'Siguiente' - Probablemente bloqueado por alert")
+            self.logger.warning("   Intentando cerrar modal con 'Cancelar'...")
+            
+            # Intentar hacer click en Cancelar para cerrar el modal
+            try:
+                cancel_button = self.driver.find_element(
+                    By.XPATH,
+                    "//button[contains(@class, 'btn') and contains(@class, 'secondary') and .//span[contains(text(), 'Cancelar')]]"
+                )
+                
+                # Scroll y click
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cancel_button)
+                time.sleep(0.5)
+                
+                try:
+                    cancel_button.click()
+                except:
+                    self.driver.execute_script("arguments[0].click();", cancel_button)
+                
+                time.sleep(1)
+                self.logger.info("   ✅ Click en 'Cancelar' exitoso - Modal cerrado")
+                
+                # Screenshot del estado
+                try:
+                    screenshot_path = Path(__file__).parent.parent.parent.parent / 'logs' / 'canceled_modal_timeout.png'
+                    self.driver.save_screenshot(str(screenshot_path))
+                    self.logger.debug(f"   📸 Screenshot guardado: {screenshot_path}")
+                except:
+                    pass
+                
+            except Exception as cancel_error:
+                self.logger.error(f"   ❌ No se pudo hacer click en 'Cancelar': {str(cancel_error)}")
+            
+            self.current_processing_step = None
+            return False
             
         except Exception as e:
             self.logger.error(f"❌ Error al hacer click en 'Siguiente': {str(e)}")
@@ -761,27 +1039,33 @@ class DropiReporterBot:
                 except:
                     self.driver.execute_script("arguments[0].click();", cancel_button)
                 
-                time.sleep(2)
+                time.sleep(1)
                 self.logger.info("   ✅ Click en 'Cancelar' exitoso - Modal cerrado")
-                
-                # Screenshot del estado
-                try:
-                    screenshot_path = Path(__file__).parent.parent.parent.parent / 'logs' / 'canceled_modal.png'
-                    self.driver.save_screenshot(str(screenshot_path))
-                    self.logger.info(f"   📸 Screenshot guardado: {screenshot_path}")
-                except:
-                    pass
                 
             except Exception as cancel_error:
                 self.logger.error(f"   ❌ No se pudo hacer click en 'Cancelar': {str(cancel_error)}")
             
+            self.current_processing_step = None
             return False
     
+    def _get_random_observation_text(self):
+        """
+        Selecciona un texto de observación aleatorio del diccionario
+        
+        Returns:
+            str: Texto de observación seleccionado aleatoriamente
+        """
+        return random.choice(self.OBSERVATION_TEXTS)
+    
     def _enter_observation_text(self):
-        """Ingresa el texto de observación"""
+        """Ingresa el texto de observación (seleccionado aleatoriamente del diccionario)"""
         self.logger.info("Ingresando texto de observación...")
         
         try:
+            # Seleccionar texto aleatorio del diccionario
+            observation_text = self._get_random_observation_text()
+            self.logger.info(f"   Texto seleccionado (aleatorio): '{observation_text}'")
+            
             # Buscar el textarea
             textarea = self.wait.until(
                 EC.presence_of_element_located((
@@ -793,10 +1077,10 @@ class DropiReporterBot:
             # Limpiar y escribir el texto
             textarea.clear()
             time.sleep(0.5)
-            textarea.send_keys(self.OBSERVATION_TEXT)
+            textarea.send_keys(observation_text)
             time.sleep(1)
             
-            self.logger.info(f"✓ Texto ingresado: '{self.OBSERVATION_TEXT}'")
+            self.logger.info(f"✓ Texto ingresado: '{observation_text}'")
             return True
             
         except Exception as e:
@@ -838,7 +1122,7 @@ class DropiReporterBot:
         try:
             # Esperar un poco para ver si aparece algún popup
             self.logger.info("   Verificando si hay popups...")
-            time.sleep(3)
+            time.sleep(1)  # Reducido de 3s a 1s
             
             # TIPO 1: Buscar popup "Orden ya tiene un caso"
             try:
@@ -867,7 +1151,7 @@ class DropiReporterBot:
                     except:
                         self.driver.execute_script("arguments[0].click();", cancel_button)
                     
-                    time.sleep(2)
+                    time.sleep(1)  # Reducido de 2s a 1s
                     
                     self.logger.info("   ✅ Popup cerrado exitosamente")
                     self.logger.info("   ➡️  Continuando con siguiente orden...")
@@ -926,7 +1210,7 @@ class DropiReporterBot:
                         except:
                             self.driver.execute_script("arguments[0].click();", accept_button)
                         
-                        time.sleep(2)
+                        time.sleep(1)  # Reducido de 2s a 1s
                         
                         self.logger.info("   ✅ Popup cerrado exitosamente")
                         self.logger.info("   ➡️  Continuando con siguiente orden...")
@@ -998,112 +1282,229 @@ class DropiReporterBot:
             
             return {'found': False, 'type': None}
     
-    def _process_single_order(self, phone, expected_state, is_first_order=False):
+    def _process_single_order(self, phone, expected_state, line_number, is_first_order=False, retry_count=0):
         """
-        Procesa una sola orden
+        Procesa una sola orden con manejo de timeouts y relogin
         
         Args:
             phone: Número de teléfono de la orden
             expected_state: Estado esperado de la orden
+            line_number: Número de línea en el CSV original
             is_first_order: Si es la primera orden (para navegar a Mis Pedidos)
+            retry_count: Número de reintentos para esta orden
             
         Returns:
-            dict con el resultado del procesamiento
+            dict con el resultado del procesamiento completo con nuevas columnas
         """
         result = {
-            'phone': phone,
-            'state': expected_state,
-            'success': False,
-            'message': ''
+            'line_number': line_number,
+            'phone': str(phone),
+            'order_id': '',  # Se llenará si está disponible
+            'status': 'error',
+            'report_generated': False,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'hours_since_last_report': None,
+            'next_attempt_time': None,
+            'retry_count': retry_count
         }
         
         try:
-            # Solo navegar a Mis Pedidos en la primera orden
-            # Las demás ya estarán en la página correcta
-            if is_first_order:
+            # Verificar si hay sesión expirada antes de comenzar
+            if self.session_expired or self._check_session_expired():
+                self.logger.warning("⚠️ Sesión expirada detectada antes de procesar orden")
+                if not self._relogin_and_retry():
+                    result['status'] = 'session_expired'
+                    return result
+                # Después de relogear, _relogin_and_retry ya navegó a Mis Pedidos
+                # No necesitamos navegar de nuevo
+            
+            # Solo navegar a Mis Pedidos en la primera orden (si no se relogueó antes)
+            if is_first_order and not self.session_expired:
                 self.logger.info("📍 Primera orden - Navegando a Mis Pedidos...")
+                self.current_processing_step = 'navigate_to_orders'
                 if not self._navigate_to_orders():
-                    result['message'] = 'Error al navegar a Mis Pedidos'
+                    if self.session_expired:
+                        result['status'] = 'session_expired'
+                    else:
+                        result['status'] = 'error'
+                        result['message'] = 'Error al navegar a Mis Pedidos'
                     self.stats['errores'] += 1
                     return result
             else:
-                self.logger.info("📍 Ya estamos en Mis Pedidos, continuando...")
+                # Verificar que realmente estamos en Mis Pedidos
+                current_url = self.driver.current_url
+                if '/dashboard/orders' not in current_url:
+                    self.logger.warning(f"⚠️ No estamos en Mis Pedidos (URL: {current_url}) - Navegando...")
+                    if not self._navigate_to_orders():
+                        result['status'] = 'error'
+                        result['message'] = 'Error al navegar a Mis Pedidos'
+                        self.stats['errores'] += 1
+                        return result
+                else:
+                    self.logger.info("📍 Ya estamos en Mis Pedidos, continuando...")
             
             # Buscar orden por teléfono
+            self.current_processing_step = 'search_order'
             if not self._search_order_by_phone(phone):
-                result['message'] = 'Orden no encontrada'
-                self.stats['no_encontrados'] += 1
+                if self.session_expired:
+                    result['status'] = 'session_expired'
+                else:
+                    result['status'] = 'not_found'
+                    self.stats['no_encontrados'] += 1
                 return result
             
             # Validar estado
+            self.current_processing_step = 'validate_state'
             if not self._validate_order_state(expected_state):
-                result['message'] = 'Estado no coincide'
-                self.stats['errores'] += 1
+                if self.session_expired:
+                    result['status'] = 'session_expired'
+                else:
+                    result['status'] = 'error'
+                    self.stats['errores'] += 1
                 return result
             
             # Click en Nueva Consulta
+            self.current_processing_step = 'click_new_consultation'
             if not self._click_new_consultation():
-                result['message'] = 'Error al abrir nueva consulta'
-                self.stats['errores'] += 1
+                if self.session_expired:
+                    result['status'] = 'session_expired'
+                else:
+                    result['status'] = 'error'
+                    self.stats['errores'] += 1
                 return result
             
-            # VERIFICAR INMEDIATAMENTE si aparece algún popup (aparecen aquí después de click en Nueva Consulta)
+            # VERIFICAR INMEDIATAMENTE si aparece algún popup
             popup_result = self._handle_existing_case_popup()
             
             if popup_result['found']:
-                # Hay un popup, determinar el tipo y actuar en consecuencia
                 if popup_result['type'] == 'caso_existente':
-                    result['message'] = 'Orden ya tiene un caso abierto'
+                    result['status'] = 'already_has_case'
+                    result['report_generated'] = False
+                    result['next_attempt_time'] = self._calculate_next_attempt_time('already_has_case', retry_count).strftime('%Y-%m-%d %H:%M:%S')
                     self.stats['ya_tienen_caso'] += 1
                     return result
                 elif popup_result['type'] == 'estado_invalido':
-                    result['message'] = 'Estado no permite conversación con transportadora'
-                    self.stats['errores'] += 1
-                    return result
-                else:
-                    # Popup desconocido
-                    result['message'] = 'Popup desconocido detectado y cerrado'
+                    result['status'] = 'error'
                     self.stats['errores'] += 1
                     return result
             
-            # Si no hay popup, continuar con los dropdowns
             # Seleccionar tipo de consulta
+            self.current_processing_step = 'select_consultation_type'
             if not self._select_consultation_type():
-                result['message'] = 'Error al seleccionar tipo de consulta'
-                self.stats['errores'] += 1
+                if self.session_expired:
+                    result['status'] = 'session_expired'
+                else:
+                    result['status'] = 'error'
+                    self.stats['errores'] += 1
                 return result
             
             # Seleccionar motivo
-            if not self._select_consultation_reason():
-                result['message'] = 'Error al seleccionar motivo'
-                self.stats['errores'] += 1
+            self.current_processing_step = 'select_consultation_reason'
+            reason_result = self._select_consultation_reason()
+            
+            if reason_result == 'wait_required':
+                # Se detectó el alert de espera - no intentar buscar botón Siguiente
+                # Esto es equivalente a no poder dar siguiente - requiere 24 horas de espera
+                self.logger.warning("="*60)
+                self.logger.warning("⚠️ ALERT DETECTADO: Orden requiere esperar 24 horas")
+                self.logger.warning("="*60)
+                
+                result['status'] = 'cannot_generate_yet'
+                result['report_generated'] = False
+                result['next_attempt_time'] = self._calculate_next_attempt_time('cannot_generate_yet', retry_count).strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Cerrar modal con Cancelar antes de continuar
+                self.logger.info("   Cerrando modal con 'Cancelar'...")
+                try:
+                    cancel_button = self.wait.until(
+                        EC.element_to_be_clickable((
+                            By.XPATH,
+                            "//button[contains(@class, 'btn') and contains(@class, 'secondary') and .//span[contains(text(), 'Cancelar')]]"
+                        ))
+                    )
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cancel_button)
+                    time.sleep(0.5)
+                    try:
+                        cancel_button.click()
+                    except:
+                        self.driver.execute_script("arguments[0].click();", cancel_button)
+                    time.sleep(1)
+                    self.logger.info("   ✅ Modal cerrado exitosamente - Continuando con siguiente orden")
+                except Exception as cancel_error:
+                    self.logger.warning(f"   ⚠️ No se pudo cerrar modal automáticamente: {str(cancel_error)}")
+                    # Intentar con método alternativo
+                    try:
+                        # Buscar cualquier botón Cancelar
+                        cancel_buttons = self.driver.find_elements(By.XPATH, "//button[contains(., 'Cancelar')]")
+                        for btn in cancel_buttons:
+                            if btn.is_displayed():
+                                btn.click()
+                                time.sleep(1)
+                                self.logger.info("   ✅ Modal cerrado con método alternativo")
+                                break
+                    except:
+                        pass
+                
+                self.current_processing_step = None
+                return result
+            elif not reason_result:
+                if self.session_expired:
+                    result['status'] = 'session_expired'
+                else:
+                    result['status'] = 'error'
+                    self.stats['errores'] += 1
                 return result
             
-            # Click en Siguiente
-            if not self._click_next_button():
-                result['message'] = 'Error al hacer click en Siguiente'
-                self.stats['errores'] += 1
-                return result
+            # Click en Siguiente (solo si no se detectó el alert)
+            self.current_processing_step = 'click_next_button'
+            next_success = self._click_next_button()
+            
+            if not next_success:
+                if self.session_expired:
+                    result['status'] = 'session_expired'
+                    return result
+                else:
+                    # No se pudo dar siguiente - probablemente falta tiempo (24 horas)
+                    result['status'] = 'cannot_generate_yet'
+                    result['report_generated'] = False
+                    result['next_attempt_time'] = self._calculate_next_attempt_time('cannot_generate_yet', retry_count).strftime('%Y-%m-%d %H:%M:%S')
+                    self.stats['errores'] += 1
+                    return result
             
             # Ingresar observación
+            self.current_processing_step = 'enter_observation'
             if not self._enter_observation_text():
-                result['message'] = 'Error al ingresar observación'
-                self.stats['errores'] += 1
+                if self.session_expired:
+                    result['status'] = 'session_expired'
+                else:
+                    result['status'] = 'error'
+                    self.stats['errores'] += 1
                 return result
             
             # Iniciar conversación
+            self.current_processing_step = 'start_conversation'
             if not self._start_conversation():
-                result['message'] = 'Error al iniciar conversación'
-                self.stats['errores'] += 1
+                if self.session_expired:
+                    result['status'] = 'session_expired'
+                else:
+                    result['status'] = 'error'
+                    self.stats['errores'] += 1
                 return result
             
-            # Éxito
-            result['success'] = True
-            result['message'] = 'Reporte creado exitosamente'
+            # Éxito - Reporte generado
+            result['status'] = 'success'
+            result['report_generated'] = True
+            result['next_attempt_time'] = self._calculate_next_attempt_time('success', retry_count).strftime('%Y-%m-%d %H:%M:%S')
             self.stats['procesados'] += 1
+            self.current_processing_step = None
+            
+        except TimeoutException:
+            self.logger.error(f"❌ Timeout procesando orden {phone}")
+            result['status'] = 'session_expired'
+            self.session_expired = True
             
         except Exception as e:
-            result['message'] = f'Error inesperado: {str(e)}'
+            result['status'] = 'error'
             self.stats['errores'] += 1
             self.logger.error(f"❌ Error procesando orden {phone}: {str(e)}")
         
@@ -1160,7 +1561,7 @@ class DropiReporterBot:
             raise
     
     def run(self):
-        """Ejecuta el bot completo"""
+        """Ejecuta el bot completo con checkpoint y verificación de tiempos"""
         self.logger.info("="*80)
         self.logger.info("INICIANDO BOT DE REPORTES DROPI")
         self.logger.info("="*80)
@@ -1170,6 +1571,19 @@ class DropiReporterBot:
             df = self._load_excel_data()
             self.stats['total'] = len(df)
             
+            # Cargar checkpoint del día actual
+            df_checkpoint = pd.DataFrame()
+            checkpoint_file = self._get_today_results_file()
+            if checkpoint_file:
+                try:
+                    df_checkpoint = pd.read_csv(checkpoint_file)
+                    self.logger.info(f"📋 Checkpoint cargado: {len(df_checkpoint)} registros")
+                except:
+                    self.logger.warning("⚠️ No se pudo cargar checkpoint")
+            
+            # Obtener línea de inicio desde checkpoint
+            start_line = self._load_checkpoint(df)
+            
             # Inicializar navegador
             self._init_driver()
             
@@ -1177,42 +1591,130 @@ class DropiReporterBot:
             if not self._login():
                 raise Exception("No se pudo iniciar sesión")
             
-            # Procesar cada orden
+            # SIEMPRE navegar a Mis Pedidos después del login inicial
+            self.logger.info("")
+            self.logger.info("📍 Navegando a Mis Pedidos después del login...")
+            if not self._navigate_to_orders():
+                raise Exception("No se pudo navegar a Mis Pedidos después del login")
+            self.logger.info("✅ Navegado a Mis Pedidos exitosamente")
+            self.logger.info("")
+            
+            # Procesar cada orden desde el checkpoint
             results = []
+            df_to_process = df.iloc[start_line:].reset_index(drop=True)
             
+            self.logger.info("")
+            self.logger.info(f"📊 Procesando {len(df_to_process)} órdenes (desde línea {start_line + 1})")
+            self.logger.info("")
             
-            for index, row in df.iterrows():
+            for idx, (index, row) in enumerate(df_to_process.iterrows()):
                 phone = row['Teléfono']
                 state = row['Estado Actual']
+                line_number = start_line + idx
                 
                 self.logger.info("")
                 self.logger.info(f"{'='*80}")
-                self.logger.info(f"Procesando orden {index + 1}/{len(df)}")
+                self.logger.info(f"Procesando orden {idx + 1}/{len(df_to_process)} (Línea {line_number + 1})")
                 self.logger.info(f"Teléfono: {phone} | Estado: {state}")
                 self.logger.info(f"{'='*80}")
                 
-                # Indicar si es la primera orden
-                is_first = (index == 0) or (index == df.index[0])
-                result = self._process_single_order(phone, state, is_first_order=is_first)
-                results.append(result)
+                # Verificar si la orden puede ser procesada según tiempos
+                can_process, time_info = self._check_order_can_be_processed(phone, df_checkpoint)
+                
+                if not can_process:
+                    self.logger.warning(f"⏳ Orden saltada - Falta tiempo para reintentar")
+                    self.logger.warning(f"   Status anterior: {time_info['status']}")
+                    self.logger.warning(f"   Horas restantes: {time_info['hours_remaining']:.2f}")
+                    self.logger.warning(f"   Próximo intento: {time_info['next_attempt_time']}")
+                    
+                    # Agregar registro con información de tiempo
+                    result = {
+                        'line_number': line_number,
+                        'phone': str(phone),
+                        'order_id': '',
+                        'status': time_info['status'],
+                        'report_generated': False,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'hours_since_last_report': None,
+                        'next_attempt_time': time_info['next_attempt_time'].strftime('%Y-%m-%d %H:%M:%S') if isinstance(time_info['next_attempt_time'], datetime) else str(time_info['next_attempt_time']),
+                        'retry_count': 0
+                    }
+                    results.append(result)
+                    self.stats['saltados_por_tiempo'] += 1
+                    # Guardar en tiempo real
+                    self._save_results([result], append=True)
+                    continue
+                
+                # Verificar si hay reintentos previos
+                retry_count = 0
+                if not df_checkpoint.empty:
+                    prev_records = df_checkpoint[df_checkpoint['phone'] == str(phone)]
+                    if not prev_records.empty:
+                        retry_count = int(prev_records.iloc[-1].get('retry_count', 0)) + 1
+                
+                # Indicar si es la primera orden procesada
+                is_first = (idx == 0 and start_line == 0)
+                
+                # Procesar orden
+                result = self._process_single_order(phone, state, line_number, is_first_order=is_first, retry_count=retry_count)
+                
+                # Si hubo timeout y sesión expirada, relogear y reintentar
+                if result['status'] == 'session_expired':
+                    self.logger.warning("⚠️ Sesión expirada durante procesamiento - Relogueando...")
+                    if self._relogin_and_retry():
+                        # _relogin_and_retry ya navegó a Mis Pedidos, solo reintentar la orden
+                        self.logger.info(f"🔄 Reintentando orden después de relogin...")
+                        # Reintentar la misma orden (ya estamos en Mis Pedidos)
+                        result = self._process_single_order(phone, state, line_number, is_first_order=False, retry_count=retry_count)
+                        self.stats['reintentos'] += 1
+                    else:
+                        self.logger.error("❌ No se pudo relogear - Abortando")
+                        break
+                
+                # Verificar si después de reintentar falló de nuevo después del tiempo requerido
+                if result['status'] in ['cannot_generate_yet', 'already_has_case'] and retry_count > 0:
+                    # Si ya había intentado antes y vuelve a fallar, marcar como en movimiento
+                    prev_status = None
+                    if not df_checkpoint.empty:
+                        prev_records = df_checkpoint[df_checkpoint['phone'] == str(phone)]
+                        if not prev_records.empty:
+                            prev_status = prev_records.iloc[-1].get('status')
+                    
+                    if prev_status in ['cannot_generate_yet', 'already_has_case']:
+                        self.logger.warning(f"⚠️ Orden {phone} falló de nuevo después de tiempo requerido - Marcando como en movimiento")
+                        result['status'] = 'in_movement'
+                        result['next_attempt_time'] = self._calculate_next_attempt_time('in_movement', retry_count).strftime('%Y-%m-%d %H:%M:%S')
                 
                 # Log del resultado
-                if result['success']:
-                    self.logger.info(f"✅ ÉXITO: {result['message']}")
+                if result['status'] == 'success':
+                    self.logger.info(f"✅ ÉXITO: Reporte generado exitosamente")
+                elif result['status'] == 'already_has_case':
+                    self.logger.warning(f"⚠️ Orden ya tiene caso - Próximo intento: {result.get('next_attempt_time', 'N/A')}")
+                elif result['status'] == 'cannot_generate_yet':
+                    self.logger.warning(f"⚠️ No se puede generar aún - Próximo intento: {result.get('next_attempt_time', 'N/A')}")
+                elif result['status'] == 'in_movement':
+                    self.logger.warning(f"⚠️ Orden en movimiento - Próximo intento: {result.get('next_attempt_time', 'N/A')}")
                 else:
-                    self.logger.warning(f"⚠️ FALLO: {result['message']}")
+                    self.logger.warning(f"⚠️ FALLO: {result.get('status', 'error')}")
+                
+                # Guardar en tiempo real INMEDIATAMENTE después de procesar cada orden
+                # Esto permite monitoreo en vivo y evita pérdida de datos si falla
+                # El guardado debe ser síncrono para asegurar que se escriba antes de continuar
+                self._save_results([result], append=True)
+                
+                # Agregar a lista después de guardar (para estadísticas finales)
+                results.append(result)
                 
                 # Pequeña pausa entre órdenes
-                time.sleep(2)
-            
-            # Guardar resultados
-            self._save_results(results)
+                time.sleep(1)  # Reducido de 2s a 1s
             
             # Mostrar estadísticas finales
             self._print_final_stats()
             
         except Exception as e:
             self.logger.error(f"✗ Error fatal: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             raise
             
         finally:
@@ -1249,6 +1751,8 @@ class DropiReporterBot:
         self.logger.info(f"Procesados exitosamente:    {self.stats['procesados']}")
         self.logger.info(f"Ya tenían caso abierto:     {self.stats['ya_tienen_caso']}")
         self.logger.info(f"No encontrados:             {self.stats['no_encontrados']}")
+        self.logger.info(f"Saltados por tiempo:        {self.stats['saltados_por_tiempo']}")
+        self.logger.info(f"Reintentos:                  {self.stats['reintentos']}")
         self.logger.info(f"Errores:                    {self.stats['errores']}")
         self.logger.info("="*80)
         

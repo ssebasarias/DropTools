@@ -30,7 +30,7 @@ El CSV generado tiene las siguientes columnas (en orden):
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -303,7 +303,6 @@ class ReportComparator:
                     'Guía': self._safe_get(row, col_guia),
                     'Tipo Envío': self._safe_get(row, col_tipo_envio),
                     'Estado Actual': self._safe_get(row, 'ESTATUS_NORM_ACTUAL'),
-                    'Estado Anterior': self._safe_get(row, 'ESTATUS_NORM_BASE'),
                     'Transportadora': self._safe_get(row, col_transportadora),
                     'Cliente': self._safe_get(row, col_cliente),
                     'Teléfono': self._safe_get(row, col_telefono),
@@ -316,13 +315,12 @@ class ReportComparator:
                 }
                 ordenes_resultado.append(orden_data)
             
-            # Definir el orden exacto de las columnas como en trazabilidad
+            # Definir el orden exacto de las columnas (sin Estado Anterior)
             columnas_orden = [
                 'ID Orden',
                 'Guía',
                 'Tipo Envío',
                 'Estado Actual',
-                'Estado Anterior',
                 'Transportadora',
                 'Cliente',
                 'Teléfono',
@@ -485,46 +483,149 @@ class ReportComparator:
         
         return "\n".join(resumen)
     
-    def _move_to_processed(self, reporte_base_path, reporte_actual_path):
+    def _get_month_folder_name(self, fecha=None):
         """
-        Mueve los archivos procesados a una subcarpeta 'procesados'
+        Obtiene el nombre de la carpeta del mes en español + año
         
         Args:
-            reporte_base_path: Ruta al reporte base
-            reporte_actual_path: Ruta al reporte actual
+            fecha: datetime opcional (default: fecha actual)
+        
+        Returns:
+            str: Nombre de la carpeta (ej: "enero_2026")
+        """
+        if fecha is None:
+            fecha = datetime.now()
+        
+        meses_espanol = {
+            1: 'enero', 2: 'febrero', 3: 'marzo', 4: 'abril',
+            5: 'mayo', 6: 'junio', 7: 'julio', 8: 'agosto',
+            9: 'septiembre', 10: 'octubre', 11: 'noviembre', 12: 'diciembre'
+        }
+        
+        mes_nombre = meses_espanol[fecha.month]
+        año = fecha.year
+        
+        return f"{mes_nombre}_{año}"
+    
+    def _extract_date_from_filename(self, filename):
+        """
+        Extrae la fecha del reporte desde el nombre del archivo
+        
+        Formato esperado: reporte_YYYYMMDD_YYYYMMDD.xlsx
+        El segundo YYYYMMDD es la fecha del reporte
+        
+        Args:
+            filename: Nombre del archivo (ej: "reporte_20251219_20260119.xlsx")
+        
+        Returns:
+            datetime: Fecha del reporte o None si no se puede extraer
         """
         try:
-            # Crear carpeta 'procesados' si no existe
-            base_dir = Path(__file__).parent.parent.parent.parent
-            downloads_dir = base_dir / 'results' / 'downloads'
-            procesados_dir = downloads_dir / 'procesados'
-            procesados_dir.mkdir(parents=True, exist_ok=True)
+            # Extraer el nombre sin extensión
+            name_without_ext = Path(filename).stem
             
-            self.logger.info("")
-            self.logger.info("="*80)
-            self.logger.info("MOVIENDO ARCHIVOS PROCESADOS")
-            self.logger.info("="*80)
+            # Buscar el patrón: reporte_YYYYMMDD_YYYYMMDD
+            parts = name_without_ext.split('_')
             
-            # Mover reporte base
-            base_path = Path(reporte_base_path)
-            if base_path.exists():
-                destino_base = procesados_dir / base_path.name
-                base_path.rename(destino_base)
-                self.logger.info(f"   ✅ Movido: {base_path.name}")
-                self.logger.info(f"      → {procesados_dir}")
-            
-            # Mover reporte actual
-            actual_path = Path(reporte_actual_path)
-            if actual_path.exists():
-                destino_actual = procesados_dir / actual_path.name
-                actual_path.rename(destino_actual)
-                self.logger.info(f"   ✅ Movido: {actual_path.name}")
-                self.logger.info(f"      → {procesados_dir}")
-            
-            self.logger.info("="*80)
-            
+            if len(parts) >= 3:
+                # El segundo YYYYMMDD es la fecha del reporte
+                fecha_str = parts[2]  # Ej: "20260119"
+                
+                # Parsear fecha
+                fecha = datetime.strptime(fecha_str, '%Y%m%d')
+                return fecha
+            else:
+                return None
+                
         except Exception as e:
-            self.logger.warning(f"   ⚠️ No se pudieron mover los archivos: {str(e)}")
+            self.logger.warning(f"   ⚠️ No se pudo extraer fecha de {filename}: {str(e)}")
+            return None
+    
+    def _find_report_by_date(self, target_date, downloads_dir):
+        """
+        Busca un reporte por fecha en la carpeta del mes correspondiente
+        
+        Args:
+            target_date: datetime de la fecha objetivo
+            downloads_dir: Directorio base de downloads
+        
+        Returns:
+            str: Ruta del archivo encontrado o None
+        """
+        # Obtener nombre de carpeta del mes
+        nombre_carpeta = self._get_month_folder_name(target_date)
+        carpeta_mes = downloads_dir / nombre_carpeta
+        
+        if not carpeta_mes.exists():
+            self.logger.warning(f"   ⚠️ Carpeta del mes no existe: {carpeta_mes}")
+            return None
+        
+        # Formato esperado de fecha: YYYYMMDD
+        fecha_str = target_date.strftime('%Y%m%d')
+        
+        # Buscar archivos que contengan la fecha en el nombre
+        # Patrón: reporte_*_YYYYMMDD.xlsx
+        pattern = f"reporte_*_{fecha_str}.xlsx"
+        archivos = list(carpeta_mes.glob(pattern))
+        
+        if archivos:
+            # Verificar que la fecha extraída coincida
+            for archivo in archivos:
+                fecha_extraida = self._extract_date_from_filename(archivo.name)
+                if fecha_extraida and fecha_extraida.date() == target_date.date():
+                    return str(archivo)
+        
+        return None
+    
+    def _find_base_report(self, fecha_actual, downloads_dir, max_days_back=7):
+        """
+        Busca el reporte base retrocediendo días hasta encontrarlo
+        
+        Args:
+            fecha_actual: datetime de la fecha actual
+            downloads_dir: Directorio base de downloads
+            max_days_back: Máximo de días hacia atrás para buscar (default: 7)
+        
+        Returns:
+            str: Ruta del archivo encontrado o None
+        """
+        # Empezar buscando el día anterior
+        for dias_atras in range(1, max_days_back + 1):
+            fecha_buscar = fecha_actual - timedelta(days=dias_atras)
+            fecha_str = fecha_buscar.strftime('%d/%m/%Y')
+            
+            self.logger.info(f"      Buscando reporte base del {fecha_str} (día -{dias_atras})...")
+            
+            reporte = self._find_report_by_date(fecha_buscar, downloads_dir)
+            
+            if reporte:
+                self.logger.info(f"      ✅ Reporte base encontrado: {Path(reporte).name}")
+                return reporte
+        
+        return None
+    
+    def _find_actual_report(self, fecha_actual, downloads_dir):
+        """
+        Busca el reporte actual (debe existir, si no retorna None)
+        
+        Args:
+            fecha_actual: datetime de la fecha actual
+            downloads_dir: Directorio base de downloads
+        
+        Returns:
+            str: Ruta del archivo encontrado o None
+        """
+        fecha_str = fecha_actual.strftime('%d/%m/%Y')
+        self.logger.info(f"      Buscando reporte actual del {fecha_str}...")
+        
+        reporte = self._find_report_by_date(fecha_actual, downloads_dir)
+        
+        if reporte:
+            self.logger.info(f"      ✅ Reporte actual encontrado: {Path(reporte).name}")
+        else:
+            self.logger.error(f"      ❌ Reporte actual NO encontrado para {fecha_str}")
+        
+        return reporte
     
     def run(self, reporte_base_path, reporte_actual_path):
         """
@@ -570,9 +671,6 @@ class ReportComparator:
             csv_path = self.save_result_csv(df_resultado)
             
             if csv_path:
-                # Mover archivos procesados a subcarpeta
-                self._move_to_processed(reporte_base_path, reporte_actual_path)
-                
                 self.logger.info("")
                 self.logger.info("="*80)
                 self.logger.info("[OK] PROCESO COMPLETADO EXITOSAMENTE")
@@ -593,9 +691,6 @@ class ReportComparator:
                 self.logger.error("[ERROR] No se pudo guardar el CSV resultante")
                 return None
         else:
-            # Mover archivos procesados incluso si no hay órdenes sin movimiento
-            self._move_to_processed(reporte_base_path, reporte_actual_path)
-            
             self.logger.info("")
             self.logger.info("="*80)
             self.logger.info("[INFO] PROCESO COMPLETADO - NO HAY ORDENES SIN MOVIMIENTO")
@@ -621,63 +716,74 @@ class Command(BaseCommand):
             '--base',
             type=str,
             required=False,
-            help='Ruta al archivo Excel del reporte BASE (hace 2 días). Si no se proporciona, busca el más reciente en results/downloads/'
+            help='Ruta al archivo Excel del reporte BASE. Si no se proporciona, busca automáticamente el reporte del día anterior.'
         )
         
         parser.add_argument(
             '--actual',
             type=str,
             required=False,
-            help='Ruta al archivo Excel del reporte ACTUAL (hoy). Si no se proporciona, busca el más reciente en results/downloads/'
+            help='Ruta al archivo Excel del reporte ACTUAL. Si no se proporciona, busca automáticamente el reporte del día actual.'
         )
-    
-    def _find_latest_file(self, directory, pattern):
-        """Busca el archivo más reciente que coincida con el patrón"""
-        dir_path = Path(directory)
-        if not dir_path.exists():
-            return None
-        
-        files = list(dir_path.glob(pattern))
-        if not files:
-            return None
-        
-        # Ordenar por fecha de modificación (más reciente primero)
-        files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-        return str(files[0])
     
     def handle(self, *args, **options):
         reporte_base_path = options.get('base')
         reporte_actual_path = options.get('actual')
         
-        # Si no se proporcionaron rutas, buscar automáticamente en results/downloads/
-        base_dir = Path(__file__).parent.parent.parent.parent
-        downloads_dir = base_dir / 'results' / 'downloads'
-        
-        if not reporte_base_path:
-            self.stdout.write("   Buscando reporte BASE más reciente...")
-            reporte_base_path = self._find_latest_file(downloads_dir, 'reporte_base_*.xlsx')
-            if reporte_base_path:
-                self.stdout.write(f"   [OK] Encontrado: {reporte_base_path}")
-            else:
-                self.stdout.write(
-                    self.style.ERROR('[ERROR] No se encontró reporte BASE en results/downloads/')
-                )
-                return
-        
-        if not reporte_actual_path:
-            self.stdout.write("   Buscando reporte ACTUAL más reciente...")
-            reporte_actual_path = self._find_latest_file(downloads_dir, 'reporte_actual_*.xlsx')
-            if reporte_actual_path:
-                self.stdout.write(f"   [OK] Encontrado: {reporte_actual_path}")
-            else:
-                self.stdout.write(
-                    self.style.ERROR('[ERROR] No se encontró reporte ACTUAL en results/downloads/')
-                )
-                return
-        
-        # Crear y ejecutar el comparador
+        # Crear comparador
         comparator = ReportComparator()
         
+        # Si no se proporcionaron rutas, buscar automáticamente
+        if not reporte_base_path or not reporte_actual_path:
+            self.stdout.write("="*80)
+            self.stdout.write("🔍 BÚSQUEDA AUTOMÁTICA DE REPORTES")
+            self.stdout.write("="*80)
+            
+            base_dir = Path(__file__).parent.parent.parent.parent
+            downloads_dir = base_dir / 'results' / 'downloads'
+            
+            fecha_actual = datetime.now()
+            fecha_str = fecha_actual.strftime('%d/%m/%Y')
+            
+            self.stdout.write(f"   📅 Fecha actual: {fecha_str}")
+            self.stdout.write(f"   📁 Directorio base: {downloads_dir}")
+            self.stdout.write("")
+            
+            # Buscar reporte actual
+            if not reporte_actual_path:
+                self.stdout.write("   🔍 Buscando reporte ACTUAL...")
+                reporte_actual_path = comparator._find_actual_report(fecha_actual, downloads_dir)
+                
+                if not reporte_actual_path:
+                    self.stdout.write("")
+                    self.stdout.write(
+                        self.style.ERROR('[ERROR] No se encontró reporte ACTUAL. No se puede generar comparación sin el reporte actual.')
+                    )
+                    return
+            
+            # Buscar reporte base
+            if not reporte_base_path:
+                self.stdout.write("")
+                self.stdout.write("   🔍 Buscando reporte BASE...")
+                reporte_base_path = comparator._find_base_report(fecha_actual, downloads_dir)
+                
+                if not reporte_base_path:
+                    self.stdout.write("")
+                    self.stdout.write(
+                        self.style.ERROR('[ERROR] No se encontró reporte BASE. Buscó hasta 7 días hacia atrás sin éxito.')
+                    )
+                    return
+            
+            self.stdout.write("")
+            self.stdout.write("="*80)
+            self.stdout.write("✅ REPORTES ENCONTRADOS")
+            self.stdout.write("="*80)
+            self.stdout.write(f"   📄 Reporte BASE: {Path(reporte_base_path).name}")
+            self.stdout.write(f"   📄 Reporte ACTUAL: {Path(reporte_actual_path).name}")
+            self.stdout.write("="*80)
+            self.stdout.write("")
+        
+        # Ejecutar comparación
         try:
             csv_path = comparator.run(reporte_base_path, reporte_actual_path)
             if csv_path:
