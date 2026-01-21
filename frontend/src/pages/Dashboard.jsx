@@ -35,7 +35,7 @@ const Dashboard = () => {
             try {
                 const res = await fetchDashboardStats();
                 setData(res);
-            } catch (error) {
+            } catch {
                 console.error("Failed to load intelligence");
             } finally {
                 setLoading(false);

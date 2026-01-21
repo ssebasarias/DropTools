@@ -80,6 +80,57 @@ python backend/manage.py clusterizer
 
 ---
 
+## 🔐 Seguridad / Auth / Suscripciones (local)
+
+### Auth
+
+- **TokenAuthentication (DRF)**.
+- Endpoints:
+  - `POST /api/auth/register/` (registro público)
+  - `POST /api/auth/login/`
+  - `GET /api/auth/me/`
+
+### Roles
+
+- **ADMIN**: control total (interfaces `/admin/*` + endpoints de control/IA protegidos).
+- **CLIENT**: interfaces `/user/*` con módulos habilitados por suscripción.
+
+### Suscripciones (tiers)
+
+- **BRONZE**: Reporter (generación de reportes / worker accounts)
+- **SILVER**: + Report Analysis (AnalystReporter)
+- **GOLD**: + Winner Products
+- **PLATINUM**: + Market Intelligence + creativos (próximo)
+
+### Suscripción activa (sin pagos todavía)
+
+- Al registrarse: `subscription_active=false` (puede loguearse y ver UI, pero backend bloquea acciones).
+- Para pruebas (sin pagos): activa la suscripción desde el endpoint admin o usando el comando de seed.
+
+### Crear usuarios de prueba por tier
+
+Ejecuta en `backend/`:
+
+```bash
+python manage.py seed_test_users --password "Test1234!" --domain "local.test" --prefix "tier"
+```
+
+Esto crea:
+- `tier.bronze@local.test`
+- `tier.silver@local.test`
+- `tier.gold@local.test`
+- `tier.platinum@local.test`
+
+### Admin: gestionar suscripciones (sin pagos)
+
+Endpoints (requieren rol `ADMIN`):
+- `GET /api/admin/users/`
+- `POST /api/admin/users/<user_id>/subscription/` body:
+  - `subscription_tier`: `BRONZE|SILVER|GOLD|PLATINUM`
+  - `subscription_active`: `true|false`
+
+---
+
 ## 📚 DOCUMENTACIÓN
 
 ### 🎯 Guías por Objetivo

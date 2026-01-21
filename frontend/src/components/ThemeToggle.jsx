@@ -13,19 +13,12 @@ function applyPrefs(theme, eye) {
 }
 
 const ThemeToggle = () => {
-  const [theme, setTheme] = useState('dark');
-  const [eyeProtect, setEyeProtect] = useState(false);
-
-  useEffect(() => {
-    const savedTheme = localStorage.getItem(THEME_KEY) || 'dark';
-    const savedEye = localStorage.getItem(EYE_KEY) === 'true';
-    setTheme(savedTheme);
-    setEyeProtect(savedEye);
-    applyPrefs(savedTheme, savedEye);
-  }, []);
+  const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'dark');
+  const [eyeProtect, setEyeProtect] = useState(() => localStorage.getItem(EYE_KEY) === 'true');
 
   useEffect(() => {
     localStorage.setItem(THEME_KEY, theme);
+    localStorage.setItem(EYE_KEY, String(eyeProtect));
     applyPrefs(theme, eyeProtect);
   }, [theme, eyeProtect]);
 

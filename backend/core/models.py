@@ -507,3 +507,120 @@ class CompetitorFinding(models.Model):
         indexes = [
             models.Index(fields=['report', 'match_type']),
         ]
+
+
+from django.contrib.auth.models import User
+from django.utils import timezone
+
+
+# -----------------------------------------------------------------------------
+# USER MANAGEMENT (SECURITY / SUBSCRIPTIONS)
+# -----------------------------------------------------------------------------
+
+class UserProfile(models.Model):
+    """
+    Perfil del usuario para:
+    - Datos de perfil (nombre)
+    - Rol (ADMIN / CLIENT)
+    - Suscripción (qué módulos puede usar)
+
+    Nota: El login del aplicativo se maneja con `auth_user` (Django User: email/username + password hasheada).
+    Las credenciales externas (Dropi) se modelan aparte para permitir múltiples cuentas por usuario.
+    """
+
+    ROLE_ADMIN = "ADMIN"
+    ROLE_CLIENT = "CLIENT"
+    ROLE_CHOICES = [
+        (ROLE_ADMIN, "Admin"),
+        (ROLE_CLIENT, "Client"),
+    ]
+
+    TIER_BRONZE = "BRONZE"
+    TIER_SILVER = "SILVER"
+    TIER_GOLD = "GOLD"
+    TIER_PLATINUM = "PLATINUM"
+    TIER_CHOICES = [
+        (TIER_BRONZE, "Bronze"),
+        (TIER_SILVER, "Silver"),
+        (TIER_GOLD, "Gold"),
+        (TIER_PLATINUM, "Platinum"),
+    ]
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile", unique=True)
+    full_name = models.CharField(max_length=120, blank=True, default="")
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_CLIENT)
+    # Subscription tier controls which client modules are enabled.
+    subscription_tier = models.CharField(max_length=10, choices=TIER_CHOICES, default=TIER_BRONZE)
+    # If false: user can log in and see UI, but backend should block paid actions (no payments yet).
+    subscription_active = models.BooleanField(default=False)
+
+    # NOTE: usamos default=timezone.now para evitar prompt interactivo en migraciones
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Campos legacy (compatibilidad con la tabla existente y UI actual).
+    # Se migrarán a `DropiAccount` y luego se podrán eliminar.
+    dropi_email = models.EmailField(max_length=255, null=True, blank=True)
+    dropi_password = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        db_table = "user_profiles"
+
+    def __str__(self) -> str:
+        return f"{self.user.username} ({self.role}/{self.subscription_tier})"
+
+
+class DropiAccount(models.Model):
+    """
+    Cuenta(s) de Dropi asociadas a un usuario.
+    Un usuario puede tener múltiples cuentas secundarias (por ejemplo: una para scraper, otra para reporter).
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="dropi_accounts")
+    label = models.CharField(max_length=50, default="default")
+    email = models.EmailField(max_length=255)
+    # Stored encrypted-at-rest when encryption key is configured.
+    password = models.CharField(max_length=255)
+    is_default = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "dropi_accounts"
+        indexes = [
+            models.Index(fields=["user", "is_default"]),
+            models.Index(fields=["email"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "label"], name="uniq_dropi_account_label_per_user"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user.username} - {self.label} ({self.email})"
+
+    def get_password_plain(self) -> str:
+        """
+        Returns decrypted password if encryption is enabled; otherwise returns stored value.
+        """
+        from .crypto import decrypt_if_needed
+
+        return decrypt_if_needed(self.password or "")
+
+    def set_password_plain(self, raw: str) -> None:
+        from .crypto import encrypt_if_needed
+
+        self.password = encrypt_if_needed(raw or "")
+
+    def save(self, *args, **kwargs):
+        """
+        Encrypt password-at-rest if key is configured and value isn't encrypted yet.
+        """
+        try:
+            from .crypto import encrypt_if_needed
+
+            self.password = encrypt_if_needed(self.password or "")
+        except Exception:
+            # Fail-open for local dev if crypto isn't configured; do not crash saves.
+            pass
+        return super().save(*args, **kwargs)

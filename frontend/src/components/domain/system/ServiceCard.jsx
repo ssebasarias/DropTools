@@ -86,7 +86,7 @@ const ServiceCard = ({ id, name, displayParams, icon: Icon, actions = [] }) => {
                     color: statusColor,
                     display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}>
-                    <Icon size={24} />
+                    {React.createElement(Icon, { size: 24 })}
                 </div>
                 <div style={{ flex: 1 }}>
                     <h4 style={{ marginBottom: 2, fontSize: '1rem', color: '#e2e8f0', margin: 0 }}>{name}</h4>

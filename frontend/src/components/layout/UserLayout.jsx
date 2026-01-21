@@ -4,14 +4,19 @@ import { Trophy, Bot, BarChart3 } from 'lucide-react';
 import AppSidebar from './AppSidebar';
 import DashboardHeader from './DashboardHeader';
 import './MainLayout.css';
+import { getAuthUser } from '../../services/authService';
+import { hasTier } from '../../utils/subscription';
 
 const UserLayout = () => {
     const location = useLocation();
+    const user = getAuthUser();
+    const tier = user?.subscription_tier || 'BRONZE';
 
+    // Always show reporter (core feature). Show others only when tier allows.
     const userNavItems = [
-        { path: '/user/dashboard', label: 'Winner Products', icon: Trophy, glow: true },
-        { path: '/user/reporter-setup', label: 'Reporter Setup', icon: Bot },
-        { path: '/user/analysis', label: 'Report Analysis', icon: BarChart3 },
+        { path: '/user/reporter-setup', label: 'Reporter Setup', icon: Bot, glow: true },
+        ...(hasTier(user, 'SILVER') ? [{ path: '/user/analysis', label: 'Report Analysis', icon: BarChart3 }] : []),
+        ...(hasTier(user, 'GOLD') ? [{ path: '/user/dashboard', label: 'Winner Products', icon: Trophy }] : []),
     ];
 
     const getPageTitle = () => {
@@ -31,7 +36,11 @@ const UserLayout = () => {
                 title="Dahell"
                 subtitle="User Portal"
                 settingsPath="/user/settings"
-                userProfile={{ initials: 'JD', name: 'John Doe', role: 'Standard User' }}
+                userProfile={{
+                    initials: (user?.full_name || user?.email || 'U').slice(0, 2).toUpperCase(),
+                    name: user?.full_name || user?.email || 'User',
+                    role: `${tier} Plan`
+                }}
             />
             <main className="main-content">
                 <DashboardHeader title={getPageTitle()} />

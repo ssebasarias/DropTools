@@ -4,9 +4,11 @@ import { LayoutDashboard, Pickaxe, Boxes, Server } from 'lucide-react';
 import AppSidebar from './AppSidebar';
 import DashboardHeader from './DashboardHeader';
 import './MainLayout.css';
+import { getAuthUser } from '../../services/authService';
 
 const MainLayout = () => {
     const location = useLocation();
+    const user = getAuthUser();
 
     const adminNavItems = [
         { path: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
@@ -33,7 +35,11 @@ const MainLayout = () => {
                 title="Dahell"
                 subtitle="Intelligence"
                 settingsPath="/admin/settings"
-                userProfile={{ initials: 'AD', name: 'Admin User', role: 'Superuser' }}
+                userProfile={{
+                    initials: (user?.full_name || user?.email || 'AD').slice(0, 2).toUpperCase(),
+                    name: user?.full_name || user?.email || 'Admin',
+                    role: 'ADMIN'
+                }}
             />
             <main className="main-content">
                 <DashboardHeader title={getPageTitle()} />

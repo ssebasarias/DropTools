@@ -35,6 +35,7 @@ django>=5.0
 django-environ
 djangorestframework
 django-cors-headers
+cryptography
 
 # --- Utilities ---
 tqdm

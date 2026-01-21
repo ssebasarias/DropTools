@@ -4,6 +4,38 @@ import { useSystemStatus } from '../hooks/useSystemStatus';
 import UnifiedWorkerCard from '../components/domain/system/UnifiedWorkerCard';
 import './Dashboard.css';
 
+const Section = ({ title, services, logs, stats }) => (
+    <div style={{ marginBottom: '3rem' }}>
+        <h2 style={{
+            marginBottom: '1.5rem',
+            color: '#fff',
+            fontSize: '1.5rem',
+            borderLeft: '4px solid #3b82f6',
+            paddingLeft: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem'
+        }}>
+            {title}
+            <div style={{ flex: 1, height: '1px', background: 'linear-gradient(90deg, rgba(59,130,246,0.3) 0%, transparent 100%)', marginLeft: '1rem' }}></div>
+        </h2>
+        <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
+            gap: '1.5rem'
+        }}>
+            {services.map(svc => (
+                <UnifiedWorkerCard
+                    key={svc.id}
+                    {...svc}
+                    logs={logs}
+                    displayParams={stats[svc.id]}
+                />
+            ))}
+        </div>
+    </div>
+);
+
 const SystemStatus = () => {
     const { logs, stats, loading } = useSystemStatus();
 
@@ -30,38 +62,6 @@ const SystemStatus = () => {
         );
     }
 
-    const Section = ({ title, services }) => (
-        <div style={{ marginBottom: '3rem' }}>
-            <h2 style={{
-                marginBottom: '1.5rem',
-                color: '#fff',
-                fontSize: '1.5rem',
-                borderLeft: '4px solid #3b82f6',
-                paddingLeft: '1rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem'
-            }}>
-                {title}
-                <div style={{ flex: 1, height: '1px', background: 'linear-gradient(90deg, rgba(59,130,246,0.3) 0%, transparent 100%)', marginLeft: '1rem' }}></div>
-            </h2>
-            <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-                gap: '1.5rem'
-            }}>
-                {services.map(svc => (
-                    <UnifiedWorkerCard
-                        key={svc.id}
-                        {...svc}
-                        logs={logs}
-                        displayParams={stats[svc.id]}
-                    />
-                ))}
-            </div>
-        </div>
-    );
-
     return (
         <div className="dashboard-container" style={{ maxWidth: '1800px', margin: '0 auto', padding: '2rem' }}>
             {/* Header */}
@@ -84,8 +84,8 @@ const SystemStatus = () => {
             </div>
 
             {/* SECTIONS */}
-            <Section title="Recolección" services={collectionServices} />
-            <Section title="Análisis" services={analysisServices} />
+            <Section title="Recolección" services={collectionServices} logs={logs} stats={stats} />
+            <Section title="Análisis" services={analysisServices} logs={logs} stats={stats} />
 
         </div>
     );

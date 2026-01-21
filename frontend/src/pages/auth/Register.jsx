@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { Zap, Mail, Lock, User, ArrowRight } from 'lucide-react';
 
 import PublicNavbar from '../../components/layout/PublicNavbar';
+import { register as apiRegister } from '../../services/authService';
 
 const Register = () => {
     const navigate = useNavigate();
@@ -12,12 +13,28 @@ const Register = () => {
         password: '',
         confirmPassword: ''
     });
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        // Placeholder for future functionality
-        console.log('Register attempt:', formData);
-        navigate('/user/dashboard');
+        setError('');
+        if (formData.password !== formData.confirmPassword) {
+            setError('Las contraseñas no coinciden');
+            return;
+        }
+        setLoading(true);
+        apiRegister({
+            name: formData.name,
+            email: formData.email,
+            password: formData.password
+        }).then((res) => {
+            const user = res?.user;
+            if (user?.is_admin) navigate('/admin', { replace: true });
+            else navigate('/user/reporter-setup', { replace: true });
+        }).catch((err) => {
+            setError(err.message || 'Error al registrarse');
+        }).finally(() => setLoading(false));
     };
 
     return (
@@ -33,6 +50,20 @@ const Register = () => {
                         <p className="text-muted">Start using Dahell Intelligence today</p>
                     </div>
 
+                    {error && (
+                        <div style={{
+                            padding: '12px 16px',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            borderRadius: '8px',
+                            marginBottom: '1.5rem',
+                            color: '#ef4444',
+                            fontSize: '0.875rem'
+                        }}>
+                            {error}
+                        </div>
+                    )}
+
                     <form onSubmit={handleSubmit}>
                         <div className="form-group">
                             <label className="form-label">Full Name</label>
@@ -45,6 +76,7 @@ const Register = () => {
                                     placeholder="John Doe"
                                     value={formData.name}
                                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                    disabled={loading}
                                     required
                                 />
                             </div>
@@ -61,6 +93,7 @@ const Register = () => {
                                     placeholder="name@company.com"
                                     value={formData.email}
                                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                                    disabled={loading}
                                     required
                                 />
                             </div>
@@ -77,6 +110,7 @@ const Register = () => {
                                     placeholder="Create a password"
                                     value={formData.password}
                                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                                    disabled={loading}
                                     required
                                 />
                             </div>
@@ -93,13 +127,19 @@ const Register = () => {
                                     placeholder="Confirm your password"
                                     value={formData.confirmPassword}
                                     onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                                    disabled={loading}
                                     required
                                 />
                             </div>
                         </div>
 
-                        <button type="submit" className="btn-primary" style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}>
-                            Create Account <ArrowRight size={18} />
+                        <button
+                            type="submit"
+                            className="btn-primary"
+                            style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', opacity: loading ? 0.7 : 1 }}
+                            disabled={loading}
+                        >
+                            {loading ? 'Creando...' : 'Create Account'} {!loading && <ArrowRight size={18} />}
                         </button>
                     </form>
 

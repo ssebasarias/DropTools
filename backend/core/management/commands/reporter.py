@@ -24,14 +24,16 @@ from selenium.common.exceptions import (
 )
 from django.core.management.base import BaseCommand
 from django.conf import settings
+from django.contrib.auth.models import User
+from core.models import DropiAccount
 
 
 class DropiReporterBot:
     """Bot para automatizar reportes en Dropi"""
     
-    # Credenciales
-    DROPI_EMAIL = "dahellonline@gmail.com"
-    DROPI_PASSWORD = "Bigotes2001@"
+    # Credenciales (NO hardcodeadas; se cargan desde BD o ENV)
+    DROPI_EMAIL = None
+    DROPI_PASSWORD = None
     DROPI_URL = "https://app.dropi.co/login"
     
     # Estados válidos para procesar (según filtro de Excel)
@@ -72,16 +74,20 @@ class DropiReporterBot:
         "Pedido estancado, favor gestionar salida a reparto urgente."
     ]
     
-    def __init__(self, excel_path, headless=False):
+    def __init__(self, excel_path, headless=False, user_id=None, dropi_label="reporter"):
         """
         Inicializa el bot
         
         Args:
             excel_path: Ruta al archivo Excel o CSV con los datos
             headless: Si True, ejecuta el navegador sin interfaz gráfica
+            user_id: ID del usuario (Django auth_user.id) para cargar credenciales de Dropi desde BD
+            dropi_label: etiqueta de la cuenta Dropi a usar (default: reporter). Si no existe, usa la default.
         """
         self.excel_path = excel_path
         self.headless = headless
+        self.user_id = user_id
+        self.dropi_label = dropi_label
         self.driver = None
         self.wait = None
         self.logger = self._setup_logger()
@@ -100,6 +106,9 @@ class DropiReporterBot:
         # Estado para tracking de sesión
         self.session_expired = False
         self.current_processing_step = None  # Para saber dónde retomar después de relogear
+
+        # Cargar credenciales antes de iniciar
+        self._load_dropi_credentials()
         
     def _setup_logger(self):
         """Configura el logger para el bot"""
@@ -132,6 +141,45 @@ class DropiReporterBot:
         logger.addHandler(file_handler)
         
         return logger
+
+    def _load_dropi_credentials(self):
+        """
+        1) Si viene user_id: buscar DropiAccount de ese usuario (primero por label, si no por is_default).
+        2) Si no hay user_id o no hay cuenta: fallback a ENV (DROPI_EMAIL/DROPI_PASSWORD).
+        """
+        # Intentar desde BD
+        if self.user_id:
+            user = User.objects.filter(id=self.user_id).first()
+            if not user:
+                raise ValueError(f"user_id={self.user_id} no existe en auth_user")
+
+            acct = DropiAccount.objects.filter(user=user, label=self.dropi_label).first()
+            if not acct:
+                acct = DropiAccount.objects.filter(user=user, is_default=True).first()
+            if not acct:
+                acct = DropiAccount.objects.filter(user=user).first()
+
+            if acct and acct.email and acct.password:
+                self.DROPI_EMAIL = acct.email
+                # Support encrypted-at-rest passwords.
+                try:
+                    self.DROPI_PASSWORD = acct.get_password_plain()
+                except Exception:
+                    self.DROPI_PASSWORD = acct.password
+                self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, label={acct.label})")
+                return
+
+        # Fallback ENV
+        self.DROPI_EMAIL = os.getenv("DROPI_EMAIL")
+        self.DROPI_PASSWORD = os.getenv("DROPI_PASSWORD")
+        if self.DROPI_EMAIL and self.DROPI_PASSWORD:
+            self.logger.info("✅ Dropi creds desde ENV (DROPI_EMAIL/DROPI_PASSWORD)")
+            return
+
+        raise ValueError(
+            "No hay credenciales Dropi. Configura DropiAccount en BD para ese usuario "
+            "o define DROPI_EMAIL/DROPI_PASSWORD en el entorno."
+        )
     
     def _check_session_expired(self):
         """Verifica si la sesión está expirada"""
@@ -1712,7 +1760,7 @@ class DropiReporterBot:
             self._print_final_stats()
             
         except Exception as e:
-            self.logger.error(f"✗ Error fatal: {str(e)}")
+            self.logger.error(f"[ERROR] Error fatal: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
             raise
@@ -1723,23 +1771,53 @@ class DropiReporterBot:
                 self.logger.info("Cerrando navegador...")
                 self.driver.quit()
     
-    def _save_results(self, results):
-        """Guarda los resultados en un archivo CSV"""
+    def _save_results(self, results, append=False):
+        """Guarda los resultados en un archivo CSV
+        
+        Args:
+            results: Lista de diccionarios con los resultados
+            append: Si True, agrega los resultados al archivo más reciente. Si False, crea un nuevo archivo.
+        """
         try:
             base_dir = Path(__file__).parent.parent.parent.parent
             results_dir = base_dir / 'results' / 'reporter'
             results_dir.mkdir(parents=True, exist_ok=True)
             
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            results_file = results_dir / f'dropi_reporter_results_{timestamp}.csv'
+            if append:
+                # Buscar el archivo más reciente
+                existing_files = list(results_dir.glob('dropi_reporter_results_*.csv'))
+                if existing_files:
+                    # Ordenar por fecha de modificación (más reciente primero)
+                    existing_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                    results_file = existing_files[0]
+                    
+                    # Leer resultados existentes
+                    try:
+                        df_existing = pd.read_csv(results_file, encoding='utf-8-sig')
+                        df_new = pd.DataFrame(results)
+                        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+                        df_combined.to_csv(results_file, index=False, encoding='utf-8-sig')
+                        self.logger.info(f"[OK] Resultados agregados a: {results_file}")
+                    except Exception as e:
+                        # Si falla al leer, crear nuevo archivo
+                        self.logger.warning(f"[WARN] No se pudo leer archivo existente, creando nuevo: {str(e)}")
+                        append = False
+                else:
+                    # No hay archivos existentes, crear uno nuevo
+                    append = False
             
-            df_results = pd.DataFrame(results)
-            df_results.to_csv(results_file, index=False, encoding='utf-8-sig')
-            
-            self.logger.info(f"✓ Resultados guardados en: {results_file}")
+            if not append:
+                # Crear nuevo archivo
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                results_file = results_dir / f'dropi_reporter_results_{timestamp}.csv'
+                
+                df_results = pd.DataFrame(results)
+                df_results.to_csv(results_file, index=False, encoding='utf-8-sig')
+                
+                self.logger.info(f"[OK] Resultados guardados en: {results_file}")
             
         except Exception as e:
-            self.logger.error(f"✗ Error al guardar resultados: {str(e)}")
+            self.logger.error(f"[ERROR] Error al guardar resultados: {str(e)}")
     
     def _print_final_stats(self):
         """Imprime las estadísticas finales"""
@@ -1782,10 +1860,26 @@ class Command(BaseCommand):
             action='store_true',
             help='Ejecutar el navegador en modo headless (sin interfaz gráfica)'
         )
+
+        parser.add_argument(
+            '--user-id',
+            type=int,
+            default=None,
+            help='ID del usuario (auth_user.id) para usar sus credenciales Dropi desde BD'
+        )
+
+        parser.add_argument(
+            '--dropi-label',
+            type=str,
+            default='reporter',
+            help='Etiqueta de la cuenta Dropi a usar (default: reporter)'
+        )
     
     def handle(self, *args, **options):
         excel_path = options['excel']
         headless = options['headless']
+        user_id = options.get('user_id')
+        dropi_label = options.get('dropi_label', 'reporter')
         
         # Verificar que el archivo existe
         if not os.path.exists(excel_path):
@@ -1795,15 +1889,20 @@ class Command(BaseCommand):
             return
         
         # Crear y ejecutar el bot
-        bot = DropiReporterBot(excel_path=excel_path, headless=headless)
+        bot = DropiReporterBot(
+            excel_path=excel_path,
+            headless=headless,
+            user_id=user_id,
+            dropi_label=dropi_label,
+        )
         
         try:
             bot.run()
             self.stdout.write(
-                self.style.SUCCESS('✓ Bot ejecutado exitosamente')
+                self.style.SUCCESS('[OK] Bot ejecutado exitosamente')
             )
         except Exception as e:
             self.stdout.write(
-                self.style.ERROR(f'✗ Error al ejecutar el bot: {str(e)}')
+                self.style.ERROR(f'[ERROR] Error al ejecutar el bot: {str(e)}')
             )
             raise

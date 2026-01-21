@@ -1,20 +1,14 @@
 import React from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
-import { Trophy, Bot, BarChart3, LogOut, Zap, Settings as SettingsIcon, CreditCard } from 'lucide-react';
+import { NavLink } from 'react-router-dom';
+import { Trophy, Bot, BarChart3, Zap, Settings as SettingsIcon } from 'lucide-react';
 import './Sidebar.css';
 
 const UserSidebar = () => {
-    const navigate = useNavigate();
-
     const navItems = [
         { path: '/user/dashboard', label: 'Winner Products', icon: Trophy, glow: true },
         { path: '/user/reporter-setup', label: 'Reporter Setup', icon: Bot },
         { path: '/user/analysis', label: 'Report Analysis', icon: BarChart3 },
     ];
-
-    const handleLogout = () => {
-        navigate('/login');
-    };
 
     return (
         <aside className="sidebar glass-panel">

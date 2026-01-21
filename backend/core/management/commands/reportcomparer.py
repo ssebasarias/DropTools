@@ -511,11 +511,16 @@ class ReportComparator:
         """
         Extrae la fecha del reporte desde el nombre del archivo
         
-        Formato esperado: reporte_YYYYMMDD_YYYYMMDD.xlsx
-        El segundo YYYYMMDD es la fecha del reporte
+        Formatos soportados:
+        - reporte_YYYYMMDD.xlsx (formato estándar nuevo)
+        - reporte_YYYYMMDD_YYYYMMDD.xlsx (formato antiguo - compatible)
+        - reporte_YYYYMMDD_YYYYMMDD_HHMMSS.xlsx (formato antiguo con timestamp)
+        
+        Para el formato nuevo: reporte_YYYYMMDD.xlsx, la fecha es directamente YYYYMMDD
+        Para el formato antiguo: reporte_YYYYMMDD_YYYYMMDD.xlsx, la fecha es el segundo YYYYMMDD
         
         Args:
-            filename: Nombre del archivo (ej: "reporte_20251219_20260119.xlsx")
+            filename: Nombre del archivo (ej: "reporte_20260120.xlsx" o "reporte_20251219_20260119.xlsx")
         
         Returns:
             datetime: Fecha del reporte o None si no se puede extraer
@@ -524,18 +529,30 @@ class ReportComparator:
             # Extraer el nombre sin extensión
             name_without_ext = Path(filename).stem
             
-            # Buscar el patrón: reporte_YYYYMMDD_YYYYMMDD
+            # Buscar el patrón: reporte_YYYYMMDD o reporte_YYYYMMDD_YYYYMMDD
             parts = name_without_ext.split('_')
             
-            if len(parts) >= 3:
-                # El segundo YYYYMMDD es la fecha del reporte
+            if len(parts) == 2:
+                # Formato nuevo: reporte_YYYYMMDD.xlsx
+                fecha_str = parts[1]  # Ej: "20260120"
+                
+                # Verificar que sea un formato de fecha válido (8 dígitos)
+                if len(fecha_str) == 8 and fecha_str.isdigit():
+                    # Parsear fecha
+                    fecha = datetime.strptime(fecha_str, '%Y%m%d')
+                    return fecha
+            elif len(parts) >= 3:
+                # Formato antiguo: reporte_YYYYMMDD_YYYYMMDD.xlsx
+                # El segundo YYYYMMDD es la fecha del reporte (fecha fin)
                 fecha_str = parts[2]  # Ej: "20260119"
                 
-                # Parsear fecha
-                fecha = datetime.strptime(fecha_str, '%Y%m%d')
-                return fecha
-            else:
-                return None
+                # Verificar que sea un formato de fecha válido (8 dígitos)
+                if len(fecha_str) == 8 and fecha_str.isdigit():
+                    # Parsear fecha
+                    fecha = datetime.strptime(fecha_str, '%Y%m%d')
+                    return fecha
+            
+            return None
                 
         except Exception as e:
             self.logger.warning(f"   ⚠️ No se pudo extraer fecha de {filename}: {str(e)}")
@@ -563,23 +580,48 @@ class ReportComparator:
         # Formato esperado de fecha: YYYYMMDD
         fecha_str = target_date.strftime('%Y%m%d')
         
-        # Buscar archivos que contengan la fecha en el nombre
-        # Patrón: reporte_*_YYYYMMDD.xlsx
-        pattern = f"reporte_*_{fecha_str}.xlsx"
-        archivos = list(carpeta_mes.glob(pattern))
+        # Buscar archivos con el nuevo formato primero: reporte_YYYYMMDD.xlsx
+        pattern_nuevo = f"reporte_{fecha_str}.xlsx"
+        archivo_nuevo = carpeta_mes / pattern_nuevo
+        
+        if archivo_nuevo.exists():
+            self.logger.info(f"      ✅ Encontrado archivo (formato nuevo): {archivo_nuevo.name}")
+            return str(archivo_nuevo)
+        
+        # Si no se encuentra con formato nuevo, buscar con formato antiguo: reporte_*_YYYYMMDD.xlsx
+        pattern_antiguo = f"reporte_*_{fecha_str}.xlsx"
+        archivos = list(carpeta_mes.glob(pattern_antiguo))
         
         if archivos:
-            # Verificar que la fecha extraída coincida
+            # Priorizar archivos sin timestamp (formato estándar antiguo)
+            archivos_estandar = []
+            archivos_con_timestamp = []
+            
             for archivo in archivos:
                 fecha_extraida = self._extract_date_from_filename(archivo.name)
                 if fecha_extraida and fecha_extraida.date() == target_date.date():
-                    return str(archivo)
+                    # Verificar si tiene timestamp (más de 3 partes al dividir por _)
+                    parts = Path(archivo.name).stem.split('_')
+                    if len(parts) == 3:
+                        archivos_estandar.append(archivo)
+                    else:
+                        archivos_con_timestamp.append(archivo)
+            
+            # Retornar primero los archivos estándar, luego los con timestamp
+            if archivos_estandar:
+                self.logger.info(f"      ✅ Encontrado archivo (formato antiguo): {archivos_estandar[0].name}")
+                return str(archivos_estandar[0])
+            elif archivos_con_timestamp:
+                self.logger.info(f"      ⚠️ Encontrado archivo con timestamp: {archivos_con_timestamp[0].name}")
+                return str(archivos_con_timestamp[0])
         
         return None
     
     def _find_base_report(self, fecha_actual, downloads_dir, max_days_back=7):
         """
-        Busca el reporte base retrocediendo días hasta encontrarlo
+        Busca el reporte base (día anterior)
+        
+        El reporte base es el del día anterior a la fecha actual.
         
         Args:
             fecha_actual: datetime de la fecha actual
@@ -589,8 +631,21 @@ class ReportComparator:
         Returns:
             str: Ruta del archivo encontrado o None
         """
-        # Empezar buscando el día anterior
-        for dias_atras in range(1, max_days_back + 1):
+        # Buscar el día anterior (reporte base)
+        fecha_ayer = fecha_actual - timedelta(days=1)
+        fecha_str = fecha_ayer.strftime('%d/%m/%Y')
+        
+        self.logger.info(f"      Buscando reporte BASE (día anterior: {fecha_str})...")
+        
+        reporte = self._find_report_by_date(fecha_ayer, downloads_dir)
+        
+        if reporte:
+            self.logger.info(f"      ✅ Reporte base encontrado: {Path(reporte).name}")
+            return reporte
+        
+        # Si no se encuentra el día anterior, buscar retrocediendo días
+        self.logger.info(f"      ⚠️ Reporte del día anterior no encontrado, buscando días anteriores...")
+        for dias_atras in range(2, max_days_back + 1):
             fecha_buscar = fecha_actual - timedelta(days=dias_atras)
             fecha_str = fecha_buscar.strftime('%d/%m/%Y')
             
@@ -606,17 +661,19 @@ class ReportComparator:
     
     def _find_actual_report(self, fecha_actual, downloads_dir):
         """
-        Busca el reporte actual (debe existir, si no retorna None)
+        Busca el reporte actual (día de hoy)
+        
+        El reporte actual es el del día de hoy (fecha_actual).
         
         Args:
-            fecha_actual: datetime de la fecha actual
+            fecha_actual: datetime de la fecha actual (hoy)
             downloads_dir: Directorio base de downloads
         
         Returns:
             str: Ruta del archivo encontrado o None
         """
         fecha_str = fecha_actual.strftime('%d/%m/%Y')
-        self.logger.info(f"      Buscando reporte actual del {fecha_str}...")
+        self.logger.info(f"      Buscando reporte ACTUAL (día de hoy: {fecha_str})...")
         
         reporte = self._find_report_by_date(fecha_actual, downloads_dir)
         
@@ -706,6 +763,98 @@ class ReportComparator:
             return None
 
 
+    def rename_old_format_files(self, downloads_dir):
+        """
+        Renombra archivos del formato antiguo (reporte_YYYYMMDD_YYYYMMDD.xlsx) 
+        al formato nuevo (reporte_YYYYMMDD.xlsx)
+        
+        Args:
+            downloads_dir: Directorio base de downloads
+        
+        Returns:
+            dict: Estadísticas del proceso de renombrado
+        """
+        self.logger.info("="*80)
+        self.logger.info("RENOMBRANDO ARCHIVOS AL FORMATO NUEVO")
+        self.logger.info("="*80)
+        
+        stats = {
+            'archivos_encontrados': 0,
+            'archivos_renombrados': 0,
+            'archivos_con_error': 0,
+            'archivos_ya_en_formato_nuevo': 0
+        }
+        
+        downloads_path = Path(downloads_dir)
+        
+        if not downloads_path.exists():
+            self.logger.error(f"   ❌ Directorio no existe: {downloads_dir}")
+            return stats
+        
+        # Buscar todos los archivos .xlsx recursivamente
+        archivos = list(downloads_path.rglob("reporte_*.xlsx"))
+        stats['archivos_encontrados'] = len(archivos)
+        
+        self.logger.info(f"   📂 Archivos encontrados: {len(archivos)}")
+        
+        for archivo in archivos:
+            try:
+                nombre_archivo = archivo.name
+                nombre_sin_ext = archivo.stem
+                parts = nombre_sin_ext.split('_')
+                
+                # Verificar si ya está en formato nuevo (reporte_YYYYMMDD.xlsx)
+                if len(parts) == 2:
+                    fecha_str = parts[1]
+                    if len(fecha_str) == 8 and fecha_str.isdigit():
+                        stats['archivos_ya_en_formato_nuevo'] += 1
+                        self.logger.info(f"   ✅ Ya en formato nuevo: {nombre_archivo}")
+                        continue
+                
+                # Verificar si está en formato antiguo (reporte_YYYYMMDD_YYYYMMDD.xlsx)
+                if len(parts) >= 3:
+                    # El segundo YYYYMMDD es la fecha de generación
+                    fecha_generacion_str = parts[2]
+                    
+                    if len(fecha_generacion_str) == 8 and fecha_generacion_str.isdigit():
+                        # Crear nuevo nombre
+                        nuevo_nombre = f"reporte_{fecha_generacion_str}.xlsx"
+                        nuevo_path = archivo.parent / nuevo_nombre
+                        
+                        # Verificar si el archivo nuevo ya existe
+                        if nuevo_path.exists():
+                            self.logger.warning(f"   ⚠️ El archivo {nuevo_nombre} ya existe, eliminando {nombre_archivo}")
+                            archivo.unlink()
+                        else:
+                            # Renombrar
+                            archivo.rename(nuevo_path)
+                            self.logger.info(f"   📝 Renombrado: {nombre_archivo} -> {nuevo_nombre}")
+                        
+                        stats['archivos_renombrados'] += 1
+                    else:
+                        self.logger.warning(f"   ⚠️ Formato no reconocido: {nombre_archivo}")
+                        stats['archivos_con_error'] += 1
+                else:
+                    self.logger.warning(f"   ⚠️ Formato no reconocido: {nombre_archivo}")
+                    stats['archivos_con_error'] += 1
+                    
+            except Exception as e:
+                self.logger.error(f"   ❌ Error al renombrar {archivo.name}: {str(e)}")
+                stats['archivos_con_error'] += 1
+        
+        self.logger.info("")
+        self.logger.info("="*80)
+        self.logger.info("RESUMEN DE RENOMBRADO")
+        self.logger.info("="*80)
+        self.logger.info(f"   📂 Archivos encontrados: {stats['archivos_encontrados']}")
+        self.logger.info(f"   ✅ Archivos renombrados: {stats['archivos_renombrados']}")
+        self.logger.info(f"   ✅ Ya en formato nuevo: {stats['archivos_ya_en_formato_nuevo']}")
+        self.logger.info(f"   ❌ Archivos con error: {stats['archivos_con_error']}")
+        self.logger.info("="*80)
+        
+        return stats
+
+
 class Command(BaseCommand):
     """Comando de Django para comparar reportes de Dropi"""
     
@@ -725,18 +874,53 @@ class Command(BaseCommand):
             required=False,
             help='Ruta al archivo Excel del reporte ACTUAL. Si no se proporciona, busca automáticamente el reporte del día actual.'
         )
+        
+        parser.add_argument(
+            '--rename-old-files',
+            action='store_true',
+            help='Renombra archivos del formato antiguo (reporte_YYYYMMDD_YYYYMMDD.xlsx) al formato nuevo (reporte_YYYYMMDD.xlsx)'
+        )
     
     def handle(self, *args, **options):
         reporte_base_path = options.get('base')
         reporte_actual_path = options.get('actual')
+        rename_old_files = options.get('rename_old_files', False)
         
         # Crear comparador
         comparator = ReportComparator()
         
+        # Si se solicita renombrar archivos antiguos
+        if rename_old_files:
+            base_dir = Path(__file__).parent.parent.parent.parent
+            downloads_dir = base_dir / 'results' / 'downloads'
+            
+            self.stdout.write("="*80)
+            self.stdout.write("RENOMBRANDO ARCHIVOS AL FORMATO NUEVO")
+            self.stdout.write("="*80)
+            self.stdout.write(f"   Directorio: {downloads_dir}")
+            self.stdout.write("")
+            
+            stats = comparator.rename_old_format_files(downloads_dir)
+            
+            self.stdout.write("")
+            self.stdout.write("="*80)
+            self.stdout.write("RENOMBRADO COMPLETADO")
+            self.stdout.write("="*80)
+            self.stdout.write(f"   Archivos encontrados: {stats['archivos_encontrados']}")
+            self.stdout.write(f"   Archivos renombrados: {stats['archivos_renombrados']}")
+            self.stdout.write(f"   Ya en formato nuevo: {stats['archivos_ya_en_formato_nuevo']}")
+            self.stdout.write(f"   Archivos con error: {stats['archivos_con_error']}")
+            self.stdout.write("="*80)
+            self.stdout.write("")
+            
+            # Si solo se pidió renombrar, terminar aquí
+            if not reporte_base_path and not reporte_actual_path:
+                return
+        
         # Si no se proporcionaron rutas, buscar automáticamente
         if not reporte_base_path or not reporte_actual_path:
             self.stdout.write("="*80)
-            self.stdout.write("🔍 BÚSQUEDA AUTOMÁTICA DE REPORTES")
+            self.stdout.write("BUSQUEDA AUTOMATICA DE REPORTES")
             self.stdout.write("="*80)
             
             base_dir = Path(__file__).parent.parent.parent.parent
@@ -745,41 +929,41 @@ class Command(BaseCommand):
             fecha_actual = datetime.now()
             fecha_str = fecha_actual.strftime('%d/%m/%Y')
             
-            self.stdout.write(f"   📅 Fecha actual: {fecha_str}")
-            self.stdout.write(f"   📁 Directorio base: {downloads_dir}")
+            self.stdout.write(f"   Fecha actual: {fecha_str}")
+            self.stdout.write(f"   Directorio base: {downloads_dir}")
             self.stdout.write("")
             
             # Buscar reporte actual
             if not reporte_actual_path:
-                self.stdout.write("   🔍 Buscando reporte ACTUAL...")
+                self.stdout.write("   Buscando reporte ACTUAL...")
                 reporte_actual_path = comparator._find_actual_report(fecha_actual, downloads_dir)
                 
                 if not reporte_actual_path:
                     self.stdout.write("")
                     self.stdout.write(
-                        self.style.ERROR('[ERROR] No se encontró reporte ACTUAL. No se puede generar comparación sin el reporte actual.')
+                        self.style.ERROR('[ERROR] No se encontro reporte ACTUAL. No se puede generar comparacion sin el reporte actual.')
                     )
                     return
             
             # Buscar reporte base
             if not reporte_base_path:
                 self.stdout.write("")
-                self.stdout.write("   🔍 Buscando reporte BASE...")
+                self.stdout.write("   Buscando reporte BASE...")
                 reporte_base_path = comparator._find_base_report(fecha_actual, downloads_dir)
                 
                 if not reporte_base_path:
                     self.stdout.write("")
                     self.stdout.write(
-                        self.style.ERROR('[ERROR] No se encontró reporte BASE. Buscó hasta 7 días hacia atrás sin éxito.')
+                        self.style.ERROR('[ERROR] No se encontro reporte BASE. Busco hasta 7 dias hacia atras sin exito.')
                     )
                     return
             
             self.stdout.write("")
             self.stdout.write("="*80)
-            self.stdout.write("✅ REPORTES ENCONTRADOS")
+            self.stdout.write("[OK] REPORTES ENCONTRADOS")
             self.stdout.write("="*80)
-            self.stdout.write(f"   📄 Reporte BASE: {Path(reporte_base_path).name}")
-            self.stdout.write(f"   📄 Reporte ACTUAL: {Path(reporte_actual_path).name}")
+            self.stdout.write(f"   Reporte BASE: {Path(reporte_base_path).name}")
+            self.stdout.write(f"   Reporte ACTUAL: {Path(reporte_actual_path).name}")
             self.stdout.write("="*80)
             self.stdout.write("")
         

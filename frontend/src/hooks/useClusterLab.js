@@ -21,9 +21,12 @@ export const useClusterLab = () => {
     }, []);
 
     useEffect(() => {
-        refreshData();
+        const t = setTimeout(() => refreshData(), 0);
         const interval = setInterval(refreshData, 3000); // Polling every 3s
-        return () => clearInterval(interval);
+        return () => {
+            clearTimeout(t);
+            clearInterval(interval);
+        };
     }, [refreshData]);
 
     return { logs, orphans, metrics, loading, refreshData };

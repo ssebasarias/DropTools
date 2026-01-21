@@ -67,7 +67,7 @@ const GoldMine = () => {
                 setTotalResults((page + 10) * ITEMS_PER_PAGE);
             }
 
-        } catch (error) {
+        } catch {
             console.error("Failed to load gold mine");
         } finally {
             setLoading(false);
@@ -81,7 +81,7 @@ const GoldMine = () => {
             }, 500);
             return () => clearTimeout(timer);
         }
-    }, [search, competitorRange, selectedCategory, minPrice, maxPrice, isVisualMode]);
+    }, [search, competitorRange, selectedCategory, minPrice, maxPrice, isVisualMode, loadData]);
 
     // Cargar Estadísticas Globales (Independiente de la paginación y filtro de competidores actual)
     useEffect(() => {
@@ -98,8 +98,8 @@ const GoldMine = () => {
 
                 const globalStats = await fetchGoldMineStats(params);
                 setCompetitorStats(globalStats);
-            } catch (error) {
-                console.error("Error loading stats", error);
+        } catch {
+            console.error("Error loading stats");
             }
         };
 
@@ -159,6 +159,13 @@ const GoldMine = () => {
                         </button>
                     )}
                 </div>
+
+                {isVisualMode && visualImage && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <img src={visualImage} alt="preview" style={{ width: 42, height: 42, borderRadius: 10, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.12)' }} />
+                        <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Imagen cargada</span>
+                    </div>
+                )}
 
                 <div style={{ position: 'relative', flex: 1, opacity: isVisualMode ? 0.5 : 1 }}>
                     <Search size={18} style={{ position: 'absolute', left: 12, top: 10, color: '#94a3b8' }} />

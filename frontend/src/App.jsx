@@ -21,6 +21,11 @@ import Subscriptions from './pages/Subscriptions';
 
 import LandingPage from './pages/LandingPage';
 
+import RequireAuth from './components/auth/RequireAuth';
+import RequireAdmin from './components/auth/RequireAdmin';
+import RequireUser from './components/auth/RequireUser';
+import RequireTier from './components/auth/RequireTier';
+
 function App() {
   return (
     <Routes>
@@ -30,7 +35,16 @@ function App() {
       <Route path="/register" element={<Register />} />
 
       {/* Admin Routes */}
-      <Route path="/admin" element={<MainLayout />}>
+      <Route
+        path="/admin"
+        element={
+          <RequireAuth>
+            <RequireAdmin>
+              <MainLayout />
+            </RequireAdmin>
+          </RequireAuth>
+        }
+      >
         <Route index element={<Dashboard />} />
         <Route path="gold-mine" element={<GoldMine />} />
         <Route path="cluster-lab" element={<ClusterLab />} />
@@ -39,11 +53,34 @@ function App() {
       </Route>
 
       {/* User Routes */}
-      <Route path="/user" element={<UserLayout />}>
+      <Route
+        path="/user"
+        element={
+          <RequireAuth>
+            <RequireUser>
+              <UserLayout />
+            </RequireUser>
+          </RequireAuth>
+        }
+      >
         <Route index element={<Navigate to="/user/dashboard" replace />} />
-        <Route path="dashboard" element={<WinnerProducts />} />
+        <Route
+          path="dashboard"
+          element={
+            <RequireTier minTier="GOLD">
+              <WinnerProducts />
+            </RequireTier>
+          }
+        />
         <Route path="reporter-setup" element={<ReporterConfig />} />
-        <Route path="analysis" element={<ReportAnalysis />} />
+        <Route
+          path="analysis"
+          element={
+            <RequireTier minTier="SILVER">
+              <ReportAnalysis />
+            </RequireTier>
+          }
+        />
         <Route path="subscriptions" element={<Subscriptions />} />
         <Route path="settings" element={<Settings type="user" />} />
       </Route>

@@ -2,21 +2,20 @@
 version: '3.8'
 
 services:
-  # 1. Base de Datos (PostgreSQL 17 + pgvector)
-  db:
-    image: pgvector/pgvector:pg17
-    container_name: dahell_db
-    restart: always
-    env_file:
-      - .env.docker
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-      # Script de inicialización: Crea las tablas al arrancar la primera vez
-      - ./docs/dahell_db.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5433:5432"
-    networks:
-      - dahell_net
+  # 1. Base de Datos (Disabled to use Host DB)
+  # db:
+  #   image: pgvector/pgvector:pg17
+  #   container_name: dahell_db
+  #   restart: always
+  #   env_file:
+  #     - .env.docker
+  #   volumes:
+  #     - pg_data:/var/lib/postgresql/data
+  #     - ./docs/dahell_db.sql:/docker-entrypoint-initdb.d/init.sql
+  #   ports:
+  #     - "5433:5432"
+  #   networks:
+  #     - dahell_net
 
   # 2. Interfaz Gráfica para DB (pgAdmin 4)
   pgadmin:
@@ -27,8 +26,8 @@ services:
       - .env.docker
     ports:
       - "5050:80"
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
     networks:
       - dahell_net
 
@@ -62,8 +61,8 @@ services:
     # Comando por defecto (opcional, o se corre manual)
     command: python backend/manage.py scraper
     restart: on-failure:3 # Auto-reinicio en caso de error
-    depends_on:
-      - db
+    # depends_on:
+    #  - db
 
   loader:
     build:
@@ -86,8 +85,8 @@ services:
     command: python backend/manage.py loader
     profiles: [ "workers" ]
     restart: on-failure:3 # Auto-reinicio en caso de error
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
 
   vectorizer:
     build:
@@ -116,8 +115,8 @@ services:
     command: python backend/manage.py vectorizer
     profiles: [ "workers" ]
     restart: on-failure:3 # Auto-reinicio en caso de error
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
 
   clusterizer:
     build:
@@ -139,8 +138,8 @@ services:
     command: python backend/manage.py clusterizer
     profiles: [ "workers" ]
     restart: no
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
 
   classifier:
     build:
@@ -162,8 +161,8 @@ services:
     command: python backend/manage.py classifier
     profiles: [ "workers" ]
     restart: no
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
 
   classifier_2:
     build:
@@ -185,8 +184,8 @@ services:
     command: python backend/manage.py classifier
     profiles: [ "workers" ]
     restart: no
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
 
   market_trender:
     build:
@@ -208,8 +207,8 @@ services:
     command: python backend/manage.py market_trender
     profiles: [ "workers" ]
     restart: no
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
 
   meta_scholar:
     build:
@@ -233,7 +232,7 @@ services:
     profiles: [ "workers" ]
     restart: "no"
     depends_on:
-      - db
+    #   - db
       - backend
 
   shopify_auditor:
@@ -257,8 +256,8 @@ services:
     command: python backend/manage.py shopify_auditor
     profiles: [ "workers" ]
     restart: no
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
 
   # 5. Backend API (Django REST Framework)
   backend:
@@ -279,8 +278,8 @@ services:
     command: python backend/manage.py runserver 0.0.0.0:8000
     networks:
       - dahell_net
-    depends_on:
-      - db
+    # depends_on:
+    #   - db
 
   # 6. Frontend (React + Vite)
   frontend:

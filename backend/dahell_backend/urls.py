@@ -28,11 +28,26 @@ from core.views import (
     ClusterLabStatsView,
     ContainerStatsView,
     ContainerControlView,
-    ClusterOrphanActionView
+    ClusterOrphanActionView,
+    ReporterConfigView,
+    AuthLoginView,
+    AuthRegisterView,
+    AuthMeView,
+    DropiAccountsView,
+    DropiAccountSetDefaultView,
+    AdminUsersView,
+    AdminSetUserSubscriptionView,
 )
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # Auth
+    path('api/auth/login/', AuthLoginView.as_view(), name='auth-login'),
+    path('api/auth/register/', AuthRegisterView.as_view(), name='auth-register'),
+    path('api/auth/me/', AuthMeView.as_view(), name='auth-me'),
+    # Dropi accounts
+    path('api/dropi/accounts/', DropiAccountsView.as_view(), name='dropi-accounts'),
+    path('api/dropi/accounts/<int:account_id>/default/', DropiAccountSetDefaultView.as_view(), name='dropi-account-default'),
     path('api/dashboard/stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
     path('api/gold-mine/', GoldMineView.as_view(), name='gold-mine'),
     path('api/gold-mine/stats/', GoldMineStatsView.as_view(), name='gold-mine-stats'),
@@ -49,4 +64,11 @@ urlpatterns = [
     # System Control
     path('api/control/stats/', ContainerStatsView.as_view(), name='container-stats'),
     path('api/control/container/<str:service>/<str:action>/', ContainerControlView.as_view(), name='container-control'),
+    
+    # Reporter Configuration
+    path('api/reporter/config/', ReporterConfigView.as_view(), name='reporter-config'),
+
+    # Admin (no payments): manage users & subscriptions
+    path('api/admin/users/', AdminUsersView.as_view(), name='admin-users'),
+    path('api/admin/users/<int:user_id>/subscription/', AdminSetUserSubscriptionView.as_view(), name='admin-user-subscription'),
 ]

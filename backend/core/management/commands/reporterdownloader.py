@@ -11,8 +11,8 @@ Ejemplo si hoy es 20/01/2026:
 - Si carpeta vacía: descarga reporte del 19 (19/12/2025 a 19/01/2026) y del 20 (20/12/2025 a 20/01/2026)
 - Si carpeta tiene archivos: descarga solo reporte del 20 (20/12/2025 a 20/01/2026)
 
-Los archivos se guardan con formato: reporte_YYYYMMDD_YYYYMMDD.xlsx
-Ejemplo: reporte_20251219_20260119.xlsx (desde 19/12/2025 hasta 19/01/2026)
+Los archivos se guardan con formato: reporte_YYYYMMDD.xlsx
+Ejemplo: reporte_20260120.xlsx (generado el 20/01/2026)
 
 Para comparar los reportes y generar el Excel con órdenes sin movimiento,
 usa el comando: python manage.py reportcomparer
@@ -26,6 +26,8 @@ from pathlib import Path
 import glob
 
 from selenium import webdriver
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -46,7 +48,7 @@ class DropiDownloaderReporterBot:
     Funcionalidad:
     1. Descarga reportes de un mes exacto (día X a día X del mes siguiente)
     2. Detecta si la carpeta está vacía para decidir cuántos reportes descargar
-    3. Nombra los archivos con formato: reporte_YYYYMMDD_YYYYMMDD.xlsx
+    3. Nombra los archivos con formato: reporte_YYYYMMDD.xlsx (solo la fecha de generación)
     4. Los reportes pueden ser comparados posteriormente con reportcomparer
     """
     
@@ -59,18 +61,28 @@ class DropiDownloaderReporterBot:
     ORDERS_URL = "https://app.dropi.co/dashboard/orders"
     REPORTS_URL = "https://app.dropi.co/dashboard/reports/downloads"
     
-    def __init__(self, headless=False, download_dir=None):
+    def __init__(self, headless=False, download_dir=None, use_chrome_fallback=False, email=None, password=None):
         """
         Inicializa el bot
         
         Args:
             headless: Si True, ejecuta el navegador sin interfaz gráfica
             download_dir: Directorio base donde se guardarán los archivos descargados (results/downloads)
+            use_chrome_fallback: Si True, usa Chrome en lugar de Edge (útil si Edge no funciona)
+            email: Email para login (opcional, sobrescribe default)
+            password: Password para login (opcional, sobrescribe default)
         """
         self.headless = headless
+        self.use_chrome_fallback = use_chrome_fallback
         self.driver = None
         self.wait = None
         self.logger = self._setup_logger()
+
+        # Update credentials if provided
+        if email:
+            self.DROPI_EMAIL = email
+        if password:
+            self.DROPI_PASSWORD = password
         
         # Configurar directorio base de descargas
         if download_dir is None:
@@ -144,13 +156,23 @@ class DropiDownloaderReporterBot:
         """
         Inicializa el driver de Selenium con configuración para descargas
         
-        PASO 1: Configurar Chrome con preferencias de descarga
+        PASO 1: Configurar Edge (o Chrome como fallback) con preferencias de descarga
+        Edge es más permisivo con descargas automáticas que Chrome
         """
+        # Decidir qué navegador usar
+        if self.use_chrome_fallback:
+            return self._init_chrome_driver()
+        else:
+            return self._init_edge_driver()
+    
+    def _init_edge_driver(self):
+        """Inicializa Edge WebDriver"""
         self.logger.info("="*80)
-        self.logger.info("🚀 PASO 1: INICIALIZANDO NAVEGADOR CHROME")
+        self.logger.info("🚀 PASO 1: INICIALIZANDO NAVEGADOR EDGE")
         self.logger.info("="*80)
+        self.logger.info("   ℹ️ Usando Edge (más permisivo con descargas automáticas)")
         
-        options = webdriver.ChromeOptions()
+        options = EdgeOptions()
         
         # Configuración para ejecución LOCAL
         if self.headless:
@@ -165,6 +187,12 @@ class DropiDownloaderReporterBot:
         options.add_argument('--disable-infobars')
         options.add_argument('--disable-extensions')
         
+        # Configuraciones críticas para permitir descargas automáticas sin permisos
+        options.add_argument('--disable-web-security')
+        options.add_argument('--allow-running-insecure-content')
+        options.add_argument('--disable-features=DownloadBubble,DownloadBubbleV2')
+        options.add_argument('--disable-prompt-on-repost')
+        
         # Evitar detección de automatización
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
@@ -178,6 +206,144 @@ class DropiDownloaderReporterBot:
             download_directory = str(self.download_dir)
         
         # Preferencias incluyendo descargas (actualizar con el directorio correcto)
+        # Configuraciones críticas para descargas automáticas sin permisos
+        prefs = {
+            "profile.default_content_setting_values.notifications": 2,  # Bloquear notificaciones
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False,
+            # Configuraciones de descarga críticas
+            "download.default_directory": download_directory,
+            "download.prompt_for_download": False,  # No pedir confirmación
+            "download.directory_upgrade": True,  # Permitir actualizar directorio
+            "safebrowsing.enabled": False,  # Deshabilitar Safe Browsing que puede bloquear descargas
+            "safebrowsing.disable_download_protection": True,  # Deshabilitar protección de descargas
+            # Permitir descargas automáticas
+            "profile.default_content_settings.popups": 0,  # Permitir popups (algunos sitios los usan para descargas)
+            "profile.content_settings.exceptions.automatic_downloads": {
+                "*": {
+                    "setting": 1  # Permitir descargas automáticas para todos los sitios
+                }
+            },
+            # Configuración adicional para evitar bloqueos
+            "profile.default_content_setting_values.automatic_downloads": 1,  # Permitir descargas automáticas
+        }
+        options.add_experimental_option("prefs", prefs)
+        
+        self.logger.info(f"   📂 Directorio de descarga para Edge: {download_directory}")
+        self.logger.info("   📦 Creando instancia de Edge...")
+        
+        try:
+            # Intentar inicializar Edge sin Service primero (Selenium 4+ lo maneja automáticamente)
+            try:
+                self.driver = webdriver.Edge(options=options)
+                self.logger.info("   ✅ Edge iniciado correctamente (driver automático)")
+            except Exception as auto_error:
+                self.logger.warning(f"   ⚠️ Inicialización automática falló: {str(auto_error)}")
+                self.logger.info("   🔄 Intentando con webdriver-manager...")
+                
+                # Intentar con webdriver-manager como fallback
+                try:
+                    from webdriver_manager.microsoft import EdgeChromiumDriverManager
+                    from selenium.webdriver.edge.service import Service
+                    
+                    service = Service(EdgeChromiumDriverManager().install())
+                    self.driver = webdriver.Edge(service=service, options=options)
+                    self.logger.info("   ✅ Edge iniciado correctamente (con webdriver-manager)")
+                except ImportError:
+                    self.logger.error("   ❌ webdriver-manager no está instalado")
+                    self.logger.info("   💡 Instala con: pip install webdriver-manager")
+                    raise auto_error  # Re-lanzar el error original
+                except Exception as manager_error:
+                    self.logger.error(f"   ❌ Error con webdriver-manager: {str(manager_error)}")
+                    raise auto_error  # Re-lanzar el error original
+                    
+        except Exception as e:
+            self.logger.error("="*80)
+            self.logger.error(f"   ❌ ERROR AL INICIALIZAR EDGE")
+            self.logger.error("="*80)
+            self.logger.error(f"   Error: {str(e)}")
+            self.logger.error(f"   Tipo: {type(e).__name__}")
+            self.logger.error("")
+            self.logger.error("   💡 SOLUCIONES POSIBLES:")
+            self.logger.error("   1. Asegúrate de tener Microsoft Edge instalado")
+            self.logger.error("   2. Instala webdriver-manager: pip install webdriver-manager")
+            self.logger.error("   3. Verifica que Edge esté actualizado")
+            self.logger.error("   4. Si el problema persiste, vuelve a Chrome con configuraciones adicionales")
+            self.logger.error("="*80)
+            raise
+        
+        # Configurar permisos de descarga explícitamente usando Edge DevTools Protocol
+        # Edge es más permisivo que Chrome, pero aún así configuramos explícitamente
+        try:
+            self.logger.info("   🔧 Configurando permisos de descarga...")
+            # Habilitar descargas automáticas para todos los sitios
+            self.driver.execute_cdp_cmd('Browser.setDownloadBehavior', {
+                'behavior': 'allow',
+                'downloadPath': download_directory
+            })
+            self.logger.info("   ✅ Permisos de descarga configurados")
+        except Exception as e:
+            self.logger.warning(f"   ⚠️ No se pudo configurar permisos CDP (puede ser normal): {str(e)}")
+            # Continuar de todas formas, Edge es más permisivo por defecto
+        
+        # Anti-detección
+        self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        # Configurar timeouts
+        self.wait = WebDriverWait(self.driver, 30)
+        
+        self.logger.info(f"   🌐 Navegador listo")
+        self.logger.info("="*80)
+    
+    def _init_chrome_driver(self):
+        """Inicializa Chrome WebDriver como fallback (con solución mejorada para permisos)"""
+        self.logger.info("="*80)
+        self.logger.info("🚀 PASO 1: INICIALIZANDO NAVEGADOR CHROME (FALLBACK)")
+        self.logger.info("="*80)
+        self.logger.info("   ℹ️ Usando Chrome con perfil temporal para evitar bloqueos de permisos")
+        
+        from selenium.webdriver.chrome.options import Options as ChromeOptions
+        
+        options = ChromeOptions()
+        
+        # Configuración para ejecución LOCAL
+        if self.headless:
+            self.logger.info("   🔇 Modo HEADLESS activado (navegador oculto)")
+            options.add_argument('--headless=new')
+        else:
+            self.logger.info("   👀 Modo VISIBLE activado (puedes ver el navegador)")
+        
+        # Optimizaciones
+        options.add_argument('--start-maximized')
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument('--disable-infobars')
+        options.add_argument('--disable-extensions')
+        
+        # Configuraciones críticas para permitir descargas automáticas sin permisos
+        options.add_argument('--disable-web-security')
+        options.add_argument('--allow-running-insecure-content')
+        options.add_argument('--disable-features=DownloadBubble,DownloadBubbleV2')
+        options.add_argument('--disable-prompt-on-repost')
+        
+        # Usar un perfil temporal para evitar bloqueos de permisos
+        import tempfile
+        temp_profile = tempfile.mkdtemp()
+        options.add_argument(f'--user-data-dir={temp_profile}')
+        self.logger.info(f"   📁 Usando perfil temporal: {temp_profile}")
+        
+        # Evitar detección de automatización
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        # Verificar que el directorio de descarga esté configurado
+        if self.download_dir is None:
+            self.logger.warning("   ⚠️ Directorio del mes no configurado, usando directorio base temporalmente")
+            download_directory = str(self.download_dir_base)
+        else:
+            self.logger.info(f"   📁 Directorio de descarga configurado: {self.download_dir}")
+            download_directory = str(self.download_dir)
+        
+        # Preferencias incluyendo descargas (mismas que Edge)
         prefs = {
             "profile.default_content_setting_values.notifications": 2,
             "credentials_enable_service": False,
@@ -185,7 +351,15 @@ class DropiDownloaderReporterBot:
             "download.default_directory": download_directory,
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
-            "safebrowsing.enabled": True
+            "safebrowsing.enabled": False,
+            "safebrowsing.disable_download_protection": True,
+            "profile.default_content_settings.popups": 0,
+            "profile.content_settings.exceptions.automatic_downloads": {
+                "*": {
+                    "setting": 1
+                }
+            },
+            "profile.default_content_setting_values.automatic_downloads": 1,
         }
         options.add_experimental_option("prefs", prefs)
         
@@ -199,6 +373,17 @@ class DropiDownloaderReporterBot:
             self.logger.error(f"   ❌ Error al iniciar Chrome: {e}")
             self.logger.info("   💡 Asegúrate de tener Chrome instalado")
             raise
+        
+        # Configurar permisos de descarga explícitamente usando Chrome DevTools Protocol
+        try:
+            self.logger.info("   🔧 Configurando permisos de descarga...")
+            self.driver.execute_cdp_cmd('Browser.setDownloadBehavior', {
+                'behavior': 'allow',
+                'downloadPath': download_directory
+            })
+            self.logger.info("   ✅ Permisos de descarga configurados")
+        except Exception as e:
+            self.logger.warning(f"   ⚠️ No se pudo configurar permisos CDP: {str(e)}")
         
         # Anti-detección
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -426,7 +611,7 @@ class DropiDownloaderReporterBot:
         else:
             self.logger.info(f"      ✅ Carpeta ya existe")
         
-        # Actualizar directorio de descarga y preferencias de Chrome
+        # Actualizar directorio de descarga y preferencias de Edge
         self.download_dir = carpeta_mes
         self.download_prefs["download.default_directory"] = str(self.download_dir)
         
@@ -846,12 +1031,36 @@ class DropiDownloaderReporterBot:
                                 # Hacer click en descargar
                                 self.logger.info("         📥 Haciendo click en descargar...")
                                 try:
+                                    # Scroll al botón para asegurar que sea visible
+                                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", download_button)
+                                    time.sleep(0.5)
                                     download_button.click()
-                                except:
+                                except Exception as click_error:
                                     # Si falla el click normal, usar JavaScript
+                                    self.logger.warning(f"         ⚠️ Click normal falló, usando JavaScript: {str(click_error)}")
                                     self.driver.execute_script("arguments[0].click();", download_button)
                                 
-                                time.sleep(7)  # Esperar 7 segundos para la descarga
+                                # Esperar y verificar si aparece algún diálogo de permisos
+                                time.sleep(2)
+                                
+                                # Verificar si hay algún diálogo de permisos
+                                try:
+                                    # Buscar diálogos comunes que bloquean descargas
+                                    # Estos pueden aparecer como alertas o elementos específicos
+                                    alerts = self.driver.find_elements(By.XPATH, "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'permiso') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'permission') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'descargar')]")
+                                    if alerts:
+                                        self.logger.warning("         ⚠️ Posible diálogo de permisos detectado")
+                                        # Intentar cerrar cualquier diálogo presionando ESC o Enter
+                                        from selenium.webdriver.common.keys import Keys
+                                        try:
+                                            self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                                            time.sleep(1)
+                                        except:
+                                            pass
+                                except:
+                                    pass  # No hay diálogo, continuar normalmente
+                                
+                                time.sleep(5)  # Esperar 5 segundos adicionales para la descarga
                                 
                                 # Buscar el archivo descargado
                                 if expected_filename:
@@ -864,8 +1073,9 @@ class DropiDownloaderReporterBot:
                                     self.logger.info(f"         ✅ Archivo descargado: {downloaded_file}")
                                     return downloaded_file
                                 else:
-                                    self.logger.warning("         ⚠️ Archivo no encontrado, esperando más tiempo...")
-                                    time.sleep(10)
+                                    # Esperar un poco más y buscar de nuevo
+                                    self.logger.info("         ⏳ Archivo no encontrado aún, esperando más tiempo...")
+                                    time.sleep(5)
                                     if expected_filename:
                                         downloaded_file = self._find_downloaded_file(expected_filename)
                                     else:
@@ -931,48 +1141,76 @@ class DropiDownloaderReporterBot:
     
     def _rename_downloaded_file(self, downloaded_file, fecha_inicio, fecha_fin):
         """
-        Renombra el archivo descargado con un nombre descriptivo que incluye las fechas desde y hasta
+        Renombra el archivo descargado con un nombre descriptivo que incluye la fecha de generación
         
-        Formato: reporte_YYYYMMDD_YYYYMMDD.xlsx
-        Ejemplo: reporte_20251219_20260119.xlsx (desde 19/12/2025 hasta 19/01/2026)
+        IMPORTANTE: Este método SIEMPRE genera nombres con el formato estandarizado:
+        Formato: reporte_YYYYMMDD.xlsx
+        Ejemplo: reporte_20260120.xlsx (generado el 20/01/2026)
+        
+        El formato es estricto y no se permiten variaciones (sin timestamps ni sufijos adicionales).
+        Si un archivo con el mismo nombre ya existe, será reemplazado para mantener el formato.
+        La fecha usada es la fecha de fin (fecha_fin), que es cuando se genera el reporte.
         
         Args:
             downloaded_file: Ruta del archivo descargado
-            fecha_inicio: Fecha de inicio (datetime)
-            fecha_fin: Fecha de fin (datetime)
+            fecha_inicio: Fecha de inicio (datetime) - no se usa en el nombre
+            fecha_fin: Fecha de fin (datetime) - esta es la fecha de generación del reporte
         
         Returns:
-            str: Ruta del archivo renombrado
+            str: Ruta del archivo renombrado con formato estandarizado
+            
+        Raises:
+            Exception: Si no se puede aplicar el formato estandarizado al archivo
         """
         try:
-            # Crear nombre descriptivo con fechas desde y hasta
-            fecha_inicio_str = fecha_inicio.strftime('%Y%m%d')
-            fecha_fin_str = fecha_fin.strftime('%Y%m%d')
-            nuevo_nombre = f"reporte_{fecha_inicio_str}_{fecha_fin_str}.xlsx"
+            # Crear nombre descriptivo con solo la fecha de generación (fecha_fin)
+            fecha_generacion_str = fecha_fin.strftime('%Y%m%d')
+            nuevo_nombre = f"reporte_{fecha_generacion_str}.xlsx"
             
             # Ruta completa del nuevo archivo
             nuevo_path = self.download_dir / nuevo_nombre
             
             # Verificar si el archivo ya existe (por si acaso)
+            # Si existe, lo reemplazamos para mantener el formato estandarizado
             if nuevo_path.exists():
-                # Agregar timestamp para evitar conflictos
-                timestamp = datetime.now().strftime('%H%M%S')
-                nuevo_nombre = f"reporte_{fecha_inicio_str}_{fecha_fin_str}_{timestamp}.xlsx"
-                nuevo_path = self.download_dir / nuevo_nombre
+                self.logger.info(f"   ⚠️ Archivo ya existe, será reemplazado: {nuevo_nombre}")
+                # Eliminar archivo existente para mantener formato estandarizado
+                try:
+                    os.remove(nuevo_path)
+                    self.logger.info(f"   ✅ Archivo anterior eliminado para mantener formato estandarizado")
+                except Exception as e:
+                    self.logger.warning(f"   ⚠️ No se pudo eliminar archivo existente: {str(e)}")
             
-            # Renombrar archivo
+            # Renombrar archivo - SIEMPRE usar formato estandarizado
             if os.path.exists(downloaded_file):
-                os.rename(downloaded_file, nuevo_path)
-                self.logger.info(f"   📝 Archivo renombrado: {nuevo_nombre}")
-                self.logger.info(f"      Desde: {fecha_inicio.strftime('%d/%m/%Y')} hasta {fecha_fin.strftime('%d/%m/%Y')}")
-                return str(nuevo_path)
+                try:
+                    os.rename(downloaded_file, nuevo_path)
+                    self.logger.info(f"   📝 Archivo renombrado: {nuevo_nombre}")
+                    self.logger.info(f"      Fecha de generación: {fecha_fin.strftime('%d/%m/%Y')}")
+                    self.logger.info(f"      ✅ Formato estandarizado aplicado: reporte_YYYYMMDD.xlsx")
+                    return str(nuevo_path)
+                except Exception as rename_error:
+                    self.logger.error(f"   ❌ Error al renombrar archivo: {str(rename_error)}")
+                    # Intentar copiar y luego eliminar el original
+                    try:
+                        import shutil
+                        shutil.copy2(downloaded_file, nuevo_path)
+                        os.remove(downloaded_file)
+                        self.logger.info(f"   ✅ Archivo renombrado usando método alternativo: {nuevo_nombre}")
+                        return str(nuevo_path)
+                    except Exception as copy_error:
+                        self.logger.error(f"   ❌ Error crítico: No se pudo renombrar el archivo: {str(copy_error)}")
+                        raise Exception(f"No se pudo aplicar formato estandarizado al archivo. Error: {str(copy_error)}")
             else:
-                self.logger.warning(f"   ⚠️ Archivo original no encontrado: {downloaded_file}")
-                return downloaded_file
+                self.logger.error(f"   ❌ Archivo original no encontrado: {downloaded_file}")
+                raise FileNotFoundError(f"El archivo descargado no existe: {downloaded_file}")
                 
         except Exception as e:
-            self.logger.warning(f"   ⚠️ Error al renombrar archivo: {str(e)}")
-            return downloaded_file
+            self.logger.error(f"   ❌ Error crítico al renombrar archivo: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            # No devolver el archivo sin renombrar - lanzar excepción para que se maneje arriba
+            raise Exception(f"Error al aplicar formato estandarizado al archivo. El archivo debe tener el formato 'reporte_YYYYMMDD.xlsx'. Error: {str(e)}")
     
     def _download_single_report(self, fecha_inicio, fecha_fin):
         """
@@ -1040,7 +1278,7 @@ class DropiDownloaderReporterBot:
         - Descarga reportes de un mes exacto (día X a día X del mes siguiente)
         - Si la carpeta está vacía: descarga 2 reportes (día anterior y día actual)
         - Si la carpeta tiene archivos: descarga solo 1 reporte (día actual)
-        - Los archivos se nombran: reporte_YYYYMMDD_YYYYMMDD.xlsx
+        - Los archivos se nombran: reporte_YYYYMMDD.xlsx (solo la fecha de generación)
         """
         self.logger.info("="*80)
         self.logger.info("🤖 INICIANDO BOT DESCARGADOR DE REPORTES")
@@ -1228,26 +1466,75 @@ class Command(BaseCommand):
             type=str,
             help='Directorio donde se guardarán los archivos descargados (default: results/downloads)'
         )
+        
+        parser.add_argument(
+            '--use-chrome-fallback',
+            action='store_true',
+            help='Usar Chrome en lugar de Edge (útil si Edge no funciona o no está disponible)'
+        )
+        
+        parser.add_argument(
+            '--user-id',
+            type=int,
+            help='ID del usuario para obtener credenciales de la base de datos'
+        )
+        
+        parser.add_argument(
+            '--email',
+            type=str,
+            help='Email especifico para Dropi'
+        )
+        
+        parser.add_argument(
+            '--password',
+            type=str,
+            help='Password especifico para Dropi'
+        )
     
     def handle(self, *args, **options):
         headless = options.get('headless', False)
         download_dir = options.get('download_dir', None)
-        
+        user_id = options.get('user_id')
+        email = options.get('email')
+        password = options.get('password')
+
+        if user_id:
+            try:
+                from core.models import UserProfile
+                # Assuming User profile is linked via user_id directly or user__id
+                # user_id typically refers to User.id
+                profile = UserProfile.objects.filter(user__id=user_id).first()
+                if profile and profile.dropi_email and profile.dropi_password:
+                    email = profile.dropi_email
+                    password = profile.dropi_password
+                    self.stdout.write(self.style.SUCCESS(f'[INFO] Usando credenciales de base de datos para usuario ID {user_id}'))
+                else:
+                    self.stdout.write(self.style.WARNING(f'[WARN] No se encontraron credenciales completas para usuario ID {user_id}'))
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f'[ERROR] Falló al obtener perfil de usuario: {e}'))
+
         # Crear y ejecutar el bot
-        bot = DropiDownloaderReporterBot(headless=headless, download_dir=download_dir)
+        bot = DropiDownloaderReporterBot(
+            headless=headless, 
+            download_dir=download_dir,
+            use_chrome_fallback=use_chrome_fallback,
+            email=email,
+            password=password
+        )
         
         try:
             success = bot.run()
             if success:
+                # Usar texto simple para evitar problemas de encoding en Windows
                 self.stdout.write(
-                    self.style.SUCCESS('✓ Bot ejecutado exitosamente')
+                    self.style.SUCCESS('[OK] Bot ejecutado exitosamente')
                 )
             else:
                 self.stdout.write(
-                    self.style.ERROR('✗ Bot ejecutado con errores')
+                    self.style.ERROR('[ERROR] Bot ejecutado con errores')
                 )
         except Exception as e:
             self.stdout.write(
-                self.style.ERROR(f'✗ Error al ejecutar el bot: {str(e)}')
+                self.style.ERROR(f'[ERROR] Error al ejecutar el bot: {str(e)}')
             )
             raise

@@ -1,14 +1,41 @@
-import React, { useState } from 'react';
-import { Save, Info, Clock, Mail, Key } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2 } from 'lucide-react';
+import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount } from '../../services/api';
+import SubscriptionGate from '../../components/common/SubscriptionGate';
 
 const ReporterConfig = () => {
-    const [config, setConfig] = useState({
+    const [accounts, setAccounts] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [creating, setCreating] = useState(false);
+
+    const [form, setForm] = useState({
+        label: 'reporter_2',
         email: '',
         password: '',
+        is_default: false,
         executionTime: '08:00'
     });
 
+    const load = async () => {
+        setError('');
+        setLoading(true);
+        try {
+            const list = await fetchDropiAccounts();
+            setAccounts(list);
+        } catch (e) {
+            setError(e.message || 'Error cargando cuentas');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        load();
+    }, []);
+
     return (
+        <SubscriptionGate minTier="BRONZE" title="Reporter (requiere suscripción activa)">
         <div style={{ padding: '2rem', maxWidth: '800px', margin: '0 auto' }}>
             <div style={{ marginBottom: '2rem' }}>
                 <h1>Reporter Configuration</h1>
@@ -31,10 +58,64 @@ const ReporterConfig = () => {
 
             <div className="glass-card">
                 <form onSubmit={(e) => e.preventDefault()}>
-                    <h3 style={{ marginBottom: '1.5rem' }}>Account Credentials</h3>
+                    <h3 style={{ marginBottom: '1.5rem' }}>Cuentas secundarias Dropi</h3>
+
+                    {error && (
+                        <div style={{ marginBottom: '1rem', color: '#ef4444', fontSize: '0.9rem' }}>
+                            {error}
+                        </div>
+                    )}
+
+                    {loading ? (
+                        <p className="text-muted">Cargando cuentas...</p>
+                    ) : (
+                        <div style={{ display: 'grid', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                            {accounts.length === 0 ? (
+                                <p className="text-muted">Aún no tienes cuentas secundarias registradas.</p>
+                            ) : (
+                                accounts.map((a) => (
+                                    <div
+                                        key={a.id}
+                                        className="glass-panel"
+                                        style={{
+                                            padding: '0.75rem 1rem',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: '1rem'
+                                        }}
+                                    >
+                                        <div>
+                                            <div style={{ fontWeight: 600 }}>
+                                                {a.label} {a.is_default && <span style={{ color: 'var(--primary)' }}>(default)</span>}
+                                            </div>
+                                            <div className="text-muted" style={{ fontSize: '0.85rem' }}>
+                                                {a.email}
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                            {!a.is_default && (
+                                                <button
+                                                    type="button"
+                                                    className="btn-secondary"
+                                                    onClick={async () => {
+                                                        await setDefaultDropiAccount(a.id);
+                                                        await load();
+                                                    }}
+                                                >
+                                                    <CheckCircle2 size={16} /> Default
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
 
                     <div className="form-group">
-                        <label className="form-label">Secondary Account Email</label>
+                        <label className="form-label">Nueva cuenta Dropi - Email</label>
                         <div style={{ position: 'relative' }}>
                             <Mail size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                             <input
@@ -42,14 +123,14 @@ const ReporterConfig = () => {
                                 className="glass-input"
                                 style={{ paddingLeft: '38px' }}
                                 placeholder="reporter@yourdomain.com"
-                                value={config.email}
-                                onChange={(e) => setConfig({ ...config, email: e.target.value })}
+                                value={form.email}
+                                onChange={(e) => setForm({ ...form, email: e.target.value })}
                             />
                         </div>
                     </div>
 
                     <div className="form-group">
-                        <label className="form-label">Secondary Account Password</label>
+                        <label className="form-label">Nueva cuenta Dropi - Password</label>
                         <div style={{ position: 'relative' }}>
                             <Key size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                             <input
@@ -57,8 +138,8 @@ const ReporterConfig = () => {
                                 className="glass-input"
                                 style={{ paddingLeft: '38px' }}
                                 placeholder="•••••••••"
-                                value={config.password}
-                                onChange={(e) => setConfig({ ...config, password: e.target.value })}
+                                value={form.password}
+                                onChange={(e) => setForm({ ...form, password: e.target.value })}
                             />
                         </div>
                     </div>
@@ -75,8 +156,8 @@ const ReporterConfig = () => {
                                 type="time"
                                 className="glass-input"
                                 style={{ paddingLeft: '38px' }}
-                                value={config.executionTime}
-                                onChange={(e) => setConfig({ ...config, executionTime: e.target.value })}
+                                value={form.executionTime}
+                                onChange={(e) => setForm({ ...form, executionTime: e.target.value })}
                             />
                         </div>
                         <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
@@ -85,13 +166,37 @@ const ReporterConfig = () => {
                     </div>
 
                     <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'flex-end' }}>
-                        <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <Save size={18} /> Save Configuration
+                        <button
+                            type="button"
+                            className="btn-primary"
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: creating ? 0.7 : 1 }}
+                            disabled={creating}
+                            onClick={async () => {
+                                setError('');
+                                setCreating(true);
+                                try {
+                                    await createDropiAccount({
+                                        label: form.label || 'reporter_2',
+                                        email: form.email,
+                                        password: form.password,
+                                        is_default: false
+                                    });
+                                    setForm({ ...form, email: '', password: '' });
+                                    await load();
+                                } catch (e) {
+                                    setError(e.message || 'Error guardando');
+                                } finally {
+                                    setCreating(false);
+                                }
+                            }}
+                        >
+                            <Plus size={18} /> Guardar cuenta secundaria
                         </button>
                     </div>
                 </form>
             </div>
         </div>
+        </SubscriptionGate>
     );
 };
 

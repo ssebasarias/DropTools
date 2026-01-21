@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { NavLink, Link } from 'react-router-dom';
-import { Zap, ArrowRight, TrendingUp, Shield, BarChart2 } from 'lucide-react';
+import React from 'react';
+import { Link } from 'react-router-dom';
+import { Zap, ArrowRight, TrendingUp, Shield } from 'lucide-react';
 import Subscriptions from './Subscriptions';
 
 import PublicNavbar from '../components/layout/PublicNavbar';
@@ -137,7 +137,7 @@ const FeatureCard = ({ icon: Icon, title, description, color }) => (
             marginBottom: '1.5rem',
             color: `rgb(${color})`
         }}>
-            <Icon size={32} />
+            {React.createElement(Icon, { size: 32 })}
         </div>
         <h3 style={{ fontSize: '1.5rem', marginBottom: '1rem', fontWeight: 'bold' }}>{title}</h3>
         <p className="text-muted" style={{ lineHeight: '1.6' }}>{description}</p>

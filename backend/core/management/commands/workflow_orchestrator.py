@@ -17,7 +17,6 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import subprocess
-import glob
 
 from django.core.management.base import BaseCommand
 from django.conf import settings
@@ -55,6 +54,16 @@ class WorkflowOrchestrator:
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
         self.ordenes_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Logging de configuración inicial
+        self.logger.info("="*80)
+        self.logger.info("CONFIGURACIÓN INICIAL DEL ORQUESTADOR")
+        self.logger.info("="*80)
+        self.logger.info(f"Directorio base: {self.base_dir}")
+        self.logger.info(f"Directorio de descargas: {self.downloads_dir}")
+        self.logger.info(f"Directorio de órdenes: {self.ordenes_dir}")
+        self.logger.info(f"Directorio de logs: {self.logs_dir}")
+        self.logger.info("="*80)
         
         # Estadísticas
         self.stats = {
@@ -109,13 +118,14 @@ class WorkflowOrchestrator:
         
         return logger
     
-    def _get_latest_file(self, directory, pattern):
+    def _get_latest_file(self, directory, pattern, recursive=False):
         """
         Obtiene el archivo más reciente que coincida con el patrón
         
         Args:
             directory: Directorio donde buscar
             pattern: Patrón de búsqueda (glob)
+            recursive: Si True, busca recursivamente en subdirectorios
         
         Returns:
             Path del archivo más reciente o None
@@ -124,7 +134,12 @@ class WorkflowOrchestrator:
         if not dir_path.exists():
             return None
         
-        files = list(dir_path.glob(pattern))
+        # Buscar archivos (recursivamente si se especifica)
+        if recursive:
+            files = list(dir_path.rglob(pattern))
+        else:
+            files = list(dir_path.glob(pattern))
+        
         if not files:
             return None
         
@@ -179,33 +194,84 @@ class WorkflowOrchestrator:
         self.logger.error(f"   ❌ Timeout: No se detectó ningún archivo nuevo en {timeout}s")
         return None
     
+    def _get_manage_py_path(self):
+        """
+        Obtiene la ruta absoluta a manage.py
+        
+        Returns:
+            Path: Ruta absoluta a manage.py
+        
+        Raises:
+            FileNotFoundError: Si no se encuentra manage.py
+        """
+        # Buscar manage.py desde el directorio base
+        manage_py = self.base_dir / 'manage.py'
+        
+        if manage_py.exists():
+            return manage_py
+        
+        # Si no se encuentra, intentar desde el directorio actual
+        current = Path.cwd()
+        manage_py = current / 'manage.py'
+        if manage_py.exists():
+            return manage_py
+        
+        # Si aún no se encuentra, buscar en el directorio padre
+        manage_py = current.parent / 'manage.py'
+        if manage_py.exists():
+            return manage_py
+        
+        # Si no se encuentra en ningún lugar, lanzar error
+        raise FileNotFoundError(
+            f"No se encontró manage.py. Buscado en:\n"
+            f"  - {self.base_dir / 'manage.py'}\n"
+            f"  - {current / 'manage.py'}\n"
+            f"  - {current.parent / 'manage.py'}"
+        )
+    
     def _run_command(self, command, step_name):
         """
         Ejecuta un comando de Django y captura su salida
         
         Args:
-            command: Lista con el comando a ejecutar
+            command: Lista con el comando a ejecutar (sin 'python' ni 'manage.py')
             step_name: Nombre del paso (para logging)
         
         Returns:
             True si el comando se ejecutó exitosamente, False en caso contrario
         """
-        self.logger.info(f"   Ejecutando comando: {' '.join(command)}")
+        # Construir comando completo con ruta absoluta a manage.py
+        manage_py = self._get_manage_py_path()
+        full_command = [sys.executable, str(manage_py)] + command
+        
+        self.logger.info(f"   Ejecutando comando: {' '.join(full_command)}")
+        self.logger.info(f"   Directorio de trabajo: {manage_py.parent}")
         
         try:
             # Ejecutar comando y capturar salida en tiempo real
+            # Usar encoding UTF-8 para evitar problemas con caracteres especiales
             process = subprocess.Popen(
-                command,
+                full_command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
+                text=False,  # No usar text=True, manejar bytes directamente
                 bufsize=1,
-                universal_newlines=True
+                cwd=str(manage_py.parent)  # Ejecutar desde el directorio donde está manage.py
             )
             
-            # Leer salida en tiempo real
-            for line in process.stdout:
-                line = line.rstrip()
+            # Leer salida en tiempo real con encoding UTF-8 y manejo de errores
+            for line_bytes in process.stdout:
+                try:
+                    # Intentar decodificar como UTF-8
+                    line = line_bytes.decode('utf-8', errors='replace').rstrip()
+                except (UnicodeDecodeError, AttributeError):
+                    # Si falla, intentar con latin-1 o ignorar errores
+                    try:
+                        line = line_bytes.decode('latin-1', errors='replace').rstrip()
+                    except:
+                        # Último recurso: ignorar la línea
+                        continue
+                
                 if line:
                     self.logger.info(f"   [{step_name}] {line}")
             
@@ -239,16 +305,13 @@ class WorkflowOrchestrator:
         self.stats['paso1_inicio'] = datetime.now()
         
         try:
-            # Obtener archivos existentes antes de ejecutar
-            initial_files = set(self.downloads_dir.glob('*.xlsx'))
+            # Obtener archivos existentes antes de ejecutar (búsqueda recursiva en subcarpetas)
+            initial_files = set(self.downloads_dir.rglob('*.xlsx'))
             self.logger.info(f"   Archivos existentes antes: {len(initial_files)}")
+            self.logger.info(f"   Buscando en: {self.downloads_dir} (recursivo)")
             
-            # Construir comando
-            command = [
-                'python',
-                'manage.py',
-                'reporterdownloader'
-            ]
+            # Construir comando (sin 'python' ni 'manage.py', ya se agregan en _run_command)
+            command = ['reporterdownloader']
             
             if self.headless:
                 command.append('--headless')
@@ -260,19 +323,27 @@ class WorkflowOrchestrator:
             self.logger.info("   Esperando archivos descargados...")
             time.sleep(10)  # Espera inicial para que se completen las descargas
             
-            # Obtener archivos nuevos
-            current_files = set(self.downloads_dir.glob('*.xlsx'))
+            # Obtener archivos nuevos (búsqueda recursiva)
+            current_files = set(self.downloads_dir.rglob('*.xlsx'))
             new_files = current_files - initial_files
             
-            # Si no hay archivos nuevos, intentar obtener los más recientes
+            # Si no hay archivos nuevos, intentar obtener los más recientes con formato correcto
             if not new_files:
                 self.logger.warning("   ⚠️ No se detectaron archivos nuevos")
-                reporte_base = self._get_latest_file(self.downloads_dir, 'reporte_base_*.xlsx')
-                reporte_actual = self._get_latest_file(self.downloads_dir, 'reporte_actual_*.xlsx')
+                self.logger.info("   Buscando archivos más recientes con formato reporte_*.xlsx...")
                 
-                if reporte_base and reporte_actual:
-                    new_files = {reporte_base, reporte_actual}
-                    self.logger.info(f"   ℹ️ Usando archivos más recientes existentes")
+                # Buscar archivos con el formato correcto: reporte_YYYYMMDD.xlsx
+                latest_report = self._get_latest_file(self.downloads_dir, 'reporte_*.xlsx', recursive=True)
+                
+                if latest_report:
+                    # Verificar que sea reciente (modificado en los últimos 5 minutos)
+                    file_age = time.time() - latest_report.stat().st_mtime
+                    if file_age < 300:  # 5 minutos
+                        new_files = {latest_report}
+                        self.logger.info(f"   ℹ️ Usando archivo más reciente: {latest_report.name}")
+                    else:
+                        self.logger.error(f"   ❌ Archivo encontrado pero es muy antiguo ({file_age:.0f}s)")
+                        return {'exito': False, 'archivos': []}
                 else:
                     self.logger.error("   ❌ No se encontraron archivos de reportes")
                     return {'exito': False, 'archivos': []}
@@ -286,7 +357,7 @@ class WorkflowOrchestrator:
             new_files_list = list(new_files)
             self.logger.info(f"   ✅ Archivos detectados: {len(new_files_list)}")
             for f in new_files_list:
-                self.logger.info(f"      - {f.name}")
+                self.logger.info(f"      - {f.relative_to(self.base_dir)}")
             
             self.stats['paso1_exito'] = True
             self.stats['archivos_descargados'] = [str(f) for f in new_files_list]
@@ -322,11 +393,8 @@ class WorkflowOrchestrator:
             self.logger.info(f"   Archivos CSV existentes antes: {len(initial_files)}")
             
             # Construir comando (sin argumentos, buscará automáticamente)
-            command = [
-                'python',
-                'manage.py',
-                'reportcomparer'
-            ]
+            # reportcomparer busca automáticamente en results/downloads/ con subcarpetas por mes
+            command = ['reportcomparer']
             
             # Ejecutar comando
             success = self._run_command(command, "PASO2")
@@ -335,7 +403,7 @@ class WorkflowOrchestrator:
                 self.logger.error("   ❌ reportcomparer falló")
                 return {'exito': False, 'csv_path': None}
             
-            # Esperar a que aparezca el CSV
+            # Esperar a que aparezca el CSV (dar tiempo suficiente para escritura)
             self.logger.info("   Esperando generación de CSV...")
             time.sleep(5)
             
@@ -344,9 +412,17 @@ class WorkflowOrchestrator:
             
             if not csv_file:
                 self.logger.error("   ❌ No se encontró el CSV generado")
+                self.logger.error(f"   Buscado en: {self.ordenes_dir}")
                 return {'exito': False, 'csv_path': None}
             
+            # Verificar que el CSV sea reciente (generado en los últimos 2 minutos)
+            file_age = time.time() - csv_file.stat().st_mtime
+            if file_age > 120:
+                self.logger.warning(f"   ⚠️ CSV encontrado pero es antiguo ({file_age:.0f}s)")
+                self.logger.warning("   Puede ser un archivo de una ejecución anterior")
+            
             self.logger.info(f"   ✅ CSV generado: {csv_file.name}")
+            self.logger.info(f"   Ruta completa: {csv_file}")
             
             self.stats['paso2_exito'] = True
             self.stats['csv_generado'] = str(csv_file)
@@ -380,13 +456,24 @@ class WorkflowOrchestrator:
         self.stats['paso3_inicio'] = datetime.now()
         
         try:
+            # Verificar que el archivo CSV existe
+            csv_file = Path(csv_path)
+            if not csv_file.exists():
+                self.logger.error(f"   ❌ El archivo CSV no existe: {csv_path}")
+                return {'exito': False}
+            
+            # Convertir a ruta absoluta si es relativa
+            if not csv_file.is_absolute():
+                csv_file = self.base_dir / csv_path
+                if not csv_file.exists():
+                    self.logger.error(f"   ❌ El archivo CSV no existe en ruta absoluta: {csv_file}")
+                    return {'exito': False}
+            
+            self.logger.info(f"   Archivo CSV a procesar: {csv_file}")
+            self.logger.info(f"   Tamaño del archivo: {csv_file.stat().st_size:,} bytes")
+            
             # Construir comando
-            command = [
-                'python',
-                'manage.py',
-                'reporter',
-                '--excel', csv_path
-            ]
+            command = ['reporter', '--excel', str(csv_file)]
             
             if self.headless:
                 command.append('--headless')
@@ -420,6 +507,18 @@ class WorkflowOrchestrator:
         self.logger.info("="*80)
         self.logger.info(f"Modo headless: {self.headless}")
         self.logger.info(f"Tiempo máximo por paso: {self.max_wait_time}s")
+        
+        # Validar que manage.py existe antes de comenzar
+        try:
+            manage_py = self._get_manage_py_path()
+            self.logger.info(f"manage.py encontrado: {manage_py}")
+        except FileNotFoundError as e:
+            self.logger.error("="*80)
+            self.logger.error("❌ ERROR: No se encontró manage.py")
+            self.logger.error("="*80)
+            self.logger.error(str(e))
+            return False
+        
         self.logger.info("="*80)
         
         self.stats['inicio'] = datetime.now()

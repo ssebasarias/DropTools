@@ -1,18 +1,30 @@
 import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Zap, Mail, Lock, ArrowRight } from 'lucide-react';
+import { Zap, Mail, Lock, ArrowRight, AlertCircle } from 'lucide-react';
 
 import PublicNavbar from '../../components/layout/PublicNavbar';
+import { login as apiLogin } from '../../services/authService';
 
 const Login = () => {
     const navigate = useNavigate();
     const [credentials, setCredentials] = useState({ email: '', password: '' });
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
-        // Placeholder for future functionality
-        console.log('Login attempt:', credentials);
-        navigate('/user/dashboard');
+        setError('');
+        setLoading(true);
+        try {
+            const res = await apiLogin(credentials.email, credentials.password);
+            const user = res?.user;
+            if (user?.is_admin) navigate('/admin', { replace: true });
+            else navigate('/user/reporter-setup', { replace: true });
+        } catch (err) {
+            setError(err.message || 'Error al iniciar sesión');
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -28,6 +40,24 @@ const Login = () => {
                         <p className="text-muted">Sign in to access your dashboard</p>
                     </div>
 
+                    {error && (
+                        <div style={{
+                            padding: '12px 16px',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            borderRadius: '8px',
+                            marginBottom: '1.5rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            color: '#ef4444',
+                            fontSize: '0.875rem'
+                        }}>
+                            <AlertCircle size={18} />
+                            <span>{error}</span>
+                        </div>
+                    )}
+
                     <form onSubmit={handleSubmit}>
                         <div className="form-group">
                             <label className="form-label">Email Address</label>
@@ -40,6 +70,7 @@ const Login = () => {
                                     placeholder="name@company.com"
                                     value={credentials.email}
                                     onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
+                                    disabled={loading}
                                     required
                                 />
                             </div>
@@ -56,6 +87,7 @@ const Login = () => {
                                     placeholder="••••••••"
                                     value={credentials.password}
                                     onChange={(e) => setCredentials({ ...credentials, password: e.target.value })}
+                                    disabled={loading}
                                     required
                                 />
                             </div>
@@ -69,8 +101,21 @@ const Login = () => {
                             <a href="#" style={{ color: 'var(--primary)', textDecoration: 'none' }}>Forgot password?</a>
                         </div>
 
-                        <button type="submit" className="btn-primary" style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}>
-                            Sign In <ArrowRight size={18} />
+                        <button
+                            type="submit"
+                            className="btn-primary"
+                            style={{
+                                width: '100%',
+                                display: 'flex',
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                opacity: loading ? 0.7 : 1,
+                                cursor: loading ? 'not-allowed' : 'pointer'
+                            }}
+                            disabled={loading}
+                        >
+                            {loading ? 'Iniciando...' : 'Sign In'} {!loading && <ArrowRight size={18} />}
                         </button>
                     </form>
 

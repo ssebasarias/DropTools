@@ -101,7 +101,7 @@ const UnifiedWorkerCard = ({ id, name, icon: Icon, logs = {}, displayParams, act
                         background: `${color}20`,
                         color: color
                     }}>
-                        <Icon size={20} />
+                        {React.createElement(Icon, { size: 20 })}
                     </div>
                     <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#e2e8f0', fontWeight: 600 }}>{name}</h3>
                 </div>

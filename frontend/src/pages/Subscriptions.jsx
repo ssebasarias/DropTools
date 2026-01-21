@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { Check, X, Zap, Crown, Rocket, Star } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Check, X, Shield, Medal, Trophy, Crown } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { getAuthUser } from '../services/authService';
 
-const PlanCard = ({ plan, billingCycle }) => {
-    const isPremium = plan.name === 'Dahell Elite';
+const PlanCard = ({ plan, billingCycle, onSelect }) => {
+    const isPremium = plan.tier === 'PLATINUM';
 
     return (
         <div className={`glass-card ${isPremium ? 'premium-glow' : ''}`} style={{
@@ -118,6 +120,7 @@ const PlanCard = ({ plan, billingCycle }) => {
                     cursor: 'pointer',
                     transition: 'all 0.2s'
                 }}
+                onClick={() => onSelect(plan)}
             >
                 {plan.cta}
             </button>
@@ -127,66 +130,86 @@ const PlanCard = ({ plan, billingCycle }) => {
 
 const Subscriptions = () => {
     const [billingCycle, setBillingCycle] = useState('monthly'); // 'monthly' | 'yearly'
+    const navigate = useNavigate();
+    const location = useLocation();
+    const user = getAuthUser();
 
-    const plans = [
+    const plans = useMemo(() => ([
         {
-            name: 'Scout',
-            description: 'Automate your daily reporting tasks efficiently.',
+            tier: 'BRONZE',
+            name: 'Bronze',
+            description: 'Acceso a Reporter y automatización básica.',
             priceMonthly: 29,
             priceYearly: 24,
-            icon: Rocket,
-            color: '#10b981', // Emerald
-            colorRgb: '16, 185, 129',
-            cta: 'Start Free Trial',
+            icon: Medal,
+            color: '#b45309', // amber-700
+            colorRgb: '180, 83, 9',
+            cta: 'Comprar Bronze (próximamente)',
             features: [
-                { name: 'Automated Reporter (CAS)', included: true },
-                { name: 'Basic Sales Reports (Current Day)', included: true },
-                { name: 'Community Support', included: true },
-                { name: 'Historical Analysis', included: false },
-                { name: 'Winner Products Dashboard', included: false },
-                { name: 'Chatbot Assistant', included: false },
-                { name: 'CAS Supplement Generator', included: false },
-            ]
+                { name: 'Generación de reportes (Reporter/Orchestrator)', included: true },
+                { name: 'Gestión de cuentas worker (DropiAccount)', included: true },
+                { name: 'Análisis de reportes', included: false },
+                { name: 'Winner products', included: false },
+                { name: 'Análisis de mercado + creativos (próximo)', included: false },
+            ],
         },
         {
-            name: 'Operator',
-            description: 'Deep data analysis and historical insights.',
+            tier: 'SILVER',
+            name: 'Silver',
+            description: 'Incluye análisis de reportes (AnalystReporter).',
             priceMonthly: 79,
             priceYearly: 65,
-            icon: Zap,
-            color: '#f59e0b', // Amber
-            colorRgb: '245, 158, 11',
-            cta: 'Get Started',
+            icon: Shield,
+            color: '#94a3b8',
+            colorRgb: '148, 163, 184',
+            cta: 'Comprar Silver (próximamente)',
             features: [
-                { name: 'Automated Reporter (CAS)', included: true },
-                { name: 'Full Sales Reports (Historical)', included: true },
-                { name: 'Historical Analysis', included: true },
-                { name: 'Priority Email Support', included: true },
-                { name: 'Winner Products Dashboard', included: false },
-                { name: 'Chatbot Assistant', included: false },
-                { name: 'CAS Supplement Generator', included: false },
-            ]
+                { name: 'Generación de reportes (Reporter/Orchestrator)', included: true },
+                { name: 'Análisis de reportes', included: true },
+                { name: 'Winner products', included: false },
+                { name: 'Análisis de mercado + creativos (próximo)', included: false },
+            ],
         },
         {
-            name: 'Dahell Elite',
-            description: 'Access the jewel of our platform: Winner Products.',
+            tier: 'GOLD',
+            name: 'Gold',
+            description: 'Desbloquea Winner Products.',
             priceMonthly: 149,
             priceYearly: 124,
-            icon: Crown,
-            color: '#6366f1', // Indigo (Primary)
-            colorRgb: '99, 102, 241',
-            cta: 'Upgrade to Elite',
+            icon: Trophy,
+            color: '#f59e0b',
+            colorRgb: '245, 158, 11',
+            cta: 'Comprar Gold (próximamente)',
             features: [
-                { name: 'Winner Products Dashboard', included: true },
-                { name: 'Automated Reporter (CAS)', included: true },
-                { name: 'Full Sales Reports (Historical)', included: true },
-                { name: 'Historical Analysis', included: true },
-                { name: 'Chatbot Assistant', included: true },
-                { name: 'CAS Supplement Generator', included: true },
-                { name: '24/7 Dedicated Support', included: true },
-            ]
-        }
-    ];
+                { name: 'Generación de reportes (Reporter/Orchestrator)', included: true },
+                { name: 'Análisis de reportes', included: true },
+                { name: 'Winner products', included: true },
+                { name: 'Análisis de mercado + creativos (próximo)', included: false },
+            ],
+        },
+        {
+            tier: 'PLATINUM',
+            name: 'Platinum',
+            description: 'Incluye Winner Products + Market Intelligence (próximo).',
+            priceMonthly: 249,
+            priceYearly: 199,
+            icon: Crown,
+            color: '#6366f1',
+            colorRgb: '99, 102, 241',
+            cta: 'Comprar Platinum (próximamente)',
+            features: [
+                { name: 'Generación de reportes (Reporter/Orchestrator)', included: true },
+                { name: 'Análisis de reportes', included: true },
+                { name: 'Winner products', included: true },
+                { name: 'Análisis de mercado + creativos (próximo)', included: true },
+            ],
+        },
+    ]), []);
+
+    const selectedPlan = useMemo(() => {
+        const params = new URLSearchParams(location.search);
+        return (params.get('plan') || '').toUpperCase();
+    }, [location.search]);
 
     return (
         <div style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
@@ -195,8 +218,23 @@ const Subscriptions = () => {
                     Choose Your Plan
                 </h1>
                 <p className="text-muted" style={{ fontSize: '1.1rem', maxWidth: '600px', margin: '0 auto' }}>
-                    Unlock the full potential of your dropshipping business with our advanced automation tools.
+                    Planes por suscripción. El pago aún no está habilitado, pero ya puedes ver qué desbloquea cada tier.
                 </p>
+                {user && !user.is_admin && (
+                    <p className="text-muted" style={{ marginTop: '1rem' }}>
+                        Tu estado actual: <strong>{user.subscription_tier || 'BRONZE'}</strong> ·{' '}
+                        {user.subscription_active ? (
+                            <span style={{ color: 'var(--success)' }}>ACTIVA</span>
+                        ) : (
+                            <span style={{ color: 'var(--warning)' }}>INACTIVA (trial)</span>
+                        )}
+                    </p>
+                )}
+                {selectedPlan && (
+                    <div className="glass-panel" style={{ marginTop: '1.5rem', padding: '1rem' }}>
+                        <strong>Compra no disponible aún.</strong> Plan seleccionado: <strong>{selectedPlan}</strong>. Aquí luego irá el checkout.
+                    </div>
+                )}
 
                 {/* Billing Toggle */}
                 <div style={{
@@ -251,7 +289,12 @@ const Subscriptions = () => {
                 alignItems: 'start'
             }}>
                 {plans.map((plan, index) => (
-                    <PlanCard key={index} plan={plan} billingCycle={billingCycle} />
+                    <PlanCard
+                        key={index}
+                        plan={plan}
+                        billingCycle={billingCycle}
+                        onSelect={(p) => navigate(`/user/subscriptions?plan=${p.tier}`)}
+                    />
                 ))}
             </div>
 

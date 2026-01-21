@@ -1,9 +1,21 @@
+import { API_BASE_URL } from '../config/constants';
+import { getToken } from './authService';
+
 // URL Base del Backend
-const API_URL = 'http://localhost:8000/api';
+const API_URL = API_BASE_URL;
+
+export const authFetch = async (url, options = {}) => {
+    const token = getToken();
+    const headers = {
+        ...(options.headers || {}),
+    };
+    if (token) headers['Authorization'] = `Token ${token}`;
+    return fetch(url, { ...options, headers });
+};
 
 export const fetchDashboardStats = async () => {
     try {
-        const response = await fetch(`${API_URL}/dashboard/stats/`);
+        const response = await authFetch(`${API_URL}/dashboard/stats/`);
         if (!response.ok) throw new Error('Network response was not ok');
         return await response.json();
     } catch (error) {
@@ -15,7 +27,7 @@ export const fetchDashboardStats = async () => {
 export const fetchGoldMine = async (params = {}) => {
     try {
         const query = new URLSearchParams(params).toString();
-        const response = await fetch(`${API_URL}/gold-mine/?${query}`);
+        const response = await authFetch(`${API_URL}/gold-mine/?${query}`);
         if (!response.ok) throw new Error('Network response was not ok');
         return await response.json();
     } catch (error) {
@@ -27,7 +39,7 @@ export const fetchGoldMine = async (params = {}) => {
 export const fetchGoldMineStats = async (params = {}) => {
     try {
         const query = new URLSearchParams(params).toString();
-        const response = await fetch(`${API_URL}/gold-mine/stats/?${query}`);
+        const response = await authFetch(`${API_URL}/gold-mine/stats/?${query}`);
         if (!response.ok) throw new Error('Network response was not ok');
         return await response.json();
     } catch (error) {
@@ -41,7 +53,7 @@ export const searchVisualGoldMine = async (imageFile) => {
         const formData = new FormData();
         formData.append('image', imageFile);
 
-        const response = await fetch(`${API_URL}/gold-mine/`, {
+        const response = await authFetch(`${API_URL}/gold-mine/`, {
             method: 'POST',
             body: formData,
         });
@@ -56,7 +68,7 @@ export const searchVisualGoldMine = async (imageFile) => {
 
 export const fetchCategories = async () => {
     try {
-        const response = await fetch(`${API_URL}/categories/`);
+        const response = await authFetch(`${API_URL}/categories/`);
         if (!response.ok) throw new Error('Network response was not ok');
         return await response.json();
     } catch (error) {
@@ -67,17 +79,17 @@ export const fetchCategories = async () => {
 
 export const fetchSystemLogs = async () => {
     try {
-        const response = await fetch(`${API_URL}/system-logs/`);
+        const response = await authFetch(`${API_URL}/system-logs/`);
         if (!response.ok) throw new Error('Network response was not ok');
         return await response.json();
-    } catch (error) {
+    } catch {
         return []; // Return empty on error to avoid crashing UI
     }
 };
 
 export const fetchContainerStats = async () => {
     try {
-        const response = await fetch(`${API_URL}/control/stats/`);
+        const response = await authFetch(`${API_URL}/control/stats/`);
         if (!response.ok) throw new Error('Stats fetch failed');
         return await response.json();
     } catch (error) {
@@ -88,7 +100,7 @@ export const fetchContainerStats = async () => {
 
 export const controlContainer = async (service, action) => {
     try {
-        const response = await fetch(`${API_URL}/control/container/${service}/${action}/`, {
+        const response = await authFetch(`${API_URL}/control/container/${service}/${action}/`, {
             method: 'POST'
         });
         const data = await response.json();
@@ -98,4 +110,38 @@ export const controlContainer = async (service, action) => {
         console.error(`Error controlling ${service}:`, error);
         throw error;
     }
+};
+
+// -----------------------------
+// Dropi Accounts (múltiples cuentas secundarias)
+// -----------------------------
+
+export const fetchDropiAccounts = async () => {
+    const response = await authFetch(`${API_URL}/dropi/accounts/`, {
+        headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'No se pudieron cargar las cuentas Dropi');
+    return data.accounts || [];
+};
+
+export const createDropiAccount = async ({ label, email, password, is_default }) => {
+    const response = await authFetch(`${API_URL}/dropi/accounts/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, email, password, is_default })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'No se pudo crear la cuenta Dropi');
+    return data.account;
+};
+
+export const setDefaultDropiAccount = async (accountId) => {
+    const response = await authFetch(`${API_URL}/dropi/accounts/${accountId}/default/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'No se pudo marcar como default');
+    return true;
 };

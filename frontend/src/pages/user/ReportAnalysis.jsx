@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import { Download, Calendar, DollarSign, CheckCircle, XCircle, Clock, Mail, Key } from 'lucide-react';
+import SubscriptionGate from '../../components/common/SubscriptionGate';
 
 const ReportAnalysis = () => {
     const [downloadConfig, setDownloadConfig] = useState({
@@ -18,6 +19,7 @@ const ReportAnalysis = () => {
     ];
 
     return (
+        <SubscriptionGate minTier="SILVER" title="Report Analysis (requiere SILVER)">
         <div style={{ padding: '2rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
                 <div>
@@ -157,6 +159,7 @@ const ReportAnalysis = () => {
                 </div>
             </div>
         </div>
+        </SubscriptionGate>
     );
 };
 

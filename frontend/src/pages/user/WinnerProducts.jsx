@@ -1,5 +1,6 @@
 import React from 'react';
 import { Star, ShoppingCart, TrendingUp, ExternalLink } from 'lucide-react';
+import SubscriptionGate from '../../components/common/SubscriptionGate';
 
 const ProductCard = ({ product }) => (
     <div className="glass-card product-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%' }}>
@@ -42,18 +43,20 @@ const WinnerProducts = () => {
     }));
 
     return (
-        <div style={{ padding: '2rem' }}>
-            <div style={{ marginBottom: '2rem' }}>
-                <h1>Winner Products</h1>
-                <p className="text-muted">Curated list of high-potential products for your store.</p>
-            </div>
+        <SubscriptionGate minTier="GOLD" title="Winner Products (requiere GOLD)">
+            <div style={{ padding: '2rem' }}>
+                <div style={{ marginBottom: '2rem' }}>
+                    <h1>Winner Products</h1>
+                    <p className="text-muted">Curated list of high-potential products for your store.</p>
+                </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.5rem' }}>
-                {products.map(p => (
-                    <ProductCard key={p.id} product={p} />
-                ))}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.5rem' }}>
+                    {products.map(p => (
+                        <ProductCard key={p.id} product={p} />
+                    ))}
+                </div>
             </div>
-        </div>
+        </SubscriptionGate>
     );
 };
 

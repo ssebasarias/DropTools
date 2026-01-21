@@ -1,14 +1,32 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.authtoken.models import Token
+from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
 from django.db.models import Avg, Count, Q
-from .models import Product, UniqueProductCluster, ProductEmbedding, Warehouse, Category, ProductClusterMembership, AIFeedback, ClusterDecisionLog
+from .models import (
+    Product,
+    UniqueProductCluster,
+    ProductEmbedding,
+    Warehouse,
+    Category,
+    ProductClusterMembership,
+    AIFeedback,
+    ClusterDecisionLog,
+    UserProfile,
+    DropiAccount,
+)
+from .permissions import IsAdminRole, MinSubscriptionTier
 from datetime import datetime, timedelta
 import pathlib
 import json
 from .docker_utils import get_container_stats, control_container
 
 class DashboardStatsView(APIView):
+    permission_classes = [IsAdminRole]
     def get(self, request):
         """
         Centro de Comando EstratÃ©gico (V2).
@@ -107,9 +125,10 @@ class DashboardStatsView(APIView):
         })
 
 from django.db import connection
-from .ai_utils import get_image_embedding
+# from .ai_utils import get_image_embedding
 
 class GoldMineView(APIView):
+    permission_classes = [IsAdminRole]
     def post(self, request):
         """BÃºsqueda Visual (Reverse Image Search)"""
         if 'image' not in request.FILES:
@@ -118,6 +137,7 @@ class GoldMineView(APIView):
         uploaded_file = request.FILES['image']
         
         # 1. Vectorizar imagen llegada
+        from .ai_utils import get_image_embedding
         vector = get_image_embedding(uploaded_file)
         if not vector:
              return Response({"error": "Failed to process image"}, status=500)
@@ -247,6 +267,7 @@ class GoldMineView(APIView):
         return Response(data)
 
 class GoldMineStatsView(APIView):
+    permission_classes = [IsAdminRole]
     def get(self, request):
         """Retorna estadÃ­sticas globales de distribuciÃ³n de competidores"""
         
@@ -280,6 +301,7 @@ class GoldMineStatsView(APIView):
 from django.utils import timezone
 
 class ClusterLabStatsView(APIView):
+    permission_classes = [IsAdminRole]
     """
     MÃ©tricas para el Sidebar del Cluster Lab (XP y Progreso).
     """
@@ -318,6 +340,7 @@ class ClusterLabStatsView(APIView):
             return Response({"error": str(e)}, status=500)
 
 class ClusterAuditView(APIView):
+    permission_classes = [IsAdminRole]
     """
     API para el 'Cluster Lab'.
     1. GET: Retorna los Ãºltimos logs de decisiÃ³n del Clusterizer (Persistent DB).
@@ -361,6 +384,7 @@ class ClusterAuditView(APIView):
             return Response({"error": str(e)}, status=500)
 
 class ClusterOrphansView(APIView):
+    permission_classes = [IsAdminRole]
     """
     Retorna productos que estÃ¡n en clusters 'SINGLETON' (solitarios)
     para auditar por quÃ© no se unieron.
@@ -464,6 +488,7 @@ class ClusterOrphansView(APIView):
 
 
 class CategoriesView(APIView):
+    permission_classes = [IsAdminRole]
     def get(self, request):
         """Listar todas las categorÃ­as disponibles"""
         cats = Category.objects.all().order_by('name')
@@ -475,6 +500,7 @@ from .docker_utils import get_container_stats, control_container, get_docker_log
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class SystemLogsView(APIView):
+    permission_classes = [IsAdminRole]
     def get(self, request):
         """
         Retorna logs directamente desde Docker (Paralelizado).
@@ -513,6 +539,7 @@ class SystemLogsView(APIView):
         return Response(results)
 
 class ClusterFeedbackView(APIView):
+    permission_classes = [IsAdminRole]
     def post(self, request):
         """
         Guarda el feedback del usuario sobre una decisiÃ³n de clustering (RICHER DATA).
@@ -545,6 +572,7 @@ class ClusterFeedbackView(APIView):
             return Response({"error": str(e)}, status=500)
 
 class ContainerStatsView(APIView):
+    permission_classes = [IsAdminRole]
     def get(self, request):
         """
         Retorna estado robusto de los contenedores (CPU, RAM, Status).
@@ -568,6 +596,7 @@ class ContainerStatsView(APIView):
         return Response(data)
 
 class ContainerControlView(APIView):
+    permission_classes = [IsAdminRole]
     def post(self, request, service, action):
         """
         Controla encendido/apagado de servicios.
@@ -605,6 +634,7 @@ class ContainerControlView(APIView):
 
 
 class ClusterOrphanActionView(APIView):
+    permission_classes = [IsAdminRole]
     def post(self, request):
         """
         Ejecuta acciones reales sobre el Investigador de Diamantes.
@@ -675,3 +705,292 @@ class ClusterOrphanActionView(APIView):
         except Exception as e:
             print(f"Error executing orphan action: {str(e)}")
             return Response({"error": str(e)}, status=500)
+
+
+from django.contrib.auth.models import User
+
+class ReporterConfigView(APIView):
+    """
+    Gestiona la configuración del Reporter (Credenciales de Dropi).
+    """
+    def get(self, request):
+        # Require authentication (no insecure fallbacks)
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # Obtener o crear perfil
+        try:
+            profile = user.profile
+        except Exception: # UserProfile.DoesNotExist might not be available if import failed previously
+            try:
+                profile = UserProfile.objects.create(user=user)
+            except Exception as e:
+                # Si UserProfile no está importado? (imported from .models above)
+                from .models import UserProfile
+                profile, _ = UserProfile.objects.get_or_create(user=user)
+
+        return Response({
+            "email": profile.dropi_email or "",
+            # Never return secrets to the frontend; configuration is managed via DropiAccounts API.
+            "password": "",
+            "executionTime": "08:00" # Placeholder, no persistido aún
+        })
+
+    def post(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+             
+        try:
+            from .models import UserProfile
+            profile, created = UserProfile.objects.get_or_create(user=user)
+            
+            profile.dropi_email = request.data.get('email')
+            profile.dropi_password = request.data.get('password')
+            profile.save()
+            
+            return Response({"status": "success", "message": "Credentials updated"})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+# =============================================================================
+# AUTH API (Login real contra BD)
+# =============================================================================
+
+class AuthLoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        password = request.data.get("password")
+        if not email or not password:
+            return Response({"error": "email y password son requeridos"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Permitimos login por email o username
+        user_obj = User.objects.filter(email=email).first() or User.objects.filter(username=email).first()
+        if not user_obj:
+            return Response({"error": "Credenciales inválidas"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        user = authenticate(username=user_obj.username, password=password)
+        if not user:
+            return Response({"error": "Credenciales inválidas"}, status=status.HTTP_401_UNAUTHORIZED)
+        if not user.is_active:
+            return Response({"error": "Usuario inactivo"}, status=status.HTTP_403_FORBIDDEN)
+
+        token, _ = Token.objects.get_or_create(user=user)
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+
+        return Response(
+            {
+                "token": token.key,
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "role": profile.role,
+                    "subscription_tier": getattr(profile, "subscription_tier", "BRONZE"),
+                    "subscription_active": bool(getattr(profile, "subscription_active", False)),
+                    "full_name": profile.full_name,
+                    "is_admin": bool(profile.role == "ADMIN"),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AuthRegisterView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        Registro público:
+        - Crea User + UserProfile (CLIENT + BRONZE por defecto)
+        - Devuelve token para auto-login
+        """
+        full_name = (request.data.get("full_name") or request.data.get("name") or "").strip()
+        email = (request.data.get("email") or "").strip().lower()
+        password = request.data.get("password") or ""
+
+        if not email or not password:
+            return Response({"error": "email y password son requeridos"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(email=email).exists() or User.objects.filter(username=email).exists():
+            return Response({"error": "Este email ya está registrado"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Use email as username (simple + consistent)
+        user = User.objects.create_user(username=email, email=email, password=password)
+        user.is_active = True
+        user.save()
+
+        profile = UserProfile.objects.create(
+            user=user,
+            full_name=full_name,
+            role=UserProfile.ROLE_CLIENT,
+            subscription_tier=getattr(UserProfile, "TIER_BRONZE", "BRONZE"),
+            subscription_active=False,
+        )
+
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response(
+            {
+                "token": token.key,
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "role": profile.role,
+                    "subscription_tier": getattr(profile, "subscription_tier", "BRONZE"),
+                    "subscription_active": bool(getattr(profile, "subscription_active", False)),
+                    "full_name": profile.full_name,
+                    "is_admin": bool(profile.role == "ADMIN"),
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AuthMeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        return Response(
+            {
+                "user": {
+                    "id": request.user.id,
+                    "username": request.user.username,
+                    "email": request.user.email,
+                    "role": profile.role,
+                    "subscription_tier": getattr(profile, "subscription_tier", "BRONZE"),
+                    "subscription_active": bool(getattr(profile, "subscription_active", False)),
+                    "full_name": profile.full_name,
+                    "is_admin": bool(profile.role == "ADMIN"),
+                }
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# =============================================================================
+# ADMIN: Users & Subscriptions management (no payments)
+# =============================================================================
+
+
+class AdminUsersView(APIView):
+    permission_classes = [IsAdminRole]
+
+    def get(self, request):
+        users = User.objects.all().order_by("id")
+        rows = []
+        for u in users:
+            p, _ = UserProfile.objects.get_or_create(user=u)
+            rows.append(
+                {
+                    "id": u.id,
+                    "email": u.email,
+                    "username": u.username,
+                    "is_active": u.is_active,
+                    "profile": {
+                        "full_name": p.full_name,
+                        "role": p.role,
+                        "subscription_tier": getattr(p, "subscription_tier", "BRONZE"),
+                        "subscription_active": bool(getattr(p, "subscription_active", False)),
+                    },
+                }
+            )
+        return Response({"users": rows}, status=status.HTTP_200_OK)
+
+
+class AdminSetUserSubscriptionView(APIView):
+    permission_classes = [IsAdminRole]
+
+    def post(self, request, user_id: int):
+        target = User.objects.filter(id=user_id).first()
+        if not target:
+            return Response({"error": "Usuario no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+
+        tier = (request.data.get("subscription_tier") or "").upper().strip()
+        active = request.data.get("subscription_active")
+
+        valid_tiers = {"BRONZE", "SILVER", "GOLD", "PLATINUM"}
+        if tier and tier not in valid_tiers:
+            return Response({"error": "Tier inválido"}, status=status.HTTP_400_BAD_REQUEST)
+
+        prof, _ = UserProfile.objects.get_or_create(user=target)
+        if tier:
+            prof.subscription_tier = tier
+        if active is not None:
+            prof.subscription_active = bool(active)
+        prof.save()
+
+        return Response(
+            {
+                "status": "ok",
+                "user_id": target.id,
+                "subscription_tier": getattr(prof, "subscription_tier", "BRONZE"),
+                "subscription_active": bool(getattr(prof, "subscription_active", False)),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+# =============================================================================
+# Dropi Accounts API (múltiples cuentas secundarias por usuario)
+# =============================================================================
+
+class DropiAccountsView(APIView):
+    permission_classes = [MinSubscriptionTier("BRONZE")]
+
+    def get(self, request):
+        accounts = DropiAccount.objects.filter(user=request.user).order_by("-is_default", "id")
+        return Response(
+            {
+                "accounts": [
+                    {
+                        "id": a.id,
+                        "label": a.label,
+                        "email": a.email,
+                        "is_default": a.is_default,
+                    }
+                    for a in accounts
+                ]
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request):
+        label = (request.data.get("label") or "default").strip()
+        email = (request.data.get("email") or "").strip()
+        password = request.data.get("password") or ""
+        is_default = bool(request.data.get("is_default", False))
+
+        if not email or not password:
+            return Response({"error": "email y password son requeridos"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Si se marca default, apagamos los demás
+        if is_default:
+            DropiAccount.objects.filter(user=request.user, is_default=True).update(is_default=False)
+
+        acct = DropiAccount(user=request.user, label=label, email=email, is_default=is_default)
+        acct.set_password_plain(password)
+        acct.save()
+        return Response(
+            {"account": {"id": acct.id, "label": acct.label, "email": acct.email, "is_default": acct.is_default}},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class DropiAccountSetDefaultView(APIView):
+    permission_classes = [MinSubscriptionTier("BRONZE")]
+
+    def post(self, request, account_id: int):
+        acct = DropiAccount.objects.filter(user=request.user, id=account_id).first()
+        if not acct:
+            return Response({"error": "Cuenta no encontrada"}, status=status.HTTP_404_NOT_FOUND)
+
+        DropiAccount.objects.filter(user=request.user, is_default=True).exclude(id=acct.id).update(is_default=False)
+        acct.is_default = True
+        acct.save()
+        return Response({"status": "ok"}, status=status.HTTP_200_OK)

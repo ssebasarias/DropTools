@@ -1,6 +1,5 @@
 import React from 'react';
 import { ArrowRight, Target } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import LazyImage from '../../common/LazyImage';
 import GlassCard from '../../common/GlassCard';
 
