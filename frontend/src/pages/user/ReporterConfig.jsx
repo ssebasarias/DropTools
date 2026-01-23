@@ -1,5 +1,5 @@
-﻿import React, { useEffect, useState } from 'react';
-import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, Play, RefreshCw, FileText, Phone, User, Package } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, XCircle, Play, RefreshCw, FileText, Phone, User, Package } from 'lucide-react';
 import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount, fetchReporterConfig, updateReporterConfig, startReporterWorkflow, fetchReporterStatus, fetchReporterList } from '../../services/api';
 import SubscriptionGate from '../../components/common/SubscriptionGate';
 import { getAuthUser } from '../../services/authService';
@@ -17,6 +17,7 @@ const ReporterConfigInner = () => {
     const [statusLoading, setStatusLoading] = useState(false);
     const [reportsList, setReportsList] = useState([]);
     const [reportsLoading, setReportsLoading] = useState(false);
+    const [workflowProgress, setWorkflowProgress] = useState(null);
 
     const [form, setForm] = useState({
         label: 'reporter',
@@ -43,27 +44,30 @@ const ReporterConfigInner = () => {
         }
     };
 
-    const loadStatus = async () => {
-        setStatusLoading(true);
+    const loadStatus = async (silent = false) => {
+        if (!silent) setStatusLoading(true);
         try {
             const statusData = await fetchReporterStatus();
             setStatus(statusData);
+            if (statusData?.workflow_progress) {
+                setWorkflowProgress(statusData.workflow_progress);
+            }
         } catch (e) {
             console.error('Error cargando estado:', e);
         } finally {
-            setStatusLoading(false);
+            if (!silent) setStatusLoading(false);
         }
     };
 
-    const loadReportsList = async () => {
-        setReportsLoading(true);
+    const loadReportsList = async (silent = false) => {
+        if (!silent) setReportsLoading(true);
         try {
             const data = await fetchReporterList(1, 50, 'reportado');
             setReportsList(data.results || []);
         } catch (e) {
             console.error('Error cargando lista de reportes:', e);
         } finally {
-            setReportsLoading(false);
+            if (!silent) setReportsLoading(false);
         }
     };
 
@@ -73,8 +77,8 @@ const ReporterConfigInner = () => {
         try {
             await startReporterWorkflow();
             setTimeout(() => {
-                loadStatus();
-                loadReportsList();
+                loadStatus(true);
+                loadReportsList(true);
             }, 2000);
         } catch (e) {
             setError(e.message || 'Error al iniciar workflow');
@@ -89,19 +93,31 @@ const ReporterConfigInner = () => {
         loadReportsList();
     }, []);
 
-    // Auto-refresh status every 10 seconds
+    // Auto-refresh status every 3 seconds when workflow is running
     useEffect(() => {
-        const interval = setInterval(() => {
-            loadStatus();
-        }, 10000);
-        return () => clearInterval(interval);
-    }, []);
+        const isWorkflowRunning = workflowProgress &&
+            ['step1_running', 'step2_running', 'step3_running', 'step1_completed', 'step2_completed'].includes(workflowProgress.status);
+
+        if (isWorkflowRunning) {
+            const interval = setInterval(() => {
+                loadStatus(true);
+                loadReportsList(true); // También actualizar lista de reportes cuando el workflow está corriendo
+            }, 3000); // Polling más frecuente cuando está corriendo
+            return () => clearInterval(interval);
+        } else {
+            // Polling normal cuando no está corriendo
+            const interval = setInterval(() => {
+                loadStatus(true);
+            }, 10000);
+            return () => clearInterval(interval);
+        }
+    }, [workflowProgress?.status]);
 
     // Auto-refresh reports list when status updates
     useEffect(() => {
         if (status?.total_reported > 0) {
             const interval = setInterval(() => {
-                loadReportsList();
+                loadReportsList(true);
             }, 5000);
             return () => clearInterval(interval);
         }
@@ -126,17 +142,17 @@ const ReporterConfigInner = () => {
             {/* Primera fila: Instrucciones y Formulario de cuenta */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem' }}>
                 {/* Cuadrado de Instrucciones */}
-                <div className="glass-card" style={{ 
-                    backgroundColor: 'rgba(99, 102, 241, 0.05)', 
+                <div className="glass-card" style={{
+                    backgroundColor: 'rgba(99, 102, 241, 0.05)',
                     borderColor: 'rgba(99, 102, 241, 0.2)',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '1rem'
                 }}>
                     <div style={{ display: 'flex', alignItems: 'start', gap: '1rem' }}>
-                        <div style={{ 
-                            padding: '0.75rem', 
-                            background: 'rgba(99, 102, 241, 0.2)', 
+                        <div style={{
+                            padding: '0.75rem',
+                            background: 'rgba(99, 102, 241, 0.2)',
                             borderRadius: '12px',
                             flexShrink: 0
                         }}>
@@ -148,7 +164,7 @@ const ReporterConfigInner = () => {
                             </h3>
                             <div style={{ fontSize: '0.95rem', lineHeight: '1.7', color: 'var(--text-main)' }}>
                                 <p style={{ marginBottom: '1rem' }}>
-                                    Para garantizar la seguridad de tu cuenta principal y el correcto funcionamiento del reporter, 
+                                    Para garantizar la seguridad de tu cuenta principal y el correcto funcionamiento del reporter,
                                     <strong> crea una cuenta secundaria</strong> en Dropi con permisos restringidos si es posible.
                                 </p>
                                 <p style={{ marginBottom: '1rem' }}>
@@ -172,14 +188,14 @@ const ReporterConfigInner = () => {
                     <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem' }}>Guardar Cuenta Secundaria</h3>
 
                     {error && (
-                        <div style={{ 
-                            marginBottom: '1rem', 
+                        <div style={{
+                            marginBottom: '1rem',
                             padding: '0.75rem 1rem',
                             background: 'rgba(239,68,68,0.1)',
                             border: '1px solid rgba(239,68,68,0.3)',
                             borderRadius: '8px',
-                            color: '#ef4444', 
-                            fontSize: '0.9rem' 
+                            color: '#ef4444',
+                            fontSize: '0.9rem'
                         }}>
                             {error}
                         </div>
@@ -264,13 +280,13 @@ const ReporterConfigInner = () => {
                     <button
                         type="button"
                         className="btn-primary"
-                        style={{ 
+                        style={{
                             width: '100%',
-                            display: 'flex', 
-                            alignItems: 'center', 
+                            display: 'flex',
+                            alignItems: 'center',
                             justifyContent: 'center',
-                            gap: '0.5rem', 
-                            opacity: creating ? 0.7 : 1 
+                            gap: '0.5rem',
+                            opacity: creating ? 0.7 : 1
                         }}
                         disabled={creating || !form.email || !form.password}
                         onClick={async () => {
@@ -314,10 +330,10 @@ const ReporterConfigInner = () => {
                         <button
                             type="button"
                             className="btn-primary"
-                            style={{ 
-                                display: 'flex', 
-                                alignItems: 'center', 
-                                gap: '0.5rem', 
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
                                 opacity: starting ? 0.7 : 1,
                                 padding: '1rem 2rem',
                                 fontSize: '1rem'
@@ -338,20 +354,20 @@ const ReporterConfigInner = () => {
                             )}
                         </button>
                     </div>
-                    
+
                     {/* KPI Contador de Reportes del DÃ­a */}
-                    <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
                         gap: '1rem',
                         padding: '1rem 1.5rem',
                         background: 'rgba(99,102,241,0.1)',
                         borderRadius: '12px',
                         border: '1px solid rgba(99,102,241,0.2)'
                     }}>
-                        <div style={{ 
-                            padding: '0.75rem', 
-                            background: 'rgba(99,102,241,0.2)', 
+                        <div style={{
+                            padding: '0.75rem',
+                            background: 'rgba(99,102,241,0.2)',
                             borderRadius: '10px'
                         }}>
                             <FileText size={24} style={{ color: 'var(--primary)' }} />
@@ -360,9 +376,9 @@ const ReporterConfigInner = () => {
                             <p className="text-muted" style={{ fontSize: '0.85rem', margin: 0, marginBottom: '0.25rem' }}>
                                 Reportes Realizados Hoy
                             </p>
-                            <h2 style={{ 
-                                fontSize: '2.5rem', 
-                                margin: 0, 
+                            <h2 style={{
+                                fontSize: '2.5rem',
+                                margin: 0,
                                 fontWeight: 'bold',
                                 background: 'linear-gradient(135deg, var(--primary), #4f46e5)',
                                 WebkitBackgroundClip: 'text',
@@ -375,13 +391,66 @@ const ReporterConfigInner = () => {
                 </div>
             </div>
 
-            {/* Tercera fila: Panel de Control con Lista de Ã“rdenes */}
+            {/* Panel de Progreso del Workflow */}
+            {workflowProgress && (
+                <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(99,102,241,0.3)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                        <div style={{
+                            padding: '0.75rem',
+                            background: workflowProgress.status === 'completed' ? 'rgba(16,185,129,0.2)' :
+                                workflowProgress.status === 'failed' ? 'rgba(239,68,68,0.2)' :
+                                    'rgba(99,102,241,0.2)',
+                            borderRadius: '12px'
+                        }}>
+                            {workflowProgress.status === 'completed' ? (
+                                <CheckCircle2 size={24} style={{ color: 'var(--success)' }} />
+                            ) : workflowProgress.status === 'failed' ? (
+                                <XCircle size={24} style={{ color: 'var(--danger)' }} />
+                            ) : (
+                                <RefreshCw size={24} className="spinning" style={{ color: 'var(--primary)' }} />
+                            )}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Progreso del Workflow</h3>
+                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0 0 0' }}>
+                                {workflowProgress.current_message || 'Iniciando...'}
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Lista de mensajes de progreso */}
+                    {workflowProgress.messages && workflowProgress.messages.length > 0 && (
+                        <div style={{
+                            marginTop: '1rem',
+                            padding: '1rem',
+                            background: 'rgba(255,255,255,0.03)',
+                            borderRadius: '12px',
+                            maxHeight: '200px',
+                            overflowY: 'auto'
+                        }}>
+                            {workflowProgress.messages.map((msg, idx) => (
+                                <div key={idx} style={{
+                                    padding: '0.5rem 0',
+                                    borderBottom: idx < workflowProgress.messages.length - 1 ? '1px solid var(--glass-border)' : 'none',
+                                    fontSize: '0.9rem',
+                                    color: 'var(--text-main)'
+                                }}>
+                                    <span style={{ marginRight: '0.5rem', color: 'var(--primary)' }}>•</span>
+                                    {msg}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Tercera fila: Panel de Control con Lista de Órdenes */}
             <div className="glass-card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <div>
                         <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Panel de Control</h3>
                         <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0 0 0' }}>
-                            Vista en tiempo real de las Ã³rdenes reportadas exitosamente
+                            Vista en tiempo real de las órdenes reportadas exitosamente
                         </p>
                     </div>
                     <button
@@ -404,8 +473,8 @@ const ReporterConfigInner = () => {
                         <p className="text-muted" style={{ marginTop: '0.5rem' }}>Cargando estado...</p>
                     </div>
                 ) : reportsList.length === 0 ? (
-                    <div style={{ 
-                        textAlign: 'center', 
+                    <div style={{
+                        textAlign: 'center',
                         padding: '3rem',
                         background: 'rgba(255,255,255,0.02)',
                         borderRadius: '12px',
@@ -413,14 +482,14 @@ const ReporterConfigInner = () => {
                     }}>
                         <Package size={48} className="text-muted" style={{ opacity: 0.5, marginBottom: '1rem' }} />
                         <p className="text-muted" style={{ margin: 0 }}>
-                            No hay Ã³rdenes reportadas aÃºn. Presiona "Iniciar a Reportar" para comenzar.
+                            No hay órdenes reportadas aún. Presiona "Iniciar a Reportar" para comenzar.
                         </p>
                     </div>
                 ) : (
-                    <div style={{ 
-                        display: 'grid', 
-                        gap: '1rem', 
-                        maxHeight: '500px', 
+                    <div style={{
+                        display: 'grid',
+                        gap: '1rem',
+                        maxHeight: '500px',
                         overflowY: 'auto',
                         paddingRight: '0.5rem'
                     }}>
@@ -447,25 +516,41 @@ const ReporterConfigInner = () => {
                             >
                                 <div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                                        <div style={{ 
-                                            padding: '0.5rem', 
-                                            background: 'rgba(99,102,241,0.2)', 
+                                        <div style={{
+                                            padding: '0.5rem',
+                                            background: 'rgba(99,102,241,0.2)',
                                             borderRadius: '8px'
                                         }}>
-                                            <Phone size={16} style={{ color: 'var(--primary)' }} />
+                                            <FileText size={16} style={{ color: 'var(--primary)' }} />
                                         </div>
-                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>NÃºmero de GuÃ­a</strong>
+                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Número de Guía</strong>
                                     </div>
                                     <div style={{ marginLeft: '2.5rem', fontSize: '1rem', fontWeight: '600', color: 'var(--text-main)' }}>
-                                        {report.order_phone || report.tracking_number || 'N/A'}
+                                        {report.order_id || 'N/A'}
                                     </div>
                                 </div>
-                                
+
                                 <div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                                        <div style={{ 
-                                            padding: '0.5rem', 
-                                            background: 'rgba(16,185,129,0.2)', 
+                                        <div style={{
+                                            padding: '0.5rem',
+                                            background: 'rgba(236,72,153,0.2)',
+                                            borderRadius: '8px'
+                                        }}>
+                                            <Phone size={16} style={{ color: 'var(--secondary)' }} />
+                                        </div>
+                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Teléfono</strong>
+                                    </div>
+                                    <div style={{ marginLeft: '2.5rem', fontSize: '1rem', color: 'var(--text-main)' }}>
+                                        {report.order_phone || 'N/A'}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                                        <div style={{
+                                            padding: '0.5rem',
+                                            background: 'rgba(16,185,129,0.2)',
                                             borderRadius: '8px'
                                         }}>
                                             <User size={16} style={{ color: 'var(--success)' }} />
@@ -476,57 +561,31 @@ const ReporterConfigInner = () => {
                                         {report.customer_name || 'N/A'}
                                     </div>
                                 </div>
-                                
-                                <div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                                        <div style={{ 
-                                            padding: '0.5rem', 
-                                            background: 'rgba(245,158,11,0.2)', 
-                                            borderRadius: '8px'
-                                        }}>
-                                            <Package size={16} style={{ color: 'var(--warning)' }} />
-                                        </div>
-                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Producto</strong>
-                                    </div>
-                                    <div style={{ 
-                                        marginLeft: '2.5rem', 
-                                        fontSize: '0.9rem', 
-                                        color: 'var(--text-main)',
-                                        maxHeight: '3em',
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        display: '-webkit-box',
-                                        WebkitLineClamp: 2,
-                                        WebkitBoxOrient: 'vertical'
-                                    }}>
-                                        {report.product_name || 'N/A'}
-                                    </div>
-                                </div>
 
                                 <div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                                        <div style={{ 
-                                            padding: '0.5rem', 
-                                            background: 'rgba(236,72,153,0.2)', 
+                                        <div style={{
+                                            padding: '0.5rem',
+                                            background: 'rgba(245,158,11,0.2)',
                                             borderRadius: '8px'
                                         }}>
-                                            <Clock size={16} style={{ color: 'var(--secondary)' }} />
+                                            <Clock size={16} style={{ color: 'var(--warning)' }} />
                                         </div>
-                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>DÃ­as sin Movimiento</strong>
+                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Días sin Movimiento</strong>
                                     </div>
                                     <div style={{ marginLeft: '2.5rem' }}>
-                                        <span style={{ 
-                                            fontSize: '1.1rem', 
+                                        <span style={{
+                                            fontSize: '1.1rem',
                                             fontWeight: 'bold',
                                             color: (report.days_without_movement || 0) > 7 ? 'var(--danger)' : ((report.days_without_movement || 0) > 3 ? 'var(--warning)' : 'var(--success)')
                                         }}>
-                                            {report.days_without_movement || report.days_stuck || 'N/A'} dÃ­as
+                                            {report.days_without_movement || report.days_stuck || 'N/A'} días
                                         </span>
                                     </div>
                                 </div>
 
-                                <div style={{ 
-                                    gridColumn: '1 / -1', 
+                                <div style={{
+                                    gridColumn: '1 / -1',
                                     paddingTop: '1rem',
                                     borderTop: '1px solid var(--glass-border)',
                                     display: 'flex',
@@ -536,7 +595,7 @@ const ReporterConfigInner = () => {
                                     color: 'var(--text-muted)'
                                 }}>
                                     <span>Reportado: {new Date(report.updated_at || report.reported_at || Date.now()).toLocaleString()}</span>
-                                    <span style={{ 
+                                    <span style={{
                                         padding: '0.25rem 0.75rem',
                                         background: 'rgba(16,185,129,0.15)',
                                         borderRadius: '9999px',
@@ -544,7 +603,7 @@ const ReporterConfigInner = () => {
                                         fontSize: '0.75rem',
                                         fontWeight: '600'
                                     }}>
-                                        âœ“ Reportado Exitosamente
+                                        ✓ Reportado Exitosamente
                                     </span>
                                 </div>
                             </div>

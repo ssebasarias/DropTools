@@ -4,6 +4,61 @@ import pgvector.django.vector
 from django.db import migrations
 
 
+def safe_alter_vector_fields(apps, schema_editor):
+    """
+    Función segura para alterar campos vectoriales.
+    Si la columna no existe, la crea. Si existe, la altera.
+    """
+    db_alias = schema_editor.connection.alias
+    
+    # Verificar y alterar campos de category, futureevent, etc. (estos deberían existir)
+    # Solo alteramos los campos que sabemos que existen
+    
+    # Para uniqueproductcluster, verificamos si las columnas existen antes de alterarlas
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='unique_product_clusters' 
+            AND column_name IN ('visual_centroid', 'visual_medoid_1', 'visual_medoid_2', 'visual_medoid_3')
+        """)
+        existing_columns = {row[0] for row in cursor.fetchall()}
+    
+    # Si las columnas no existen, las creamos primero
+    if 'visual_centroid' not in existing_columns:
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute("""
+                ALTER TABLE unique_product_clusters 
+                ADD COLUMN visual_centroid vector(1152);
+            """)
+    
+    if 'visual_medoid_1' not in existing_columns:
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute("""
+                ALTER TABLE unique_product_clusters 
+                ADD COLUMN visual_medoid_1 vector(1152);
+            """)
+    
+    if 'visual_medoid_2' not in existing_columns:
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute("""
+                ALTER TABLE unique_product_clusters 
+                ADD COLUMN visual_medoid_2 vector(1152);
+            """)
+    
+    if 'visual_medoid_3' not in existing_columns:
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute("""
+                ALTER TABLE unique_product_clusters 
+                ADD COLUMN visual_medoid_3 vector(1152);
+            """)
+
+
+def reverse_alter_vector_fields(apps, schema_editor):
+    """Función reversa - no hacemos nada ya que no queremos eliminar columnas"""
+    pass
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -36,6 +91,9 @@ class Migration(migrations.Migration):
             name='embedding_visual',
             field=pgvector.django.vector.VectorField(blank=True, dimensions=1152, null=True),
         ),
+        # Usar RunPython para manejar los campos de uniqueproductcluster de forma segura
+        migrations.RunPython(safe_alter_vector_fields, reverse_alter_vector_fields),
+        # Ahora podemos alterar los campos normalmente
         migrations.AlterField(
             model_name='uniqueproductcluster',
             name='visual_centroid',

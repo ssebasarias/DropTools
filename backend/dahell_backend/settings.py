@@ -45,6 +45,9 @@ INSTALLED_APPS = [
     'core',
 ]
 
+# Configurar modelo de usuario personalizado
+AUTH_USER_MODEL = 'core.User'
+
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',

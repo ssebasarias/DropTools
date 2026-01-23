@@ -5,19 +5,9 @@ from dataclasses import dataclass
 from rest_framework.permissions import BasePermission
 
 
-def _get_profile(user):
-    """
-    Safe profile fetch. Returns None if missing.
-    """
-    try:
-        return getattr(user, "profile", None)
-    except Exception:
-        return None
-
-
 class IsAdminRole(BasePermission):
     """
-    Admin-only permission based on UserProfile.role == 'ADMIN'.
+    Admin-only permission based on User.role == 'ADMIN'.
     """
 
     message = "Acceso restringido: se requiere rol ADMIN."
@@ -26,44 +16,41 @@ class IsAdminRole(BasePermission):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-        profile = _get_profile(user)
-        return bool(profile and profile.role == "ADMIN")
+        # Usar User directamente (ahora todo está en la tabla users)
+        return bool(user.role == "ADMIN" or user.is_superuser)
 
 
-@dataclass(frozen=True)
-class MinSubscriptionTier(BasePermission):
+def MinSubscriptionTier(required_tier: str):
     """
-    Requires a minimum subscription tier.
-    Admin role bypasses tier checks.
+    Factory that returns a Permission Class enforcing a minimum subscription tier.
+    Usage: permission_classes = [MinSubscriptionTier('BRONZE')]
     """
+    class MinTierPermission(BasePermission):
+        message = "Tu suscripción no tiene acceso a esta funcionalidad."
+        
+        _ORDER = {
+            "BRONZE": 10,
+            "SILVER": 20,
+            "GOLD": 30,
+            "PLATINUM": 40,
+        }
 
-    required: str
-    message: str = "Tu suscripción no tiene acceso a esta funcionalidad."
+        def has_permission(self, request, view):
+            user = getattr(request, "user", None)
+            if not user or not user.is_authenticated:
+                return False
 
-    _ORDER = {
-        "BRONZE": 10,
-        "SILVER": 20,
-        "GOLD": 30,
-        "PLATINUM": 40,
-    }
+            # Usar User directamente (ahora todo está en la tabla users)
+            if user.role == "ADMIN" or user.is_superuser:
+                return True
 
-    def has_permission(self, request, view):
-        user = getattr(request, "user", None)
-        if not user or not user.is_authenticated:
-            return False
+            # Subscription must be active to use paid features
+            if not user.subscription_active:
+                return False
 
-        profile = _get_profile(user)
-        if not profile:
-            return False
+            have = self._ORDER.get(user.subscription_tier, 0)
+            need = self._ORDER.get(required_tier, 0)
+            return have >= need
 
-        if profile.role == "ADMIN":
-            return True
-
-        # Subscription must be active to use paid features (payments not implemented yet).
-        if not getattr(profile, "subscription_active", False):
-            return False
-
-        have = self._ORDER.get(getattr(profile, "subscription_tier", None), 0)
-        need = self._ORDER.get(self.required, 0)
-        return have >= need
+    return MinTierPermission
 

@@ -5,7 +5,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
-from django.contrib.auth.models import User
+from core.models import User
 from django.db.models import Avg, Count, Q
 from .models import (
     Product,
@@ -16,9 +16,9 @@ from .models import (
     ProductClusterMembership,
     AIFeedback,
     ClusterDecisionLog,
-    UserProfile,
-    DropiAccount,
+    # UserProfile y DropiAccount ya no se usan, todo está en User
     OrderReport,
+    WorkflowProgress,
 )
 from .permissions import IsAdminRole, MinSubscriptionTier
 from datetime import datetime, timedelta, time as dt_time
@@ -709,7 +709,7 @@ class ClusterOrphanActionView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-from django.contrib.auth.models import User
+from core.models import User
 
 class ReporterConfigView(APIView):
     """
@@ -721,23 +721,13 @@ class ReporterConfigView(APIView):
         if not user or not user.is_authenticated:
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Obtener o crear perfil
-        try:
-            profile = user.profile
-        except Exception: # UserProfile.DoesNotExist might not be available if import failed previously
-            try:
-                profile = UserProfile.objects.create(user=user)
-            except Exception as e:
-                # Si UserProfile no está importado? (imported from .models above)
-                from .models import UserProfile
-                profile, _ = UserProfile.objects.get_or_create(user=user)
-
-        exec_time = getattr(profile, "execution_time", None)
+        # Usar User directamente (ahora todo está en la tabla users)
+        exec_time = user.execution_time
         return Response(
             {
-                # Legacy: no usamos estos campos para el worker (DropiAccounts API es la fuente real)
-                "email": profile.dropi_email or "",
-                # Never return secrets to the frontend; configuration is managed via DropiAccounts API.
+                # Usar credenciales Dropi directamente del User
+                "email": user.dropi_email or "",
+                # No devolver password por seguridad
                 "password": "",
                 # Persisted schedule time (HH:MM). Default 08:00 if not set.
                 "executionTime": exec_time.strftime("%H:%M") if exec_time else "08:00",
@@ -750,38 +740,39 @@ class ReporterConfigView(APIView):
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
              
         try:
-            from .models import UserProfile
-            profile, created = UserProfile.objects.get_or_create(user=user)
-            
-            # Legacy fields (do not use for worker; DropiAccounts API stores encrypted passwords)
-            if "email" in request.data:
-                profile.dropi_email = request.data.get("email")
-            if "password" in request.data:
-                profile.dropi_password = request.data.get("password")
+            # Actualizar credenciales Dropi directamente en User
+            if "email" in request.data or "password" in request.data:
+                email = request.data.get("email", "").strip()
+                password = request.data.get("password", "").strip()
+                
+                if email:
+                    user.dropi_email = email
+                if password:
+                    user.set_dropi_password_plain(password)
 
-            # New: schedule time HH:MM
+            # Actualizar schedule time HH:MM
             exec_time_str = request.data.get("executionTime") or request.data.get("execution_time")
             if exec_time_str is not None:
                 exec_time_str = str(exec_time_str).strip()
                 if exec_time_str == "":
-                    profile.execution_time = None
+                    user.execution_time = None
                 else:
                     try:
                         hh, mm = exec_time_str.split(":")
-                        profile.execution_time = dt_time(hour=int(hh), minute=int(mm))
+                        user.execution_time = dt_time(hour=int(hh), minute=int(mm))
                     except Exception:
                         return Response(
                             {"error": "executionTime inválido. Usa formato HH:MM"},
                             status=status.HTTP_400_BAD_REQUEST,
                         )
 
-            profile.save()
+            user.save()
             
             return Response(
                 {
                     "status": "success",
                     "message": "Configuración actualizada",
-                    "executionTime": profile.execution_time.strftime("%H:%M") if profile.execution_time else None,
+                    "executionTime": user.execution_time.strftime("%H:%M") if user.execution_time else None,
                 }
             )
         except Exception as e:
@@ -804,8 +795,26 @@ class ReporterStartView(APIView):
             import platform
             from pathlib import Path
             
+            # Obtener email Dropi directamente del User (ahora está en la tabla users)
+            if not user.dropi_email:
+                return Response(
+                    {"error": "No Dropi account configured. Please configure dropi_email in user settings."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Crear registro de progreso del workflow
+            from core.models import WorkflowProgress
+            from django.utils import timezone
+            workflow_progress = WorkflowProgress.objects.create(
+                user=user,
+                status='step1_running',
+                current_message='Esto puede tardar unos minutos...',
+                messages=['Esto puede tardar unos minutos...']
+            )
+
             # Detectar si estamos en Docker
             is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
+            log_file = None  # Inicializar para evitar error si is_docker=True
             
             if is_docker:
                 # En Docker: ejecutar dentro del contenedor backend
@@ -822,15 +831,27 @@ class ReporterStartView(APIView):
                     sys.executable,
                     str(manage_py),
                     'workflow_orchestrator',
-                    '--user-email',
-                    user.email
-                    # Sin --headless para modo visible
+                    '--user-id',
+                    str(user.id),
+                    '--headless',  # Modo headless para Docker (sin interfaz gráfica)
+                    '--use-chrome-fallback'  # Usar Chrome en Docker (Edge no disponible)
                 ]
                 
-                # Ejecutar en background dentro del contenedor
+                
+                # Crear archivo de log para este proceso (igual que en desarrollo local)
+                from datetime import datetime
+                log_dir = Path(manage_py.parent) / 'logs'
+                log_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                log_file = log_dir / f'workflow_button_{timestamp}.log'
+                
+                # Abrir archivo de log para escritura
+                log_f = open(log_file, 'w', encoding='utf-8')
+                
+                # Ejecutar en background dentro del contenedor con logs en archivo
                 process = subprocess.Popen(
                     command,
-                    stdout=subprocess.PIPE,
+                    stdout=log_f,
                     stderr=subprocess.STDOUT,
                     cwd=str(manage_py.parent),
                     env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
@@ -849,37 +870,40 @@ class ReporterStartView(APIView):
                     sys.executable,
                     str(manage_py),
                     'workflow_orchestrator',
-                    '--user-email',
-                    user.email
+                    '--user-id',
+                    str(user.id)
                     # Sin --headless para modo visible
                 ]
                 
-                # Ejecutar en una nueva ventana de consola visible (Windows)
-                # Esto permite ver los logs del orquestador en tiempo real
-                if platform.system() == 'Windows':
-                    # CREATE_NEW_CONSOLE abre una nueva ventana de cmd
-                    CREATE_NEW_CONSOLE = 0x00000010
-                    process = subprocess.Popen(
-                        command,
-                        cwd=str(manage_py.parent),
-                        env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1'),
-                        creationflags=CREATE_NEW_CONSOLE
-                    )
-                else:
-                    # En Linux/Mac, ejecutar en background normal
-                    process = subprocess.Popen(
-                        command,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        cwd=str(manage_py.parent),
-                        env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
-                    )
+                # Ejecutar en background con logs capturados en archivo
+                # IMPORTANTE: NO usar CREATE_NEW_CONSOLE porque si hay un error al iniciar el navegador,
+                # la ventana se cierra inmediatamente y no podemos ver qué pasó.
+                # En su lugar, ejecutamos en background y los logs se guardan en archivos.
+                
+                # Crear archivo de log para este proceso
+                from datetime import datetime
+                log_dir = Path(manage_py.parent) / 'logs'
+                log_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                log_file = log_dir / f'workflow_button_{timestamp}.log'
+                
+                # Abrir archivo de log para escritura
+                log_f = open(log_file, 'w', encoding='utf-8')
+                
+                process = subprocess.Popen(
+                    command,
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    cwd=str(manage_py.parent),
+                    env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+                )
             
             return Response({
                 "status": "started",
-                "message": "Workflow iniciado en ventana visible" if platform.system() == 'Windows' and not is_docker else "Workflow iniciado en background",
+                "message": f"Workflow iniciado en background. Logs en: {log_file if not is_docker else 'contenedor Docker'}",
                 "process_id": process.pid,
-                "environment": "docker" if is_docker else "local"
+                "environment": "docker" if is_docker else "local",
+                "log_file": str(log_file) if not is_docker else None
             })
             
         except Exception as e:
@@ -892,7 +916,7 @@ class ReporterStartView(APIView):
 
 class ReporterStatusView(APIView):
     """
-    Obtiene el estado actual de los reportes (contadores y estadísticas)
+    Obtiene el estado actual de los reportes (contadores y estadísticas) y progreso del workflow
     """
     def get(self, request):
         user = request.user
@@ -901,9 +925,17 @@ class ReporterStatusView(APIView):
         
         try:
             from django.utils import timezone
+            from core.models import WorkflowProgress
             
             # Contar reportes por estado
-            total_reported = OrderReport.objects.filter(user=user, status='reportado').count()
+            # CORRECCIÓN KPI: Solo contar los reportes realizados HOY
+            today = timezone.now().date()
+            total_reported = OrderReport.objects.filter(
+                user=user, 
+                status='reportado',
+                updated_at__date=today
+            ).count()
+            
             pending_24h = OrderReport.objects.filter(
                 user=user,
                 status='cannot_generate_yet',
@@ -917,11 +949,27 @@ class ReporterStatusView(APIView):
             last_report = OrderReport.objects.filter(user=user).order_by('-updated_at').first()
             last_updated = last_report.updated_at.isoformat() if last_report else None
             
+            # Obtener progreso del workflow más reciente
+            workflow_progress = WorkflowProgress.objects.filter(user=user).order_by('-started_at').first()
+            workflow_status = None
+            if workflow_progress:
+                workflow_status = {
+                    "status": workflow_progress.status,
+                    "current_message": workflow_progress.current_message,
+                    "messages": workflow_progress.messages,
+                    "started_at": workflow_progress.started_at.isoformat(),
+                    "step1_completed_at": workflow_progress.step1_completed_at.isoformat() if workflow_progress.step1_completed_at else None,
+                    "step2_completed_at": workflow_progress.step2_completed_at.isoformat() if workflow_progress.step2_completed_at else None,
+                    "step3_completed_at": workflow_progress.step3_completed_at.isoformat() if workflow_progress.step3_completed_at else None,
+                    "completed_at": workflow_progress.completed_at.isoformat() if workflow_progress.completed_at else None,
+                }
+            
             return Response({
                 "total_reported": total_reported,
                 "pending_24h": pending_24h,
                 "total_pending": total_pending,
-                "last_updated": last_updated
+                "last_updated": last_updated,
+                "workflow_progress": workflow_status
             })
             
         except Exception as e:
@@ -962,20 +1010,40 @@ class ReporterListView(APIView):
             reports = queryset[start:end]
             
             # Serializar resultados
+            from django.utils import timezone
+            
+            # Función helper para corregir encoding (Ã³ -> ó)
+            def fix_encoding(text):
+                if not text: return text
+                try:
+                    # Intenta revertir el Mojibake: Bytes UTF-8 interpretados como CP1252
+                    return text.encode('cp1252').decode('utf-8')
+                except (UnicodeEncodeError, UnicodeDecodeError):
+                    # Si falla, el texto estaba bien o es otro error
+                    return text
+            
             results = []
             for report in reports:
+                # Calcular días sin movimiento basado en created_at (cuando se detectó la orden)
+                days_without_movement = None
+                if report.created_at:
+                    delta = timezone.now() - report.created_at
+                    days_without_movement = delta.days
+                
                 results.append({
                     "id": report.id,
                     "order_phone": report.order_phone,
-                    "order_id": report.order_id or "",
-                    "customer_name": report.customer_name or "",
-                    "product_name": report.product_name or "",
+                    "order_id": fix_encoding(report.order_id or ""),
+                    "customer_name": fix_encoding(report.customer_name or ""),
+                    "product_name": fix_encoding(report.product_name or ""),
                     "status": report.status,
                     "report_generated": report.report_generated,
-                    "order_state": report.order_state or "",
+                    "order_state": fix_encoding(report.order_state or ""),
                     "created_at": report.created_at.isoformat(),
                     "updated_at": report.updated_at.isoformat(),
-                    "next_attempt_time": report.next_attempt_time.isoformat() if report.next_attempt_time else None
+                    "next_attempt_time": report.next_attempt_time.isoformat() if report.next_attempt_time else None,
+                    "days_without_movement": days_without_movement,
+                    "days_stuck": days_without_movement  # Alias para compatibilidad
                 })
             
             # Contar total
@@ -1022,7 +1090,6 @@ class AuthLoginView(APIView):
             return Response({"error": "Usuario inactivo"}, status=status.HTTP_403_FORBIDDEN)
 
         token, _ = Token.objects.get_or_create(user=user)
-        profile, _ = UserProfile.objects.get_or_create(user=user)
 
         return Response(
             {
@@ -1031,11 +1098,11 @@ class AuthLoginView(APIView):
                     "id": user.id,
                     "username": user.username,
                     "email": user.email,
-                    "role": profile.role,
-                    "subscription_tier": getattr(profile, "subscription_tier", "BRONZE"),
-                    "subscription_active": bool(getattr(profile, "subscription_active", False)),
-                    "full_name": profile.full_name,
-                    "is_admin": bool(profile.role == "ADMIN"),
+                    "role": user.role,
+                    "subscription_tier": user.subscription_tier,
+                    "subscription_active": user.subscription_active,
+                    "full_name": user.full_name,
+                    "is_admin": bool(user.role == "ADMIN"),
                 },
             },
             status=status.HTTP_200_OK,
@@ -1064,15 +1131,12 @@ class AuthRegisterView(APIView):
         # Use email as username (simple + consistent)
         user = User.objects.create_user(username=email, email=email, password=password)
         user.is_active = True
+        # Configurar campos de perfil directamente en User
+        user.full_name = full_name
+        user.role = User.ROLE_CLIENT
+        user.subscription_tier = User.TIER_BRONZE
+        user.subscription_active = False
         user.save()
-
-        profile = UserProfile.objects.create(
-            user=user,
-            full_name=full_name,
-            role=UserProfile.ROLE_CLIENT,
-            subscription_tier=getattr(UserProfile, "TIER_BRONZE", "BRONZE"),
-            subscription_active=False,
-        )
 
         token, _ = Token.objects.get_or_create(user=user)
         return Response(
@@ -1082,11 +1146,11 @@ class AuthRegisterView(APIView):
                     "id": user.id,
                     "username": user.username,
                     "email": user.email,
-                    "role": profile.role,
-                    "subscription_tier": getattr(profile, "subscription_tier", "BRONZE"),
-                    "subscription_active": bool(getattr(profile, "subscription_active", False)),
-                    "full_name": profile.full_name,
-                    "is_admin": bool(profile.role == "ADMIN"),
+                    "role": user.role,
+                    "subscription_tier": user.subscription_tier,
+                    "subscription_active": user.subscription_active,
+                    "full_name": user.full_name,
+                    "is_admin": bool(user.role == "ADMIN"),
                 },
             },
             status=status.HTTP_201_CREATED,
@@ -1097,18 +1161,19 @@ class AuthMeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        # Usar User directamente (ahora todo está en la tabla users)
+        user = request.user
         return Response(
             {
                 "user": {
-                    "id": request.user.id,
-                    "username": request.user.username,
-                    "email": request.user.email,
-                    "role": profile.role,
-                    "subscription_tier": getattr(profile, "subscription_tier", "BRONZE"),
-                    "subscription_active": bool(getattr(profile, "subscription_active", False)),
-                    "full_name": profile.full_name,
-                    "is_admin": bool(profile.role == "ADMIN"),
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "role": user.role,
+                    "subscription_tier": user.subscription_tier,
+                    "subscription_active": user.subscription_active,
+                    "full_name": user.full_name,
+                    "is_admin": bool(user.role == "ADMIN"),
                 }
             },
             status=status.HTTP_200_OK,
@@ -1127,7 +1192,7 @@ class AdminUsersView(APIView):
         users = User.objects.all().order_by("id")
         rows = []
         for u in users:
-            p, _ = UserProfile.objects.get_or_create(user=u)
+            # Usar User directamente (ahora todo está en la tabla users)
             rows.append(
                 {
                     "id": u.id,
@@ -1135,10 +1200,10 @@ class AdminUsersView(APIView):
                     "username": u.username,
                     "is_active": u.is_active,
                     "profile": {
-                        "full_name": p.full_name,
-                        "role": p.role,
-                        "subscription_tier": getattr(p, "subscription_tier", "BRONZE"),
-                        "subscription_active": bool(getattr(p, "subscription_active", False)),
+                        "full_name": u.full_name,
+                        "role": u.role,
+                        "subscription_tier": u.subscription_tier,
+                        "subscription_active": u.subscription_active,
                     },
                 }
             )
@@ -1160,19 +1225,19 @@ class AdminSetUserSubscriptionView(APIView):
         if tier and tier not in valid_tiers:
             return Response({"error": "Tier inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
-        prof, _ = UserProfile.objects.get_or_create(user=target)
+        # Actualizar directamente en User (ahora todo está en la tabla users)
         if tier:
-            prof.subscription_tier = tier
+            target.subscription_tier = tier
         if active is not None:
-            prof.subscription_active = bool(active)
-        prof.save()
+            target.subscription_active = bool(active)
+        target.save()
 
         return Response(
             {
                 "status": "ok",
                 "user_id": target.id,
-                "subscription_tier": getattr(prof, "subscription_tier", "BRONZE"),
-                "subscription_active": bool(getattr(prof, "subscription_active", False)),
+                "subscription_tier": target.subscription_tier,
+                "subscription_active": target.subscription_active,
             },
             status=status.HTTP_200_OK,
         )
@@ -1183,56 +1248,75 @@ class AdminSetUserSubscriptionView(APIView):
 # =============================================================================
 
 class DropiAccountsView(APIView):
+    """
+    Gestiona la cuenta Dropi del usuario (ahora está en la tabla users)
+    Nota: Ahora cada usuario tiene solo UNA cuenta Dropi (dropi_email y dropi_password)
+    """
     permission_classes = [MinSubscriptionTier("BRONZE")]
 
     def get(self, request):
-        accounts = DropiAccount.objects.filter(user=request.user).order_by("-is_default", "id")
+        """Retorna la cuenta Dropi del usuario actual"""
+        user = request.user
+        
+        # Retornar la cuenta Dropi del usuario (ahora está en User)
+        accounts = []
+        if user.dropi_email:
+            accounts.append({
+                "id": user.id,  # Usar el ID del usuario
+                "label": "reporter",  # Label fijo para compatibilidad
+                "email": user.dropi_email,
+                "is_default": True  # Siempre es default porque solo hay una
+            })
+        
         return Response(
-            {
-                "accounts": [
-                    {
-                        "id": a.id,
-                        "label": a.label,
-                        "email": a.email,
-                        "is_default": a.is_default,
-                    }
-                    for a in accounts
-                ]
-            },
+            {"accounts": accounts},
             status=status.HTTP_200_OK,
         )
 
     def post(self, request):
-        label = (request.data.get("label") or "default").strip()
+        """Actualiza la cuenta Dropi del usuario"""
+        user = request.user
         email = (request.data.get("email") or "").strip()
         password = request.data.get("password") or ""
-        is_default = bool(request.data.get("is_default", False))
 
         if not email or not password:
             return Response({"error": "email y password son requeridos"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Si se marca default, apagamos los demás
-        if is_default:
-            DropiAccount.objects.filter(user=request.user, is_default=True).update(is_default=False)
-
-        acct = DropiAccount(user=request.user, label=label, email=email, is_default=is_default)
-        acct.set_password_plain(password)
-        acct.save()
+        # Actualizar dropi_email y dropi_password en User
+        user.dropi_email = email
+        user.set_dropi_password_plain(password)
+        user.save()
+        
         return Response(
-            {"account": {"id": acct.id, "label": acct.label, "email": acct.email, "is_default": acct.is_default}},
+            {
+                "account": {
+                    "id": user.id,
+                    "label": "reporter",
+                    "email": user.dropi_email,
+                    "is_default": True
+                }
+            },
             status=status.HTTP_201_CREATED,
         )
 
 
 class DropiAccountSetDefaultView(APIView):
+    """
+    Marca una cuenta Dropi como default (ahora es un no-op porque solo hay una cuenta)
+    Se mantiene por compatibilidad con el frontend
+    """
     permission_classes = [MinSubscriptionTier("BRONZE")]
 
     def post(self, request, account_id: int):
-        acct = DropiAccount.objects.filter(user=request.user, id=account_id).first()
-        if not acct:
+        """
+        Como ahora solo hay una cuenta Dropi por usuario, esta vista simplemente retorna OK
+        Se mantiene por compatibilidad con el frontend
+        """
+        user = request.user
+        
+        # Verificar que el account_id corresponda al usuario actual
+        if account_id != user.id:
             return Response({"error": "Cuenta no encontrada"}, status=status.HTTP_404_NOT_FOUND)
-
-        DropiAccount.objects.filter(user=request.user, is_default=True).exclude(id=acct.id).update(is_default=False)
-        acct.is_default = True
-        acct.save()
+        
+        # Como solo hay una cuenta, siempre es default
         return Response({"status": "ok"}, status=status.HTTP_200_OK)

@@ -1,6 +1,7 @@
 
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
+from django.contrib.auth.models import AbstractUser
 
 # -----------------------------------------------------------------------------
 # CONSTANTS CONTRACT (DSA v1.0)
@@ -509,13 +510,87 @@ class CompetitorFinding(models.Model):
         ]
 
 
-from django.contrib.auth.models import User
+# User is now defined in this file (core.models.User)
 from django.utils import timezone
 
 
 # -----------------------------------------------------------------------------
 # USER MANAGEMENT (SECURITY / SUBSCRIPTIONS)
 # -----------------------------------------------------------------------------
+
+class User(AbstractUser):
+    """
+    Modelo de usuario unificado que combina:
+    - auth_user (login del aplicativo) - heredado de AbstractUser
+    - user_profiles (perfil, rol, suscripción)
+    - dropi_accounts (credenciales Dropi)
+    
+    Esta es la única tabla de usuarios en el sistema.
+    """
+    
+    ROLE_ADMIN = "ADMIN"
+    ROLE_CLIENT = "CLIENT"
+    ROLE_CHOICES = [
+        (ROLE_ADMIN, "Admin"),
+        (ROLE_CLIENT, "Client"),
+    ]
+    
+    TIER_BRONZE = "BRONZE"
+    TIER_SILVER = "SILVER"
+    TIER_GOLD = "GOLD"
+    TIER_PLATINUM = "PLATINUM"
+    TIER_CHOICES = [
+        (TIER_BRONZE, "Bronze"),
+        (TIER_SILVER, "Silver"),
+        (TIER_GOLD, "Gold"),
+        (TIER_PLATINUM, "Platinum"),
+    ]
+    
+    # Campos de user_profiles (perfil y suscripción)
+    full_name = models.CharField(max_length=120, blank=True, default="")
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_CLIENT)
+    subscription_tier = models.CharField(max_length=10, choices=TIER_CHOICES, default=TIER_BRONZE)
+    subscription_active = models.BooleanField(default=False)
+    execution_time = models.TimeField(null=True, blank=True, help_text="Hora diaria para ejecutar el workflow de reportes (formato HH:MM)")
+    
+    # Campos de dropi_accounts (credenciales Dropi - cuenta principal)
+    dropi_email = models.EmailField(max_length=255, null=True, blank=True, help_text="Email de la cuenta Dropi principal")
+    dropi_password = models.CharField(max_length=255, null=True, blank=True, help_text="Password de la cuenta Dropi (string simple, no encriptado)")
+    
+    # Timestamps adicionales
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = "users"
+        verbose_name = "user"
+        verbose_name_plural = "users"
+        indexes = [
+            models.Index(fields=["username"]),
+            models.Index(fields=["email"]),
+            models.Index(fields=["role", "subscription_tier"]),
+            models.Index(fields=["subscription_active"]),
+        ]
+    
+    def __str__(self) -> str:
+        return f"{self.username} ({self.role}/{self.subscription_tier})"
+    
+    def is_admin(self) -> bool:
+        """Retorna True si el usuario es admin"""
+        return self.role == self.ROLE_ADMIN or self.is_superuser
+    
+    def get_dropi_password_plain(self) -> str:
+        """
+        Retorna la contraseña Dropi sin encriptar (siempre como string simple)
+        """
+        return self.dropi_password or ""
+    
+    def set_dropi_password_plain(self, raw: str) -> None:
+        """
+        Guarda la contraseña Dropi como string simple (sin encriptar)
+        """
+        self.dropi_password = raw or ""
+
 
 class UserProfile(models.Model):
     """
@@ -546,7 +621,7 @@ class UserProfile(models.Model):
         (TIER_PLATINUM, "Platinum"),
     ]
 
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile", unique=True)
+    user = models.OneToOneField('core.User', on_delete=models.CASCADE, related_name="profile", unique=True)
     full_name = models.CharField(max_length=120, blank=True, default="")
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_CLIENT)
     # Subscription tier controls which client modules are enabled.
@@ -578,7 +653,7 @@ class DropiAccount(models.Model):
     Un usuario puede tener múltiples cuentas secundarias (por ejemplo: una para scraper, otra para reporter).
     """
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="dropi_accounts")
+    user = models.ForeignKey('core.User', on_delete=models.CASCADE, related_name="dropi_accounts")
     label = models.CharField(max_length=50, default="default")
     email = models.EmailField(max_length=255)
     # Stored encrypted-at-rest when encryption key is configured.
@@ -604,27 +679,38 @@ class DropiAccount(models.Model):
     def get_password_plain(self) -> str:
         """
         Returns decrypted password if encryption is enabled; otherwise returns stored value.
+        Siempre devuelve el string sin encriptar para uso en scripts.
         """
         from .crypto import decrypt_if_needed
 
         return decrypt_if_needed(self.password or "")
 
     def set_password_plain(self, raw: str) -> None:
+        """
+        Guarda la contraseña. Solo encripta si DROPIPASS_ENCRYPTION_KEY está configurado.
+        Por defecto guarda como string simple para facilitar el uso en scripts.
+        """
         from .crypto import encrypt_if_needed
 
         self.password = encrypt_if_needed(raw or "")
 
     def save(self, *args, **kwargs):
         """
-        Encrypt password-at-rest if key is configured and value isn't encrypted yet.
+        Guarda la contraseña. Solo intenta encriptar si:
+        1. La contraseña no está vacía
+        2. No está ya encriptada (no empieza con "enc:v1:")
+        3. Existe DROPIPASS_ENCRYPTION_KEY en el entorno
+        
+        Por defecto, si no hay key de encriptación, guarda como string simple.
         """
-        try:
-            from .crypto import encrypt_if_needed
-
-            self.password = encrypt_if_needed(self.password or "")
-        except Exception:
-            # Fail-open for local dev if crypto isn't configured; do not crash saves.
-            pass
+        if self.password and not self.password.startswith("enc:v1:"):
+            try:
+                from .crypto import encrypt_if_needed
+                # Solo encripta si hay key configurada, sino devuelve el valor sin modificar
+                self.password = encrypt_if_needed(self.password)
+            except Exception:
+                # Fail-open: si no hay key o hay error, guarda como string simple
+                pass
         return super().save(*args, **kwargs)
 
 
@@ -644,16 +730,19 @@ class OrderReport(models.Model):
         ('in_movement', 'En Movimiento'),
     ]
     
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='order_reports')
+    user = models.ForeignKey('core.User', on_delete=models.CASCADE, related_name='order_reports')
     order_phone = models.CharField(max_length=50, db_index=True, help_text="Número de teléfono de la orden")
-    order_id = models.CharField(max_length=100, null=True, blank=True, help_text="ID de la orden en Dropi si está disponible")
+    order_id = models.CharField(max_length=100, null=True, blank=True, help_text="ID de la orden en Dropi")
+    tracking_number = models.CharField(max_length=100, null=True, blank=True, help_text="Número de guía / Tracking")
+    
     status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='proximo_a_reportar')
     report_generated = models.BooleanField(default=False, help_text="True si el reporte se generó exitosamente")
     
-    # Información adicional de la orden (para mostrar en frontend)
+    # Información adicional de la orden
     customer_name = models.CharField(max_length=255, null=True, blank=True, help_text="Nombre del cliente")
     product_name = models.TextField(null=True, blank=True, help_text="Nombre del producto vinculado a la orden")
     order_state = models.CharField(max_length=100, null=True, blank=True, help_text="Estado actual de la orden en Dropi")
+    days_since_order = models.IntegerField(null=True, blank=True, help_text="Días transcurridos desde la orden (del CSV)")
     
     # Control de tiempos
     next_attempt_time = models.DateTimeField(null=True, blank=True, help_text="Próximo intento (para estados que requieren espera)")
@@ -683,3 +772,46 @@ class OrderReport(models.Model):
     
     def __str__(self):
         return f"OrderReport {self.id} - {self.order_phone} ({self.status})"
+
+
+class WorkflowProgress(models.Model):
+    """
+    Rastrea el progreso del workflow de reportes para cada usuario
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pendiente'),
+        ('step1_running', 'Paso 1: Descargando Reportes'),
+        ('step1_completed', 'Paso 1: Completado'),
+        ('step2_running', 'Paso 2: Comparando Reportes'),
+        ('step2_completed', 'Paso 2: Completado'),
+        ('step3_running', 'Paso 3: Reportando CAS'),
+        ('step3_completed', 'Paso 3: Completado'),
+        ('completed', 'Completado'),
+        ('failed', 'Fallido'),
+    ]
+    
+    user = models.ForeignKey('core.User', on_delete=models.CASCADE, related_name='workflow_progresses')
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='pending')
+    
+    # Mensajes de progreso
+    current_message = models.TextField(null=True, blank=True, help_text="Mensaje actual del progreso")
+    messages = models.JSONField(default=list, help_text="Lista de mensajes de progreso")
+    
+    # Timestamps
+    started_at = models.DateTimeField(auto_now_add=True)
+    step1_completed_at = models.DateTimeField(null=True, blank=True)
+    step2_completed_at = models.DateTimeField(null=True, blank=True)
+    step3_completed_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'workflow_progress'
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['user', 'started_at']),
+        ]
+        ordering = ['-started_at']
+    
+    def __str__(self):
+        return f"WorkflowProgress {self.id} - {self.user.email} ({self.status})"

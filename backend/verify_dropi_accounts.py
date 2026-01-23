@@ -10,8 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'dahell_backend.settings')
 django.setup()
 
-from django.contrib.auth.models import User
-from core.models import DropiAccount
+from core.models import User, DropiAccount
 
 # Buscar usuario alexcander
 user = User.objects.filter(username='alexcander').first()
@@ -34,7 +33,7 @@ if not accounts.exists():
     print()
     print("O ejecuta este comando en la consola de Django:")
     print(f"  from core.models import DropiAccount")
-    print(f"  from django.contrib.auth.models import User")
+    print(f"  from core.models import User")
     print(f"  user = User.objects.get(username='alexcander')")
     print(f"  acct = DropiAccount.objects.create(")
     print(f"      user=user,")

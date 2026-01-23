@@ -25,8 +25,8 @@ from selenium.common.exceptions import (
 )
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from django.contrib.auth.models import User
-from core.models import DropiAccount
+from core.models import User
+# DropiAccount ya no se usa, las credenciales están en User directamente
 from core.utils.stdio import configure_utf8_stdio
 
 
@@ -54,7 +54,7 @@ class NovedadReporterBot:
         
         Args:
             headless: Si True, ejecuta el navegador sin interfaz gráfica
-            user_id: ID del usuario (Django auth_user.id) para cargar credenciales de Dropi desde BD
+            user_id: ID del usuario (tabla users.id) para cargar credenciales de Dropi desde BD
             dropi_label: etiqueta de la cuenta Dropi a usar (default: reporter)
             email: Email de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
             password: Password de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
@@ -127,22 +127,13 @@ class NovedadReporterBot:
         if self.user_id:
             user = User.objects.filter(id=self.user_id).first()
             if not user:
-                raise ValueError(f"user_id={self.user_id} no existe en auth_user")
+                raise ValueError(f"user_id={self.user_id} no existe en la tabla users")
 
-            acct = DropiAccount.objects.filter(user=user, label=self.dropi_label).first()
-            if not acct:
-                acct = DropiAccount.objects.filter(user=user, is_default=True).first()
-            if not acct:
-                acct = DropiAccount.objects.filter(user=user).first()
-
-            if acct and acct.email and acct.password:
-                self.DROPI_EMAIL = acct.email
-                # Support encrypted-at-rest passwords.
-                try:
-                    self.DROPI_PASSWORD = acct.get_password_plain()
-                except Exception:
-                    self.DROPI_PASSWORD = acct.password
-                self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, label={acct.label})")
+            # Usar credenciales Dropi directamente del User (ahora están en la tabla users)
+            if user.dropi_email and user.dropi_password:
+                self.DROPI_EMAIL = user.dropi_email
+                self.DROPI_PASSWORD = user.get_dropi_password_plain()
+                self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, email={user.dropi_email})")
                 return
 
         # Prioridad 3: Fallback ENV

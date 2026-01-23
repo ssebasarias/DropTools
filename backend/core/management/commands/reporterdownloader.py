@@ -28,6 +28,7 @@ import glob
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
+from selenium.webdriver.edge.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -161,10 +162,16 @@ class DropiDownloaderReporterBot:
         Edge es más permisivo con descargas automáticas que Chrome
         """
         # Decidir qué navegador usar
+        # Chrome en modo incógnito es más confiable para descargas y permisos
         if self.use_chrome_fallback:
             return self._init_chrome_driver()
         else:
-            return self._init_edge_driver()
+            # Intentar Edge primero, si falla usar Chrome automáticamente
+            try:
+                return self._init_edge_driver()
+            except Exception as e:
+                self.logger.warning(f"   ⚠️ Edge falló, cambiando a Chrome en modo incógnito: {str(e)}")
+                return self._init_chrome_driver()
     
     def _init_edge_driver(self):
         """Inicializa Edge WebDriver"""
@@ -173,7 +180,15 @@ class DropiDownloaderReporterBot:
         self.logger.info("="*80)
         self.logger.info("   ℹ️ Usando Edge (más permisivo con descargas automáticas)")
         
-        options = EdgeOptions()
+        # Crear instancia de EdgeOptions de forma compatible
+        try:
+            # Usar EdgeOptions importado directamente (línea 29)
+            options = EdgeOptions()
+        except Exception as e:
+            self.logger.warning(f"   ⚠️ Error creando EdgeOptions estándar: {str(e)}")
+            # Si falla, intentar usar Chrome como fallback
+            self.logger.info("   🔄 Cambiando a Chrome como fallback...")
+            return self._init_chrome_driver()
         
         # Configuración para ejecución LOCAL
         if self.headless:
@@ -299,9 +314,9 @@ class DropiDownloaderReporterBot:
     def _init_chrome_driver(self):
         """Inicializa Chrome WebDriver como fallback (con solución mejorada para permisos)"""
         self.logger.info("="*80)
-        self.logger.info("🚀 PASO 1: INICIALIZANDO NAVEGADOR CHROME (FALLBACK)")
+        self.logger.info("🚀 PASO 1: INICIALIZANDO NAVEGADOR CHROME")
         self.logger.info("="*80)
-        self.logger.info("   ℹ️ Usando Chrome con perfil temporal para evitar bloqueos de permisos")
+        self.logger.info("   ℹ️ Usando Chrome en modo incógnito para evitar bloqueos de permisos y ubicación")
         
         from selenium.webdriver.chrome.options import Options as ChromeOptions
         
@@ -314,6 +329,18 @@ class DropiDownloaderReporterBot:
         else:
             self.logger.info("   👀 Modo VISIBLE activado (puedes ver el navegador)")
         
+        # Usar perfil temporal limpio (similar a incógnito pero más estable)
+        import tempfile
+        import os
+        temp_profile = tempfile.mkdtemp(prefix='chrome_selenium_')
+        options.add_argument(f'--user-data-dir={temp_profile}')
+        self.logger.info(f"   📁 Usando perfil temporal limpio: {temp_profile}")
+        self.logger.info("   🔒 Perfil temporal evita problemas de permisos y ubicación (similar a incógnito)")
+        
+        # Flags de estabilidad para evitar crashes
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        
         # Optimizaciones
         options.add_argument('--start-maximized')
         options.add_argument('--disable-blink-features=AutomationControlled')
@@ -325,12 +352,6 @@ class DropiDownloaderReporterBot:
         options.add_argument('--allow-running-insecure-content')
         options.add_argument('--disable-features=DownloadBubble,DownloadBubbleV2')
         options.add_argument('--disable-prompt-on-repost')
-        
-        # Usar un perfil temporal para evitar bloqueos de permisos
-        import tempfile
-        temp_profile = tempfile.mkdtemp()
-        options.add_argument(f'--user-data-dir={temp_profile}')
-        self.logger.info(f"   📁 Usando perfil temporal: {temp_profile}")
         
         # Evitar detección de automatización
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -367,9 +388,20 @@ class DropiDownloaderReporterBot:
         self.logger.info(f"   📂 Directorio de descarga para Chrome: {download_directory}")
         self.logger.info("   📦 Creando instancia de Chrome...")
         
+        # Detectar si estamos en Docker
+        is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
+        
         try:
-            self.driver = webdriver.Chrome(options=options)
-            self.logger.info("   ✅ Chrome iniciado correctamente")
+            if is_docker:
+                # En Docker: usar chromedriver instalado en el sistema
+                from selenium.webdriver.chrome.service import Service
+                service = Service(executable_path='/usr/bin/chromedriver')
+                self.driver = webdriver.Chrome(service=service, options=options)
+                self.logger.info("   ✅ Chrome iniciado correctamente (Docker con chromedriver del sistema)")
+            else:
+                # En local: dejar que Selenium lo encuentre automáticamente
+                self.driver = webdriver.Chrome(options=options)
+                self.logger.info("   ✅ Chrome iniciado correctamente")
         except Exception as e:
             self.logger.error(f"   ❌ Error al iniciar Chrome: {e}")
             self.logger.info("   💡 Asegúrate de tener Chrome instalado")
@@ -707,29 +739,14 @@ class DropiDownloaderReporterBot:
             # Seleccionar día de inicio
             self.logger.info(f"      3) Seleccionando día de inicio: {fecha_inicio.day}")
             self._select_day_in_calendar(fecha_inicio.day)
-            time.sleep(1)
             
-            # Buscar input de fecha "Hasta"
-            self.logger.info("      4) Buscando campo 'Hasta'...")
-            hasta_input = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//input[contains(@placeholder, 'Hasta') or contains(@class, 'p-datepicker-trigger')]"
-                ))
-            )
-            self.logger.info("         ✅ Campo 'Hasta' encontrado")
+            # Esperar más tiempo en modo headless para que el calendario se cierre
+            wait_time = 3 if self.headless else 1
+            self.logger.info(f"         ⏳ Esperando {wait_time}s para que el calendario se cierre...")
+            time.sleep(wait_time)
             
-            hasta_input.click()
-            time.sleep(1)
-            
-            # Navegar al mes correcto en el calendario
-            self.logger.info("      5) Navegando al mes correcto en calendario...")
-            self._navigate_calendar_to_date(fecha_fin)
-            
-            # Seleccionar día de fin
-            self.logger.info(f"      6) Seleccionando día de fin: {fecha_fin.day}")
-            self._select_day_in_calendar(fecha_fin.day)
-            time.sleep(1)
+            # El campo "Hasta" viene predeterminado con la fecha actual, no necesitamos configurarlo
+            self.logger.info("      4) Campo 'Hasta' viene predeterminado con fecha actual, omitiendo configuración...")
             
             # Cerrar calendario con botón OK (esto cierra el modal automáticamente)
             self.logger.info("      7) Cerrando calendario con botón OK...")
@@ -879,48 +896,102 @@ class DropiDownloaderReporterBot:
         self.logger.info("   📥 Descargando reporte...")
         
         try:
-            # Buscar dropdown de acciones
-            self.logger.info("      1) Buscando dropdown de acciones...")
-            acciones_dropdown = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//a[contains(@class, 'dropdown-toggle') and contains(text(), 'Acciones')]"
-                ))
-            )
-            self.logger.info("         ✅ Dropdown de acciones encontrado")
+            # DEBUG: Tomar screenshot antes de buscar el dropdown
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime('%H%M%S')
+                debug_screenshot = os.path.join(self.download_dir_base, f"debug_dropdown_{timestamp}.png")
+                self.driver.save_screenshot(debug_screenshot)
+                self.logger.info(f"      📸 Screenshot de debug guardado en: {debug_screenshot}")
+            except: pass
             
-            acciones_dropdown.click()
-            time.sleep(1)
+            # 1. BUSCAR DROPDOWN DE ACCIONES
+            self.logger.info("      1) Buscando dropdown (Actions/Acciones)...")
             
-            # Buscar opción "Órdenes con Productos (Un producto por fila)"
-            self.logger.info("      2) Buscando opción 'Órdenes con Productos'...")
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            from selenium.webdriver.common.by import By
+            import time
+            
+            # Aumentar timeout en modo headless (Docker puede tardar más)
+            dropdown_timeout = 90 if self.headless else 30
+            dropdown_wait = WebDriverWait(self.driver, dropdown_timeout)
+            
+            acciones_dropdown = None
+            
+            # Intentar encontrar el elemento por CSS selector simple primero (más robusto e independiente del idioma)
+            try:
+                self.logger.info("      1) Buscando dropdown con selector CSS simple...")
+                acciones_dropdown = dropdown_wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "a.dropdown-toggle.btn"))
+                )
+                self.logger.info("         ✅ Dropdown encontrado por CSS")
+            except:
+                self.logger.warning("         ⚠️ CSS falló, intentando XPath multilingüe...")
+                # XPath que busca Acciones O Actions
+                xpath_dropdown = "//a[contains(@class, 'dropdown-toggle') and (contains(normalize-space(.), 'Acciones') or contains(normalize-space(.), 'Actions'))]"
+                acciones_dropdown = dropdown_wait.until(
+                    EC.presence_of_element_located((By.XPATH, xpath_dropdown))
+                )
+                self.logger.info("         ✅ Dropdown encontrado por XPath")
+            
+            # Scroll y Click (Intentar JS si falla normal)
+            try:
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", acciones_dropdown)
+                time.sleep(1)
+                
+                try:
+                    acciones_dropdown.click()
+                    self.logger.info("         ✅ Clic normal realizado")
+                except:
+                    self.logger.warning("         ⚠️ Clic normal falló, intentando JS click...")
+                    self.driver.execute_script("arguments[0].click();", acciones_dropdown)
+                    self.logger.info("         ✅ Clic JS realizado")
+            except Exception as e:
+                self.logger.error(f"         ❌ Error al interactuar con dropdown: {e}")
+                raise e
+            
+            time.sleep(2)
+            
+            # DEBUG: Screenshot con el menú abierto
+            try:
+                timestamp = datetime.datetime.now().strftime('%H%M%S')
+                debug_menu = os.path.join(self.download_dir_base, f"debug_menu_open_{timestamp}.png")
+                self.driver.save_screenshot(debug_menu)
+                self.logger.info(f"      📸 Screenshot menú abierto: {debug_menu}")
+            except: pass
+            
+            # 2. BUSCAR OPCIÓN DE REPORTE (Multilingüe: Español / Inglés)
+            self.logger.info("      2) Buscando opción 'Órdenes con Productos' (Multilingüe)...")
+            
+            # Buscar por clase y texto parcial en inglés o español
+            xpath_option = "//button[contains(@class, 'dropdown-item') and (contains(text(), 'Órdenes con Productos') or contains(text(), 'Orders with Products'))]"
+            
             report_option = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(@class, 'dropdown-item') and contains(text(), 'Órdenes con Productos (Un producto por fila)')]"
-                ))
+                EC.element_to_be_clickable((By.XPATH, xpath_option))
             )
             self.logger.info("         ✅ Opción encontrada")
             
             report_option.click()
             time.sleep(3)
             
-            # Esperar modal de éxito
+            # 3. ESPERAR MODAL DE CONFIRMACIÓN
             self.logger.info("      3) Esperando modal de confirmación...")
+            # Busca botón swal2-confirm independientemente del texto (más robusto)
             modal_button = self.wait.until(
                 EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(@class, 'swal2-confirm') and contains(text(), 'Ver reportes')]"
+                    By.CSS_SELECTOR,
+                    "button.swal2-confirm"
                 ))
             )
             self.logger.info("         ✅ Modal de confirmación apareció")
             
-            # Esperar 7 segundos antes de hacer click
-            self.logger.info("      4) Esperando 7 segundos antes de continuar...")
-            time.sleep(7)
+            # Esperar 10 segundos antes de hacer click (Docker es más lento)
+            self.logger.info("      4) Esperando 10 segundos antes de continuar...")
+            time.sleep(10)
             
-            # Click en "Ver reportes"
-            self.logger.info("      5) Haciendo click en 'Ver reportes'...")
+            # Click en "Ver reportes" / "View reports"
+            self.logger.info("      5) Haciendo click en botón de modal...")
             modal_button.click()
             time.sleep(3)
             
@@ -929,13 +1000,25 @@ class DropiDownloaderReporterBot:
             self.logger.info(f"         ✅ Redirigido a: {self.driver.current_url}")
             
             return True
-            
+        
         except Exception as e:
+            # GUARDAR HTML PARA DEPURACIÓN
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime('%H%M%S')
+                html_debug = os.path.join(self.download_dir_base, f"debug_page_{timestamp}.html")
+                with open(html_debug, "w", encoding="utf-8") as f:
+                    f.write(self.driver.page_source)
+                self.logger.error(f"      ❌ Error/Timeout buscando elemento. HTML guardado en: {html_debug}")
+            except: pass
+            
             self.logger.error(f"      ❌ Error al descargar reporte: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
             return False
-    
+
+
+
     def _wait_for_report_and_download(self, max_wait_time=300):
         """
         Espera a que el reporte esté listo y lo descarga
@@ -952,158 +1035,104 @@ class DropiDownloaderReporterBot:
         
         start_time = time.time()
         check_interval = 5  # Verificar cada 5 segundos
+        refresh_interval = 20 # Refrescar página cada 20 segundos si no aparece
+        last_refresh_time = time.time()
         
         while time.time() - start_time < max_wait_time:
+            # Refrescar página si ha pasado el tiempo
+            if time.time() - last_refresh_time > refresh_interval:
+                self.logger.info("      🔄 Refrescando página para actualizar lista...")
+                self.driver.refresh()
+                time.sleep(5) # Esperar a que cargue
+                last_refresh_time = time.time()
+            
             try:
                 # Buscar la primera fila de la tabla (reporte más reciente)
                 self.logger.info(f"      Verificando estado del reporte... ({int(time.time() - start_time)}s)")
                 
                 # Buscar filas de la tabla
-                rows = self.driver.find_elements(
-                    By.XPATH,
-                    "//tbody//tr[contains(@class, 'table-row')]"
-                )
+                try:
+                    rows = self.driver.find_elements(
+                        By.XPATH,
+                        "//tbody//tr[contains(@class, 'table-row')]"
+                    )
+                except:
+                    rows = []
                 
                 if rows:
                     # Obtener la primera fila (más reciente)
                     first_row = rows[0]
                     
-                    # Verificar estado - buscar elemento con texto "Listo"
+                    # Verificar estado - buscar "Listo", "Completed", "Done" o icono de check
                     try:
-                        estado_element = first_row.find_element(
-                            By.XPATH,
-                            ".//app-dropi-tag//span[contains(text(), 'Listo')]"
-                        )
+                        # XPath robusto para encontrar el tag de estado
+                        estado_xpath = ".//app-dropi-tag//span" 
+                        estado_tags = first_row.find_elements(By.XPATH, estado_xpath)
                         
-                        if estado_element:
-                            self.logger.info("         ✅ Reporte está listo!")
+                        estado_texto = ""
+                        is_ready = False
+                        
+                        for tag in estado_tags:
+                            txt = tag.text.strip().lower()
+                            estado_texto += f"{txt} "
+                            if txt in ['listo', 'completed', 'success', 'hecho', 'ready']:
+                                is_ready = True
+                                break
+                        
+                        if is_ready:
+                            self.logger.info(f"         ✅ Reporte está listo! (Estado: {estado_texto.strip()})")
                             
-                            # Obtener nombre del archivo antes de descargar
+                            # Intentar obtener nombre de archivo
                             try:
-                                filename_element = first_row.find_element(
-                                    By.XPATH,
-                                    ".//span[contains(@class, 'table-labels') and contains(text(), '.xlsx')]"
-                                )
+                                filename_element = first_row.find_element(By.XPATH, ".//span[contains(text(), '.xlsx')]")
                                 expected_filename = filename_element.text.strip()
                                 self.logger.info(f"         📄 Archivo esperado: {expected_filename}")
                             except:
-                                # Si no encuentra el nombre exacto, buscar cualquier .xlsx en la fila
-                                self.logger.info("         📄 Buscando archivo .xlsx en la fila...")
                                 expected_filename = None
                             
-                            # Buscar botón de descarga - intentar múltiples selectores
+                            # Buscar botón de descarga
                             download_button = None
-                            
-                            # Método 1: Buscar por SVG con File-download
                             try:
+                                # Busca cualquier elemento que parezca un botón de descarga en la última columna
                                 download_button = first_row.find_element(
-                                    By.XPATH,
-                                    ".//app-icon[contains(@class, 'action-icon')]//svg[contains(@use, 'File-download')]"
+                                    By.CSS_SELECTOR, 
+                                    "app-icon.action-icon"
                                 )
-                                self.logger.info("         ✅ Botón de descarga encontrado (método 1)")
-                            except:
-                                pass
-                            
-                            # Método 2: Buscar por el icono de descarga directamente
-                            if not download_button:
-                                try:
-                                    download_button = first_row.find_element(
-                                        By.XPATH,
-                                        ".//div[contains(@class, 'ng-star-inserted')]//app-icon[contains(@class, 'action-icon')]"
-                                    )
-                                    self.logger.info("         ✅ Botón de descarga encontrado (método 2)")
-                                except:
-                                    pass
-                            
-                            # Método 3: Buscar cualquier icono clickeable en la columna de acciones
-                            if not download_button:
-                                try:
-                                    action_icons = first_row.find_elements(
-                                        By.XPATH,
-                                        ".//td[contains(@class, 'action-button')]//app-icon"
-                                    )
-                                    if action_icons:
-                                        download_button = action_icons[0]  # Primer icono es el de descarga
-                                        self.logger.info("         ✅ Botón de descarga encontrado (método 3)")
-                                except:
-                                    pass
+                                self.logger.info("         ✅ Botón de descarga encontrado")
+                            except: pass
                             
                             if download_button:
-                                # Hacer click en descargar
-                                self.logger.info("         📥 Haciendo click en descargar...")
-                                try:
-                                    # Scroll al botón para asegurar que sea visible
-                                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", download_button)
-                                    time.sleep(0.5)
-                                    download_button.click()
-                                except Exception as click_error:
-                                    # Si falla el click normal, usar JavaScript
-                                    self.logger.warning(f"         ⚠️ Click normal falló, usando JavaScript: {str(click_error)}")
-                                    self.driver.execute_script("arguments[0].click();", download_button)
+                                # Descargar!
+                                download_button.click()
+                                self.logger.info("         ⬇️ Click en descargar realizado")
                                 
-                                # Esperar y verificar si aparece algún diálogo de permisos
-                                time.sleep(2)
-                                
-                                # Verificar si hay algún diálogo de permisos
-                                try:
-                                    # Buscar diálogos comunes que bloquean descargas
-                                    # Estos pueden aparecer como alertas o elementos específicos
-                                    alerts = self.driver.find_elements(By.XPATH, "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'permiso') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'permission') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'descargar')]")
-                                    if alerts:
-                                        self.logger.warning("         ⚠️ Posible diálogo de permisos detectado")
-                                        # Intentar cerrar cualquier diálogo presionando ESC o Enter
-                                        from selenium.webdriver.common.keys import Keys
-                                        try:
-                                            self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-                                            time.sleep(1)
-                                        except:
-                                            pass
-                                except:
-                                    pass  # No hay diálogo, continuar normalmente
-                                
-                                time.sleep(5)  # Esperar 5 segundos adicionales para la descarga
-                                
-                                # Buscar el archivo descargado
-                                if expected_filename:
-                                    downloaded_file = self._find_downloaded_file(expected_filename)
-                                else:
-                                    # Buscar el archivo más reciente
-                                    downloaded_file = self._find_downloaded_file(None)
-                                
-                                if downloaded_file:
-                                    self.logger.info(f"         ✅ Archivo descargado: {downloaded_file}")
-                                    return downloaded_file
-                                else:
-                                    # Esperar un poco más y buscar de nuevo
-                                    self.logger.info("         ⏳ Archivo no encontrado aún, esperando más tiempo...")
-                                    time.sleep(5)
-                                    if expected_filename:
-                                        downloaded_file = self._find_downloaded_file(expected_filename)
-                                    else:
-                                        downloaded_file = self._find_downloaded_file(None)
-                                    if downloaded_file:
-                                        return downloaded_file
+                                # Calcular ruta esperada
+                                expected_path = self._find_downloaded_file(expected_filename)
+                                if expected_path:
+                                    return expected_path
                             else:
-                                self.logger.warning("         ⚠️ No se encontró el botón de descarga, esperando...")
-                    except NoSuchElementException:
-                        # El estado "Listo" aún no aparece
-                        pass
-                
-                # Si no está listo, esperar
-                self.logger.info("         ⏳ Reporte aún no está listo, esperando...")
-                time.sleep(check_interval)
-                
-            except NoSuchElementException:
-                # El reporte aún no está listo
-                self.logger.info("         ⏳ Reporte aún no está disponible, esperando...")
-                time.sleep(check_interval)
+                                self.logger.warning("         ⚠️ Reporte listo pero sin botón de descarga. Refrescando...")
+                                self.driver.refresh()
+                                time.sleep(5)
+                                last_refresh_time = time.time()
+                                continue
+                        else:
+                            self.logger.info(f"         ⏳ Reporte aún no está listo (Estado: {estado_texto.strip()}), esperando...")
+                            
+                    except Exception as e:
+                        self.logger.warning(f"         ⚠️ Error verificando fila: {e}")
+                else:
+                    self.logger.info("         ℹ️ No se encontraron reportes en la lista")
                 
             except Exception as e:
-                self.logger.warning(f"         ⚠️ Error al verificar estado: {str(e)}")
-                time.sleep(check_interval)
-        
-        self.logger.error(f"      ❌ Timeout: El reporte no estuvo listo en {max_wait_time} segundos")
+                self.logger.warning(f"      ⚠️ Error en verificación: {str(e)}")
+            
+            time.sleep(check_interval)
+            
+        self.logger.error("   ❌ Tiempo de espera agotado. El reporte no se generó a tiempo.")
         return None
+
+
     
     def _find_downloaded_file(self, expected_filename=None):
         """
@@ -1511,27 +1540,15 @@ class Command(BaseCommand):
 
         if user_id:
             try:
-                # Prefer DropiAccount model (supports encryption and multiple accounts)
-                from django.contrib.auth.models import User
-                from core.models import DropiAccount
-
+                # Usar credenciales Dropi directamente del User (ahora están en la tabla users)
+                from core.models import User
                 user = User.objects.filter(id=user_id).first()
-                acct = None
-                if user:
-                    acct = (
-                        DropiAccount.objects.filter(user=user, label=dropi_label).first()
-                        or DropiAccount.objects.filter(user=user, is_default=True).first()
-                        or DropiAccount.objects.filter(user=user).first()
-                    )
-                if acct and acct.email and acct.password:
-                    email = acct.email
-                    try:
-                        password = acct.get_password_plain()
-                    except Exception:
-                        password = acct.password
-                    self.stdout.write(self.style.SUCCESS(f'[INFO] Usando DropiAccount (user_id={user_id}, label={acct.label})'))
+                if user and user.dropi_email and user.dropi_password:
+                    email = user.dropi_email
+                    password = user.get_dropi_password_plain()
+                    self.stdout.write(self.style.SUCCESS(f'[INFO] Usando credenciales Dropi del usuario (user_id={user_id}, email={user.dropi_email})'))
                 else:
-                    self.stdout.write(self.style.WARNING(f'[WARN] No se encontró DropiAccount para user_id={user_id}'))
+                    self.stdout.write(self.style.WARNING(f'[WARN] No se encontraron credenciales Dropi para user_id={user_id}'))
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f'[ERROR] Falló al obtener perfil de usuario: {e}'))
 

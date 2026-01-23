@@ -17,8 +17,10 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import subprocess
+from io import StringIO
 
 from django.core.management.base import BaseCommand
+from django.core.management import call_command
 from django.conf import settings
 from core.utils.stdio import configure_utf8_stdio
 
@@ -33,7 +35,7 @@ class WorkflowOrchestrator:
     3. reporter → Lee el último CSV de ordenes_sin_movimiento/ y procesa las órdenes
     """
     
-    def __init__(self, headless=False, max_wait_time=600, dropi_email=None, dropi_password=None, user_id=None):
+    def __init__(self, headless=False, max_wait_time=600, dropi_email=None, dropi_password=None, user_id=None, use_chrome_fallback=False):
         """
         Inicializa el orquestador
         
@@ -43,13 +45,16 @@ class WorkflowOrchestrator:
             dropi_email: Email de DropiAccount a usar (se pasa a comandos hijos)
             dropi_password: Password de DropiAccount a usar (se pasa a comandos hijos)
             user_id: ID del usuario (requerido para reporter BD)
+            use_chrome_fallback: Si True, usa Chrome en lugar de Edge
         """
         self.headless = headless
         self.max_wait_time = max_wait_time
         self.dropi_email = dropi_email
         self.dropi_password = dropi_password
         self.user_id = user_id
+        self.use_chrome_fallback = use_chrome_fallback
         self.logger = self._setup_logger()
+        self.workflow_progress = None  # Se inicializará en run() si user_id está disponible
         
         # Directorios de trabajo
         self.base_dir = Path(__file__).parent.parent.parent.parent
@@ -124,6 +129,52 @@ class WorkflowOrchestrator:
         logger.addHandler(file_handler)
         
         return logger
+    
+    def _update_workflow_progress(self, status, message=None, add_to_messages=True):
+        """
+        Actualiza el progreso del workflow en la base de datos
+        
+        Args:
+            status: Nuevo estado del workflow
+            message: Mensaje opcional a agregar
+            add_to_messages: Si True, agrega el mensaje a la lista de mensajes
+        """
+        if not self.user_id or not self.workflow_progress:
+            return
+        
+        try:
+            from django.utils import timezone
+            from core.models import WorkflowProgress
+            
+            # Obtener el progreso actual
+            progress = WorkflowProgress.objects.filter(id=self.workflow_progress.id).first()
+            if not progress:
+                return
+            
+            # Actualizar estado
+            progress.status = status
+            if message:
+                progress.current_message = message
+                if add_to_messages:
+                    if not progress.messages:
+                        progress.messages = []
+                    progress.messages.append(message)
+            
+            # Actualizar timestamps según el paso completado
+            if status == 'step1_completed':
+                progress.step1_completed_at = timezone.now()
+            elif status == 'step2_completed':
+                progress.step2_completed_at = timezone.now()
+            elif status == 'step3_completed':
+                progress.step3_completed_at = timezone.now()
+            elif status == 'completed':
+                progress.completed_at = timezone.now()
+            
+            progress.save()
+            
+        except Exception as e:
+            # No fallar el workflow si hay error al actualizar progreso
+            self.logger.warning(f"   ⚠️ Error al actualizar progreso: {str(e)}")
     
     def _get_latest_file(self, directory, pattern, recursive=False):
         """
@@ -238,66 +289,100 @@ class WorkflowOrchestrator:
     
     def _run_command(self, command, step_name):
         """
-        Ejecuta un comando de Django y captura su salida
+        Ejecuta un comando de Django usando call_command (más robusto que subprocess)
         
         Args:
-            command: Lista con el comando a ejecutar (sin 'python' ni 'manage.py')
+            command: Lista con el comando a ejecutar (ej: ['reporterdownloader', '--email', '...'])
             step_name: Nombre del paso (para logging)
         
         Returns:
             True si el comando se ejecutó exitosamente, False en caso contrario
         """
-        # Construir comando completo con ruta absoluta a manage.py
-        manage_py = self._get_manage_py_path()
-        full_command = [sys.executable, str(manage_py)] + command
+        if not command:
+            self.logger.error(f"   [ERROR] Comando vacío")
+            return False
         
-        self.logger.info(f"   Ejecutando comando: {' '.join(full_command)}")
-        self.logger.info(f"   Directorio de trabajo: {manage_py.parent}")
+        command_name = command[0]
+        command_args = command[1:] if len(command) > 1 else []
+        
+        # Convertir args a diccionario para call_command
+        # Formato: ['--email', 'test@test.com', '--headless'] -> {'email': 'test@test.com', 'headless': True}
+        kwargs = {}
+        i = 0
+        while i < len(command_args):
+            arg = command_args[i]
+            if arg.startswith('--'):
+                key = arg[2:].replace('-', '_')
+                # Verificar si hay un valor siguiente
+                if i + 1 < len(command_args) and not command_args[i + 1].startswith('--'):
+                    kwargs[key] = command_args[i + 1]
+                    i += 2
+                else:
+                    # Es un flag booleano
+                    kwargs[key] = True
+                    i += 1
+            else:
+                i += 1
+        
+        self.logger.info(f"   Ejecutando comando Django: {command_name}")
+        if kwargs:
+            self.logger.info(f"   Argumentos: {kwargs}")
         
         try:
-            env = os.environ.copy()
-            env.setdefault("PYTHONIOENCODING", "utf-8")
-            env.setdefault("PYTHONUTF8", "1")
-            # Ejecutar comando y capturar salida en tiempo real
-            # Usar encoding UTF-8 para evitar problemas con caracteres especiales
-            process = subprocess.Popen(
-                full_command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=False,  # No usar text=True, manejar bytes directamente
-                bufsize=1,
-                cwd=str(manage_py.parent),  # Ejecutar desde el directorio donde está manage.py
-                env=env,
-            )
+            # Usar call_command que es más robusto y mantiene el contexto de Django
+            # Capturar salida en StringIO para logging
+            out = StringIO()
+            err = StringIO()
             
-            # Leer salida en tiempo real con encoding UTF-8 y manejo de errores
-            for line_bytes in process.stdout:
-                try:
-                    # Intentar decodificar como UTF-8
-                    line = line_bytes.decode('utf-8', errors='replace').rstrip()
-                except (UnicodeDecodeError, AttributeError):
-                    # Si falla, intentar con latin-1 o ignorar errores
-                    try:
-                        line = line_bytes.decode('latin-1', errors='replace').rstrip()
-                    except:
-                        # Último recurso: ignorar la línea
-                        continue
-                
-                if line:
-                    self.logger.info(f"   [{step_name}] {line}")
+            # Ejecutar el comando con mejor manejo de errores
+            try:
+                call_command(
+                    command_name,
+                    stdout=out,
+                    stderr=err,
+                    **kwargs
+                )
+                command_success = True
+            except SystemExit as exit_e:
+                # call_command puede hacer sys.exit(0) o sys.exit(1)
+                # Si es 0, fue exitoso
+                command_success = (exit_e.code == 0)
+                if not command_success:
+                    self.logger.error(f"   [ERROR] Comando falló con código: {exit_e.code}")
+            except Exception as cmd_e:
+                # Capturar el error pero continuar para loggear la salida
+                command_success = False
+                self.logger.error(f"   [ERROR] Excepción al ejecutar comando: {str(cmd_e)}")
+                import traceback
+                self.logger.error(f"   [ERROR] Traceback: {traceback.format_exc()}")
             
-            # Esperar a que termine
-            return_code = process.wait()
+            # Log de salida estándar (siempre, incluso si falló)
+            output = out.getvalue()
+            if output:
+                for line in output.split('\n'):
+                    if line.strip():
+                        # Detectar errores en la salida
+                        if any(keyword in line.lower() for keyword in ['error', 'exception', 'traceback', 'failed', 'falló']):
+                            self.logger.error(f"   [{step_name}] {line}")
+                        else:
+                            self.logger.info(f"   [{step_name}] {line}")
             
-            if return_code == 0:
+            # Log de errores
+            error_output = err.getvalue()
+            if error_output:
+                for line in error_output.split('\n'):
+                    if line.strip():
+                        self.logger.error(f"   [{step_name}] STDERR: {line}")
+            
+            if command_success:
                 self.logger.info(f"   [OK] Comando ejecutado exitosamente")
                 return True
             else:
-                self.logger.error(f"   [ERROR] Comando falló con código: {return_code}")
+                self.logger.error(f"   [ERROR] Comando falló")
                 return False
                 
         except Exception as e:
-            self.logger.error(f"   ❌ Error al ejecutar comando: {str(e)}")
+            self.logger.error(f"   ❌ Error crítico al ejecutar comando: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
             return False
@@ -333,8 +418,22 @@ class WorkflowOrchestrator:
             if self.headless:
                 command.append('--headless')
             
+            if self.use_chrome_fallback:
+                command.append('--use-chrome-fallback')
+            
             # Ejecutar comando
             success = self._run_command(command, "PASO1")
+            
+            if not success:
+                self.logger.error("   ❌ reporterdownloader falló durante la ejecución")
+                # Actualizar progreso con error específico
+                if self.workflow_progress:
+                    self._update_workflow_progress(
+                        'failed',
+                        'Error: Falló la descarga de reportes',
+                        add_to_messages=True
+                    )
+                return {'exito': False, 'archivos': []}
             
             # Esperar a que aparezcan los archivos (incluso si el comando falló por encoding)
             self.logger.info("   Esperando archivos descargados...")
@@ -378,6 +477,22 @@ class WorkflowOrchestrator:
             
             self.stats['paso1_exito'] = True
             self.stats['archivos_descargados'] = [str(f) for f in new_files_list]
+            
+            # Actualizar progreso si hay órdenes reportadas hoy
+            if self.workflow_progress:
+                from django.utils import timezone
+                from core.models import OrderReport
+                today_reports = OrderReport.objects.filter(
+                    user_id=self.user_id,
+                    status='reportado',
+                    updated_at__date=timezone.now().date()
+                ).count()
+                if today_reports > 0:
+                    self._update_workflow_progress(
+                        'step1_completed',
+                        f'Se ha creado el reporte del día (puedes ver el resumen en la página dashboard). {today_reports} órdenes reportadas hoy.',
+                        add_to_messages=False
+                    )
             
             return {'exito': True, 'archivos': new_files_list}
             
@@ -535,6 +650,38 @@ class WorkflowOrchestrator:
         self.logger.info(f"Modo headless: {self.headless}")
         self.logger.info(f"Tiempo máximo por paso: {self.max_wait_time}s")
         
+        # Inicializar progreso del workflow si user_id está disponible
+        if self.user_id:
+            try:
+                from core.models import User
+                from core.models import WorkflowProgress
+                from django.utils import timezone
+                
+                user = User.objects.filter(id=self.user_id).first()
+                if user:
+                    # Obtener el progreso más reciente del usuario que esté en estado inicial o corriendo
+                    # Esto asegura que usemos el progreso creado por ReporterStartView
+                    self.workflow_progress = WorkflowProgress.objects.filter(
+                        user=user
+                    ).filter(
+                        status__in=['pending', 'step1_running', 'step2_running', 'step3_running']
+                    ).order_by('-started_at').first()
+                    
+                    # Si no hay progreso activo, buscar el más reciente de cualquier estado
+                    if not self.workflow_progress:
+                        self.workflow_progress = WorkflowProgress.objects.filter(user=user).order_by('-started_at').first()
+                    
+                    # Si aún no existe, crear uno nuevo (fallback)
+                    if not self.workflow_progress:
+                        self.workflow_progress = WorkflowProgress.objects.create(
+                            user=user,
+                            status='step1_running',
+                            current_message='Esto puede tardar unos minutos...',
+                            messages=['Esto puede tardar unos minutos...']
+                        )
+            except Exception as e:
+                self.logger.warning(f"   ⚠️ No se pudo inicializar progreso del workflow: {str(e)}")
+        
         # Validar que manage.py existe antes de comenzar
         try:
             manage_py = self._get_manage_py_path()
@@ -544,6 +691,8 @@ class WorkflowOrchestrator:
             self.logger.error("❌ ERROR: No se encontró manage.py")
             self.logger.error("="*80)
             self.logger.error(str(e))
+            if self.workflow_progress:
+                self._update_workflow_progress('failed', 'Error: No se encontró manage.py')
             return False
         
         self.logger.info("="*80)
@@ -552,6 +701,7 @@ class WorkflowOrchestrator:
         
         try:
             # PASO 1: Descargar reportes
+            self._update_workflow_progress('step1_running', 'Descargando reportes del día...')
             resultado1 = self.paso1_reporterdownloader()
             
             if not resultado1['exito']:
@@ -559,9 +709,15 @@ class WorkflowOrchestrator:
                 self.logger.error("="*80)
                 self.logger.error("❌ FLUJO INTERRUMPIDO: PASO 1 FALLÓ")
                 self.logger.error("="*80)
+                if self.workflow_progress:
+                    self._update_workflow_progress('failed', 'Error: Falló la descarga de reportes')
                 return False
             
+            # Paso 1 completado
+            self._update_workflow_progress('step1_completed', 'Se ha creado el reporte del día (puedes ver el resumen en la página dashboard)')
+            
             # PASO 2: Comparar reportes
+            self._update_workflow_progress('step2_running', 'Comparando reportes y obteniendo órdenes sin movimiento...')
             resultado2 = self.paso2_reportcomparer()
             
             if not resultado2['exito']:
@@ -569,6 +725,8 @@ class WorkflowOrchestrator:
                 self.logger.error("="*80)
                 self.logger.error("❌ FLUJO INTERRUMPIDO: PASO 2 FALLÓ")
                 self.logger.error("="*80)
+                if self.workflow_progress:
+                    self._update_workflow_progress('failed', 'Error: Falló la comparación de reportes')
                 return False
             
             # Verificar que se generó el CSV
@@ -577,9 +735,15 @@ class WorkflowOrchestrator:
                 self.logger.error("="*80)
                 self.logger.error("❌ FLUJO INTERRUMPIDO: NO SE GENERÓ CSV")
                 self.logger.error("="*80)
+                if self.workflow_progress:
+                    self._update_workflow_progress('failed', 'Error: No se generó el CSV de órdenes')
                 return False
             
+            # Paso 2 completado
+            self._update_workflow_progress('step2_completed', 'Se han obtenido las órdenes sin movimiento')
+            
             # PASO 3: Procesar órdenes
+            self._update_workflow_progress('step3_running', 'Comenzando a reportar CAS, puedes ver la lista de las órdenes reportadas')
             resultado3 = self.paso3_reporter(resultado2['csv_path'])
             
             if not resultado3['exito']:
@@ -587,13 +751,21 @@ class WorkflowOrchestrator:
                 self.logger.error("="*80)
                 self.logger.error("❌ FLUJO INTERRUMPIDO: PASO 3 FALLÓ")
                 self.logger.error("="*80)
+                if self.workflow_progress:
+                    self._update_workflow_progress('failed', 'Error: Falló el proceso de reporte CAS')
                 return False
+            
+            # Paso 3 completado
+            self._update_workflow_progress('step3_completed', 'Proceso de reporte CAS completado')
             
             # ÉXITO COMPLETO
             self.logger.info("")
             self.logger.info("="*80)
             self.logger.info("✅ FLUJO DE TRABAJO COMPLETADO EXITOSAMENTE")
             self.logger.info("="*80)
+            
+            if self.workflow_progress:
+                self._update_workflow_progress('completed', 'Workflow completado exitosamente')
             
             self._print_final_stats()
             
@@ -679,7 +851,7 @@ class Command(BaseCommand):
             '--user-id',
             type=int,
             default=None,
-            help='ID del usuario (auth_user.id) con suscripción activa. Alternativa a --user-email.'
+            help='ID del usuario (tabla users.id) con suscripción activa. Alternativa a --user-email.'
         )
 
         parser.add_argument(
@@ -695,6 +867,12 @@ class Command(BaseCommand):
             default='reporter',
             help='Etiqueta DropiAccount a usar para el workflow (default: reporter).'
         )
+        
+        parser.add_argument(
+            '--use-chrome-fallback',
+            action='store_true',
+            help='Usar Chrome en lugar de Edge (útil si Edge no funciona o no está disponible)'
+        )
     
     def handle(self, *args, **options):
         configure_utf8_stdio()
@@ -703,6 +881,7 @@ class Command(BaseCommand):
         user_id = options.get('user_id')
         user_email = options.get('user_email')
         dropi_label = options.get('dropi_label', 'reporter')
+        use_chrome_fallback = options.get('use_chrome_fallback', False)
         
         self.stdout.write("="*80)
         self.stdout.write(self.style.SUCCESS('INICIANDO ORQUESTADOR DE FLUJO DE TRABAJO'))
@@ -722,11 +901,11 @@ class Command(BaseCommand):
         dropi_password = None
         
         try:
-            from django.contrib.auth.models import User
-            from core.models import DropiAccount, UserProfile
+            from core.models import User
             
             # Buscar usuario por ID o email
             user = None
+
             if user_id:
                 user = User.objects.filter(id=user_id).first()
                 if not user:
@@ -735,78 +914,59 @@ class Command(BaseCommand):
                     )
                     sys.exit(1)
             elif user_email:
-                # Buscar por email (puede ser email o username)
+                # Buscar por email o username (ahora todo está en la tabla users)
                 user = (
                     User.objects.filter(email=user_email).first()
                     or User.objects.filter(username=user_email).first()
                 )
+                
                 if not user:
                     self.stdout.write(
                         self.style.ERROR(
-                            f'[ERROR] Usuario con email/username "{user_email}" no existe en la base de datos'
+                            f'[ERROR] Usuario con email "{user_email}" no existe'
                         )
                     )
                     sys.exit(1)
-                # Mostrar información del usuario encontrado
-                self.stdout.write(
-                    self.style.SUCCESS(
-                        f'[INFO] Usuario encontrado: ID={user.id}, Email={user.email}, Username={user.username}'
-                    )
-                )
-            
-            # Verificar que el usuario tiene suscripción activa
-            try:
-                profile = user.profile
-                if profile.role != "ADMIN" and not profile.subscription_active:
                     self.stdout.write(
-                        self.style.ERROR(
-                            f'[ERROR] Usuario {user.email} (ID: {user.id}) no tiene suscripción activa. '
-                            f'Rol: {profile.role}, Suscripción activa: {profile.subscription_active}'
+                        self.style.SUCCESS(
+                            f'[INFO] Usuario encontrado: ID={user.id}, Email={user.email}'
                         )
                     )
-                    sys.exit(1)
-                # Mostrar información de suscripción
-                self.stdout.write(
-                    self.style.SUCCESS(
-                        f'[INFO] Usuario verificado: Rol={profile.role}, '
-                        f'Tier={profile.subscription_tier}, Suscripción activa={profile.subscription_active}'
-                    )
-                )
-            except Exception as e:
-                # Si no tiene perfil, permitir continuar (puede ser admin sin perfil)
-                self.stdout.write(
-                    self.style.WARNING(
-                        f'[WARN] Usuario no tiene perfil completo: {str(e)}. Continuando...'
-                    )
-                )
             
-            # Obtener DropiAccount del usuario (prioridad: label específico > default > cualquier)
-            acct = (
-                DropiAccount.objects.filter(user=user, label=dropi_label).first()
-                or DropiAccount.objects.filter(user=user, is_default=True).first()
-                or DropiAccount.objects.filter(user=user).first()
-            )
-            
-            if not acct or not acct.email or not acct.password:
+            # Verificar que el usuario tiene suscripción activa (ahora está en User directamente)
+            if user.role != "ADMIN" and not user.subscription_active:
                 self.stdout.write(
                     self.style.ERROR(
-                        f'[ERROR] Usuario {user.email} (ID: {user.id}) no tiene DropiAccount configurada '
-                        f'(label={dropi_label}). '
-                        f'Por favor configura una cuenta DropiAccount para este usuario.'
+                        f'[ERROR] Usuario {user.email} (ID: {user.id}) no tiene suscripción activa. '
+                        f'Rol: {user.role}, Suscripción activa: {user.subscription_active}'
+                    )
+                )
+                sys.exit(1)
+            # Mostrar información de suscripción
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f'[INFO] Usuario verificado: Rol={user.role}, '
+                    f'Tier={user.subscription_tier}, Suscripción activa={user.subscription_active}'
+                )
+            )
+            
+            # Obtener credenciales Dropi directamente del usuario (ahora están en la tabla users)
+            if not user.dropi_email or not user.dropi_password:
+                self.stdout.write(
+                    self.style.ERROR(
+                        f'[ERROR] Usuario {user.email} (ID: {user.id}) no tiene credenciales Dropi configuradas. '
+                        f'Por favor configura dropi_email y dropi_password para este usuario.'
                     )
                 )
                 sys.exit(1)
             
-            dropi_email = acct.email
-            try:
-                dropi_password = acct.get_password_plain()
-            except Exception:
-                dropi_password = acct.password
+            dropi_email = user.dropi_email
+            dropi_password = user.get_dropi_password_plain()
             
             self.stdout.write(
                 self.style.SUCCESS(
-                    f'[INFO] DropiAccount obtenida exitosamente: '
-                    f'Email={dropi_email}, Label={acct.label}, Usuario={user.email} (ID: {user.id})'
+                    f'[INFO] Credenciales Dropi obtenidas exitosamente: '
+                    f'Email={dropi_email}, Usuario={user.email} (ID: {user.id})'
                 )
             )
             
@@ -827,7 +987,8 @@ class Command(BaseCommand):
             max_wait_time=max_wait,
             dropi_email=dropi_email,
             dropi_password=dropi_password,
-            user_id=user_id_for_orchestrator
+            user_id=user_id_for_orchestrator,
+            use_chrome_fallback=use_chrome_fallback
         )
         
         try:

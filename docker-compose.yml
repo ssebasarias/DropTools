@@ -232,7 +232,7 @@ services:
     profiles: [ "workers" ]
     restart: "no"
     depends_on:
-    #   - db
+      #   - db
       - backend
 
   shopify_auditor:
@@ -259,7 +259,7 @@ services:
     # depends_on:
     #   - db
 
-  # 5. Backend API (Django REST Framework)
+    # 5. Backend API (Django REST Framework)
   backend:
     build:
       context: .
@@ -268,11 +268,21 @@ services:
     restart: always
     env_file:
       - .env.docker
+    environment:
+      # Hot-reload y desarrollo
+      - PYTHONUNBUFFERED=1
+      - PYTHONIOENCODING=utf-8
+      - PYTHONUTF8=1
+      - DJANGO_SETTINGS_MODULE=dahell_backend.settings
+      # Evitar caché de Python para desarrollo
+      - PYTHONDONTWRITEBYTECODE=1
     volumes:
       - ./backend:/app/backend
       - ./logs:/app/logs
       - ./cache_huggingface:/app/cache_huggingface
       - /var/run/docker.sock:/var/run/docker.sock # Control Docker from within container
+      # Excluir __pycache__ para evitar problemas de sincronización
+      - /app/backend/**/__pycache__
     ports:
       - "8000:8000"
     command: python backend/manage.py runserver 0.0.0.0:8000
@@ -281,7 +291,7 @@ services:
     # depends_on:
     #   - db
 
-  # 6. Frontend (React + Vite)
+    # 6. Frontend (React + Vite)
   frontend:
     image: node:20-alpine
     container_name: dahell_frontend

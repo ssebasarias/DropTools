@@ -24,9 +24,9 @@ from selenium.common.exceptions import (
 )
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from django.contrib.auth.models import User
+from core.models import User
 from django.utils import timezone
-from core.models import DropiAccount, OrderReport
+from core.models import OrderReport
 from core.utils.stdio import configure_utf8_stdio
 
 
@@ -83,7 +83,7 @@ class DropiReporterBot:
         Args:
             excel_path: Ruta al archivo Excel o CSV con los datos
             headless: Si True, ejecuta el navegador sin interfaz gráfica
-            user_id: ID del usuario (Django auth_user.id) para cargar credenciales de Dropi desde BD
+            user_id: ID del usuario (tabla users.id) para cargar credenciales de Dropi desde BD
             dropi_label: etiqueta de la cuenta Dropi a usar (default: reporter). Si no existe, usa la default.
             email: Email de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
             password: Password de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
@@ -167,26 +167,16 @@ class DropiReporterBot:
             self.logger.info("✅ Dropi creds desde argumentos directos (--email/--password)")
             return
 
-        # Prioridad 2: Intentar desde BD
+        # Prioridad 2: Intentar desde BD (ahora las credenciales están en User directamente)
         if self.user_id:
             user = User.objects.filter(id=self.user_id).first()
             if not user:
-                raise ValueError(f"user_id={self.user_id} no existe en auth_user")
+                raise ValueError(f"user_id={self.user_id} no existe")
 
-            acct = DropiAccount.objects.filter(user=user, label=self.dropi_label).first()
-            if not acct:
-                acct = DropiAccount.objects.filter(user=user, is_default=True).first()
-            if not acct:
-                acct = DropiAccount.objects.filter(user=user).first()
-
-            if acct and acct.email and acct.password:
-                self.DROPI_EMAIL = acct.email
-                # Support encrypted-at-rest passwords.
-                try:
-                    self.DROPI_PASSWORD = acct.get_password_plain()
-                except Exception:
-                    self.DROPI_PASSWORD = acct.password
-                self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, label={acct.label})")
+            if user.dropi_email and user.dropi_password:
+                self.DROPI_EMAIL = user.dropi_email
+                self.DROPI_PASSWORD = user.get_dropi_password_plain()
+                self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, email={user.dropi_email})")
                 return
 
         # Prioridad 3: Fallback ENV
@@ -359,35 +349,46 @@ class DropiReporterBot:
     
     def _init_driver(self):
         """
-        Inicializa el driver de Selenium para ejecución LOCAL (no Docker)
-        Por defecto muestra el navegador para que puedas ver qué hace
+        Inicializa el driver de Selenium con configuración robusta para Docker y Local
         """
         self.logger.info("="*60)
-        self.logger.info("🚀 INICIALIZANDO NAVEGADOR CHROME (LOCAL)")
+        self.logger.info("🚀 INICIALIZANDO NAVEGADOR CHROME")
         self.logger.info("="*60)
         
         options = webdriver.ChromeOptions()
         
-        # Configuración para ejecución LOCAL (no Docker)
+        # Configuración base
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-infobars')
+        options.add_argument('--start-maximized')
+        options.add_argument('--disable-notifications')
+        options.add_argument('--ignore-certificate-errors')
+        options.add_argument('--disable-popup-blocking')
+        
+        # Anti-detección básico
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        # Modo Headless (siempre recomendado en Docker)
         if self.headless:
             self.logger.info("🔇 Modo HEADLESS activado (navegador oculto)")
             options.add_argument('--headless=new')
         else:
-            self.logger.info("👀 Modo VISIBLE activado (puedes ver el navegador)")
+            self.logger.info("👀 Modo VISIBLE activado")
+
+        # Configuración de perfil temporal (evita problemas de permisos)
+        import tempfile
+        temp_dir = tempfile.mkdtemp(prefix='chrome_selenium_')
+        options.add_argument(f'--user-data-dir={temp_dir}')
+        self.logger.info(f"   📁 Usando perfil temporal: {temp_dir}")
         
-        # Optimizaciones para PC local
-        options.add_argument('--start-maximized')  # Ventana maximizada
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--disable-infobars')
-        options.add_argument('--disable-extensions')
-        
-        # Evitar detección de automatización
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-        
-        # Preferencias para mejor rendimiento local
+        # Preferencias
         prefs = {
-            "profile.default_content_setting_values.notifications": 2,  # Bloquear notificaciones
+            "profile.default_content_setting_values.notifications": 2,
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False
         }
@@ -396,22 +397,51 @@ class DropiReporterBot:
         self.logger.info("   📦 Creando instancia de Chrome...")
         
         try:
-            # Usar ChromeDriver local (se descarga automáticamente si no existe)
-            self.driver = webdriver.Chrome(options=options)
-            self.logger.info("   ✅ Chrome iniciado correctamente")
+            # Intentar usar chromedriver del sistema (típico en Docker alpine/debian)
+            from selenium.webdriver.chrome.service import Service
+            
+            chromedriver_path = None
+            # Rutas comunes en Linux/Docker
+            possible_paths = ['/usr/bin/chromedriver', '/usr/local/bin/chromedriver', '/usr/lib/chromium/chromedriver']
+            
+            for path in possible_paths:
+                if os.path.exists(path):
+                    chromedriver_path = path
+                    self.logger.info(f"   📍 Chromedriver encontrado en: {path}")
+                    break
+            
+            if chromedriver_path:
+                service = Service(chromedriver_path)
+                self.driver = webdriver.Chrome(service=service, options=options)
+                self.logger.info("   ✅ Chrome iniciado correctamente (con driver del sistema)")
+            else:
+                # Fallback: dejar que selenium manager lo descargue (puede fallar en docker sin internet/permisos)
+                self.logger.info("   ⚠️ No se encontró driver del sistema, intentando Selenium Manager...")
+                self.driver = webdriver.Chrome(options=options)
+                self.logger.info("   ✅ Chrome iniciado correctamente (Selenium Manager)")
+                
         except Exception as e:
             self.logger.error(f"   ❌ Error al iniciar Chrome: {e}")
-            self.logger.info("   💡 Asegúrate de tener Chrome instalado")
-            raise
+            self.logger.info("   💡 Verificando instalación de Chrome/Chromium...")
+            try:
+                # Debug info
+                import subprocess
+                res = subprocess.run(['which', 'google-chrome'], capture_output=True, text=True)
+                self.logger.info(f"   which google-chrome: {res.stdout.strip()}")
+                res = subprocess.run(['which', 'chromium'], capture_output=True, text=True)
+                self.logger.info(f"   which chromium: {res.stdout.strip()}")
+                res = subprocess.run(['which', 'chromedriver'], capture_output=True, text=True)
+                self.logger.info(f"   which chromedriver: {res.stdout.strip()}")
+            except: pass
+            raise e
         
-        # Anti-detección
+        # Anti-detección adicional
         self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        # Configurar timeouts con máximo de 15 segundos para detectar sesión expirada
+        # Configurar timeouts
         self.wait = WebDriverWait(self.driver, self.TIMEOUT_SECONDS)
         
-        self.logger.info(f"   🌐 Navegador listo - Versión: Chrome")
-        self.logger.info(f"   💻 Ejecutando en: PC LOCAL (no Docker)")
+        self.logger.info(f"   🌐 Navegador listo")
         self.logger.info("="*60)
     
     def _login(self):
@@ -807,10 +837,42 @@ class DropiReporterBot:
                 row = self.driver.find_element(By.CSS_SELECTOR, "tbody.list tr:first-child")
             
             # Buscar el botón de Nueva consulta EN ESA FILA ESPECÍFICA
-            new_consultation_button = row.find_element(
-                By.CSS_SELECTOR,
-                "a[title='Nueva consulta'] i.fa-headset"
-            )
+            # Intentar múltiples selectores para robustez (Español, Inglés, Clases)
+            new_consultation_button = None
+            
+            selectors_to_try = [
+                "a[title='Nueva consulta'] i.fa-headset",         # Español Exacto
+                "a[title='New request'] i.fa-headset",            # Inglés Exacto (Corregido)
+                "a[title='Nueva consulta'] i.fas.fa-headset",     # Español con clase completa
+                "a[title='New request'] i.fas.fa-headset",       # Inglés con clase completa
+                "a i.fa-headset",                                 # Genérico
+                "a i.fas.fa-headset"                              # Genérico completo
+            ]
+            
+            for selector in selectors_to_try:
+                try:
+                    new_consultation_button = row.find_element(By.CSS_SELECTOR, selector)
+                    self.logger.info(f"   ✅ Botón encontrado con selector: {selector}")
+                    break
+                except NoSuchElementException:
+                    continue
+            
+            if not new_consultation_button:
+                # Intento final: buscar cualquier botón en la última columna que no sea Editar/Ver
+                self.logger.warning("   ⚠️ No se encontró por selectores específicos, buscando genérico...")
+                try:
+                    # Buscar todos los botones de acción en la fila
+                    actions = row.find_elements(By.CSS_SELECTOR, "td a.btn")
+                    for action in actions:
+                        # Si tiene icono de headset, es ese
+                        if action.find_elements(By.CSS_SELECTOR, "i.fa-headset"):
+                            new_consultation_button = action.find_element(By.CSS_SELECTOR, "i")
+                            self.logger.info("   ✅ Botón encontrado por búsqueda genérica")
+                            break
+                except: pass
+            
+            if not new_consultation_button:
+                raise NoSuchElementException("No se pudo encontrar el botón de Nueva Consulta con ningún selector")
             
             self.logger.info("   ✅ Botón 'Nueva consulta' encontrado en la fila correcta")
             
@@ -818,8 +880,11 @@ class DropiReporterBot:
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", new_consultation_button)
             time.sleep(1)
             
-            # Click en el padre (el <a>)
-            parent_link = new_consultation_button.find_element(By.XPATH, "..")
+            # Click en el padre (el <a>) si encontramos el <i>, o directo si encontramos el <a>
+            if new_consultation_button.tag_name == 'i':
+                parent_link = new_consultation_button.find_element(By.XPATH, "..")
+            else:
+                parent_link = new_consultation_button
             
             try:
                 parent_link.click()
@@ -849,18 +914,24 @@ class DropiReporterBot:
             return False
     
     def _select_consultation_type(self):
-        """Selecciona el tipo de consulta: Transportadora"""
-        self.logger.info("Seleccionando tipo de consulta: Transportadora...")
+        """Selecciona el tipo de consulta: Transportadora / Carrier"""
+        self.logger.info("Seleccionando tipo de consulta: Transportadora/Carrier...")
         
         try:
             self.logger.info("   1) Buscando dropdown de tipo de consulta...")
-            # Click en el dropdown de tipo de consulta
-            type_dropdown = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(@class, 'select-button') and .//p[contains(text(), 'Selecciona el tipo de consulta')]]"
-                ))
-            )
+            
+            # Selector robusto multilingüe para el dropdown "Type of inquiry"
+            # Busca un botón con clase 'select-button' que tenga un hermano label o p cercano con el texto
+            dropdown_xpath = "//button[contains(@class, 'select-button') and (descendant::p[contains(text(), 'Select the type')] or descendant::p[contains(text(), 'Selecciona el tipo')] or preceding-sibling::span[contains(text(), 'Type of inquiry')] or preceding-sibling::span[contains(text(), 'Tipo de consulta')])]"
+            
+            # Alternativa CSS si XPath falla
+            dropdown_css = ".select-container:first-child .select-button" 
+            
+            try:
+                type_dropdown = self.wait.until(EC.element_to_be_clickable((By.XPATH, dropdown_xpath)))
+            except:
+                type_dropdown = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, dropdown_css)))
+                
             self.logger.info("   ✅ Dropdown encontrado")
             
             # Scroll al elemento
@@ -873,20 +944,20 @@ class DropiReporterBot:
                 type_dropdown.click()
             except:
                 self.driver.execute_script("arguments[0].click();", type_dropdown)
-            time.sleep(1)  # Reducido de 2s a 1s
+            time.sleep(1) 
             self.logger.info("   ✅ Dropdown abierto")
             
-            # Seleccionar "Transportadora"
-            self.logger.info("   3) Buscando opción 'Transportadora'...")
+            # Seleccionar "Transportadora" o "Carrier"
+            self.logger.info("   3) Buscando opción 'Transportadora'/'Carrier'...")
+            
+            carrier_xpath = "//button[contains(@class, 'option') and (contains(., 'Transportadora') or contains(., 'Carrier'))]"
+            
             transportadora_option = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(@class, 'option') and contains(., 'Transportadora')]"
-                ))
+                EC.element_to_be_clickable((By.XPATH, carrier_xpath))
             )
             self.logger.info("   ✅ Opción encontrada")
             
-            self.logger.info("   4) Seleccionando 'Transportadora'...")
+            self.logger.info("   4) Seleccionando 'Transportadora'/'Carrier'...")
             # Scroll y click
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", transportadora_option)
             time.sleep(0.5)
@@ -894,9 +965,9 @@ class DropiReporterBot:
                 transportadora_option.click()
             except:
                 self.driver.execute_script("arguments[0].click();", transportadora_option)
-            time.sleep(1)  # Reducido de 2s a 1s
+            time.sleep(1)
             
-            self.logger.info("✅ Tipo de consulta seleccionado: Transportadora")
+            self.logger.info("✅ Tipo de consulta seleccionado: Transportadora/Carrier")
             self.current_processing_step = None
             return True
             
@@ -924,13 +995,18 @@ class DropiReporterBot:
         
         try:
             self.logger.info("   1) Buscando dropdown de motivo...")
-            # Click en el dropdown de motivo
-            reason_dropdown = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(@class, 'select-button') and .//div[contains(text(), 'Selecciona el motivo de consulta')]]"
-                ))
-            )
+            
+            # Selector robusto multilingüe
+            dropdown_xpath = "//button[contains(@class, 'select-button') and (descendant::div[contains(text(), 'Select the reason')] or descendant::div[contains(text(), 'Selecciona el motivo')] or preceding-sibling::span[contains(text(), 'Reason for query')] or preceding-sibling::span[contains(text(), 'Motivo de consulta')])]"
+            
+            # Alternativa CSS (es el segundo .ticket-selector o similar)
+            dropdown_css = ".ticket-selector:nth-of-type(2) .select-button"
+            
+            try:
+                reason_dropdown = self.wait.until(EC.element_to_be_clickable((By.XPATH, dropdown_xpath)))
+            except:
+                reason_dropdown = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, dropdown_css)))
+                
             self.logger.info("   ✅ Dropdown encontrado")
             
             # Scroll al elemento
@@ -942,16 +1018,17 @@ class DropiReporterBot:
                 reason_dropdown.click()
             except:
                 self.driver.execute_script("arguments[0].click();", reason_dropdown)
-            time.sleep(1)  # Reducido de 2s a 1s
+            time.sleep(1)
             self.logger.info("   ✅ Dropdown abierto")
             
             # Seleccionar "Ordenes sin movimiento"
             self.logger.info("   3) Buscando opción 'Ordenes sin movimiento'...")
+            
+            # Busca texto en español o varias variantes en inglés
+            option_xpath = "//button[contains(@class, 'option') and (contains(., 'Ordenes sin movimiento') or contains(., 'No movement') or contains(., 'without movement'))]"
+            
             no_movement_option = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(@class, 'option') and contains(., 'Ordenes sin movimiento')]"
-                ))
+                EC.element_to_be_clickable((By.XPATH, option_xpath))
             )
             self.logger.info("   ✅ Opción encontrada")
             
@@ -962,7 +1039,7 @@ class DropiReporterBot:
                 no_movement_option.click()
             except:
                 self.driver.execute_script("arguments[0].click();", no_movement_option)
-            time.sleep(1)  # Reducido de 2s a 1s
+            time.sleep(1)
             
             self.logger.info("✅ Motivo seleccionado: Ordenes sin movimiento")
             
@@ -1032,11 +1109,12 @@ class DropiReporterBot:
             self.logger.info("   1) Buscando botón 'Siguiente'...")
             # Usar timeout corto de 5 segundos para evitar esperas innecesarias
             short_wait = WebDriverWait(self.driver, 5)
+            
+            # Selector multilingüe para botón "Siguiente" / "Next"
+            next_xpath = "//button[contains(@class, 'btn') and (descendant::span[contains(text(), 'Siguiente')] or descendant::span[contains(text(), 'Next')])]"
+            
             next_button = short_wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(@class, 'btn') and .//span[contains(text(), 'Siguiente')]]"
-                ))
+                EC.element_to_be_clickable((By.XPATH, next_xpath))
             )
             self.logger.info("   ✅ Botón encontrado")
             
@@ -1140,11 +1218,11 @@ class DropiReporterBot:
             observation_text = self._get_random_observation_text()
             self.logger.info(f"   Texto seleccionado (aleatorio): '{observation_text}'")
             
-            # Buscar el textarea
+            # Buscar el textarea (Multilingüe: ID o Placeholder)
             textarea = self.wait.until(
                 EC.presence_of_element_located((
                     By.CSS_SELECTOR,
-                    "textarea[id='description'], textarea[placeholder*='transportadora']"
+                    "textarea[id='description'], textarea[placeholder*='Tell the conveyor'], textarea[placeholder*='transportadora']"
                 ))
             )
             
@@ -1166,11 +1244,11 @@ class DropiReporterBot:
         self.logger.info("Iniciando conversación...")
         
         try:
+            # Selector multilingüe para botón "Iniciar..." / "Start..."
+            start_xpath = "//button[contains(@class, 'btn') and (descendant::span[contains(text(), 'Iniciar un')] or descendant::span[contains(text(), 'Start a conversation')])]"
+            
             start_button = self.wait.until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//button[contains(@class, 'btn') and .//span[contains(text(), 'Iniciar un conversación')]]"
-                ))
+                EC.element_to_be_clickable((By.XPATH, start_xpath))
             )
             start_button.click()
             time.sleep(2)
@@ -2044,7 +2122,7 @@ class Command(BaseCommand):
             '--user-id',
             type=int,
             required=True,
-            help='ID del usuario (auth_user.id) - REQUERIDO para usar el sistema de reportes en BD'
+            help='ID del usuario (tabla users.id) - REQUERIDO para usar el sistema de reportes en BD'
         )
 
         parser.add_argument(
