@@ -38,6 +38,7 @@ from selenium.common.exceptions import (
     ElementClickInterceptedException
 )
 from django.core.management.base import BaseCommand
+from core.utils.stdio import configure_utf8_stdio
 from django.conf import settings
 
 
@@ -1478,6 +1479,13 @@ class Command(BaseCommand):
             type=int,
             help='ID del usuario para obtener credenciales de la base de datos'
         )
+
+        parser.add_argument(
+            '--dropi-label',
+            type=str,
+            default='reporter',
+            help='Etiqueta de la cuenta Dropi a usar (default: reporter)'
+        )
         
         parser.add_argument(
             '--email',
@@ -1492,24 +1500,38 @@ class Command(BaseCommand):
         )
     
     def handle(self, *args, **options):
+        configure_utf8_stdio()
         headless = options.get('headless', False)
         download_dir = options.get('download_dir', None)
+        use_chrome_fallback = options.get('use_chrome_fallback', False)
         user_id = options.get('user_id')
+        dropi_label = options.get('dropi_label', 'reporter')
         email = options.get('email')
         password = options.get('password')
 
         if user_id:
             try:
-                from core.models import UserProfile
-                # Assuming User profile is linked via user_id directly or user__id
-                # user_id typically refers to User.id
-                profile = UserProfile.objects.filter(user__id=user_id).first()
-                if profile and profile.dropi_email and profile.dropi_password:
-                    email = profile.dropi_email
-                    password = profile.dropi_password
-                    self.stdout.write(self.style.SUCCESS(f'[INFO] Usando credenciales de base de datos para usuario ID {user_id}'))
+                # Prefer DropiAccount model (supports encryption and multiple accounts)
+                from django.contrib.auth.models import User
+                from core.models import DropiAccount
+
+                user = User.objects.filter(id=user_id).first()
+                acct = None
+                if user:
+                    acct = (
+                        DropiAccount.objects.filter(user=user, label=dropi_label).first()
+                        or DropiAccount.objects.filter(user=user, is_default=True).first()
+                        or DropiAccount.objects.filter(user=user).first()
+                    )
+                if acct and acct.email and acct.password:
+                    email = acct.email
+                    try:
+                        password = acct.get_password_plain()
+                    except Exception:
+                        password = acct.password
+                    self.stdout.write(self.style.SUCCESS(f'[INFO] Usando DropiAccount (user_id={user_id}, label={acct.label})'))
                 else:
-                    self.stdout.write(self.style.WARNING(f'[WARN] No se encontraron credenciales completas para usuario ID {user_id}'))
+                    self.stdout.write(self.style.WARNING(f'[WARN] No se encontró DropiAccount para user_id={user_id}'))
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f'[ERROR] Falló al obtener perfil de usuario: {e}'))
 

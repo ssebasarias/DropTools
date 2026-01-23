@@ -18,11 +18,13 @@ from .models import (
     ClusterDecisionLog,
     UserProfile,
     DropiAccount,
+    OrderReport,
 )
 from .permissions import IsAdminRole, MinSubscriptionTier
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import pathlib
 import json
+import os
 from .docker_utils import get_container_stats, control_container
 
 class DashboardStatsView(APIView):
@@ -730,12 +732,17 @@ class ReporterConfigView(APIView):
                 from .models import UserProfile
                 profile, _ = UserProfile.objects.get_or_create(user=user)
 
-        return Response({
-            "email": profile.dropi_email or "",
-            # Never return secrets to the frontend; configuration is managed via DropiAccounts API.
-            "password": "",
-            "executionTime": "08:00" # Placeholder, no persistido aún
-        })
+        exec_time = getattr(profile, "execution_time", None)
+        return Response(
+            {
+                # Legacy: no usamos estos campos para el worker (DropiAccounts API es la fuente real)
+                "email": profile.dropi_email or "",
+                # Never return secrets to the frontend; configuration is managed via DropiAccounts API.
+                "password": "",
+                # Persisted schedule time (HH:MM). Default 08:00 if not set.
+                "executionTime": exec_time.strftime("%H:%M") if exec_time else "08:00",
+            }
+        )
 
     def post(self, request):
         user = request.user
@@ -746,13 +753,247 @@ class ReporterConfigView(APIView):
             from .models import UserProfile
             profile, created = UserProfile.objects.get_or_create(user=user)
             
-            profile.dropi_email = request.data.get('email')
-            profile.dropi_password = request.data.get('password')
+            # Legacy fields (do not use for worker; DropiAccounts API stores encrypted passwords)
+            if "email" in request.data:
+                profile.dropi_email = request.data.get("email")
+            if "password" in request.data:
+                profile.dropi_password = request.data.get("password")
+
+            # New: schedule time HH:MM
+            exec_time_str = request.data.get("executionTime") or request.data.get("execution_time")
+            if exec_time_str is not None:
+                exec_time_str = str(exec_time_str).strip()
+                if exec_time_str == "":
+                    profile.execution_time = None
+                else:
+                    try:
+                        hh, mm = exec_time_str.split(":")
+                        profile.execution_time = dt_time(hour=int(hh), minute=int(mm))
+                    except Exception:
+                        return Response(
+                            {"error": "executionTime inválido. Usa formato HH:MM"},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
             profile.save()
             
-            return Response({"status": "success", "message": "Credentials updated"})
+            return Response(
+                {
+                    "status": "success",
+                    "message": "Configuración actualizada",
+                    "executionTime": profile.execution_time.strftime("%H:%M") if profile.execution_time else None,
+                }
+            )
         except Exception as e:
             return Response({"error": str(e)}, status=500)
+
+
+class ReporterStartView(APIView):
+    """
+    Inicia el workflow de reportes manualmente (reemplaza el scheduler automático)
+    Funciona tanto en desarrollo local como en Docker
+    """
+    def post(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            import subprocess
+            import sys
+            import platform
+            from pathlib import Path
+            
+            # Detectar si estamos en Docker
+            is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
+            
+            if is_docker:
+                # En Docker: ejecutar dentro del contenedor backend
+                # El comando debe ejecutarse en el mismo contenedor
+                manage_py = Path('/app/backend/manage.py')
+                
+                if not manage_py.exists():
+                    return Response(
+                        {"error": "No se encontró manage.py en Docker"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                command = [
+                    sys.executable,
+                    str(manage_py),
+                    'workflow_orchestrator',
+                    '--user-email',
+                    user.email
+                    # Sin --headless para modo visible
+                ]
+                
+                # Ejecutar en background dentro del contenedor
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=str(manage_py.parent),
+                    env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+                )
+            else:
+                # En desarrollo local
+                manage_py = Path(__file__).parent.parent / 'manage.py'
+                
+                if not manage_py.exists():
+                    return Response(
+                        {"error": "No se encontró manage.py"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                
+                command = [
+                    sys.executable,
+                    str(manage_py),
+                    'workflow_orchestrator',
+                    '--user-email',
+                    user.email
+                    # Sin --headless para modo visible
+                ]
+                
+                # Ejecutar en una nueva ventana de consola visible (Windows)
+                # Esto permite ver los logs del orquestador en tiempo real
+                if platform.system() == 'Windows':
+                    # CREATE_NEW_CONSOLE abre una nueva ventana de cmd
+                    CREATE_NEW_CONSOLE = 0x00000010
+                    process = subprocess.Popen(
+                        command,
+                        cwd=str(manage_py.parent),
+                        env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1'),
+                        creationflags=CREATE_NEW_CONSOLE
+                    )
+                else:
+                    # En Linux/Mac, ejecutar en background normal
+                    process = subprocess.Popen(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        cwd=str(manage_py.parent),
+                        env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+                    )
+            
+            return Response({
+                "status": "started",
+                "message": "Workflow iniciado en ventana visible" if platform.system() == 'Windows' and not is_docker else "Workflow iniciado en background",
+                "process_id": process.pid,
+                "environment": "docker" if is_docker else "local"
+            })
+            
+        except Exception as e:
+            import traceback
+            return Response(
+                {"error": f"Error al iniciar workflow: {str(e)}", "traceback": traceback.format_exc()},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ReporterStatusView(APIView):
+    """
+    Obtiene el estado actual de los reportes (contadores y estadísticas)
+    """
+    def get(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            from django.utils import timezone
+            
+            # Contar reportes por estado
+            total_reported = OrderReport.objects.filter(user=user, status='reportado').count()
+            pending_24h = OrderReport.objects.filter(
+                user=user,
+                status='cannot_generate_yet',
+                next_attempt_time__gt=timezone.now()
+            ).count()
+            total_pending = OrderReport.objects.filter(
+                user=user
+            ).exclude(status='reportado').count()
+            
+            # Obtener última actualización
+            last_report = OrderReport.objects.filter(user=user).order_by('-updated_at').first()
+            last_updated = last_report.updated_at.isoformat() if last_report else None
+            
+            return Response({
+                "total_reported": total_reported,
+                "pending_24h": pending_24h,
+                "total_pending": total_pending,
+                "last_updated": last_updated
+            })
+            
+        except Exception as e:
+            return Response(
+                {"error": f"Error al obtener estado: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ReporterListView(APIView):
+    """
+    Obtiene la lista de órdenes reportadas con información detallada
+    """
+    def get(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        try:
+            # Obtener parámetros de paginación
+            page = int(request.query_params.get('page', 1))
+            page_size = int(request.query_params.get('page_size', 50))
+            status_filter = request.query_params.get('status', 'reportado')
+            
+            # Filtrar reportes
+            queryset = OrderReport.objects.filter(user=user)
+            
+            if status_filter:
+                queryset = queryset.filter(status=status_filter)
+            
+            # Ordenar por fecha de actualización (más recientes primero)
+            queryset = queryset.order_by('-updated_at')
+            
+            # Paginación
+            start = (page - 1) * page_size
+            end = start + page_size
+            
+            reports = queryset[start:end]
+            
+            # Serializar resultados
+            results = []
+            for report in reports:
+                results.append({
+                    "id": report.id,
+                    "order_phone": report.order_phone,
+                    "order_id": report.order_id or "",
+                    "customer_name": report.customer_name or "",
+                    "product_name": report.product_name or "",
+                    "status": report.status,
+                    "report_generated": report.report_generated,
+                    "order_state": report.order_state or "",
+                    "created_at": report.created_at.isoformat(),
+                    "updated_at": report.updated_at.isoformat(),
+                    "next_attempt_time": report.next_attempt_time.isoformat() if report.next_attempt_time else None
+                })
+            
+            # Contar total
+            total = queryset.count()
+            
+            return Response({
+                "results": results,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size
+            })
+            
+        except Exception as e:
+            return Response(
+                {"error": f"Error al obtener lista: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 # =============================================================================
@@ -763,8 +1004,8 @@ class AuthLoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = request.data.get("email")
-        password = request.data.get("password")
+        email = request.data.get("email", "").strip()
+        password = request.data.get("password", "").strip()
         if not email or not password:
             return Response({"error": "email y password son requeridos"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -773,7 +1014,8 @@ class AuthLoginView(APIView):
         if not user_obj:
             return Response({"error": "Credenciales inválidas"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        user = authenticate(username=user_obj.username, password=password)
+        # Autenticar usando el username del usuario encontrado
+        user = authenticate(request, username=user_obj.username, password=password)
         if not user:
             return Response({"error": "Credenciales inválidas"}, status=status.HTTP_401_UNAUTHORIZED)
         if not user.is_active:

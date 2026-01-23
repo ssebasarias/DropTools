@@ -25,7 +25,9 @@ from selenium.common.exceptions import (
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from django.contrib.auth.models import User
-from core.models import DropiAccount
+from django.utils import timezone
+from core.models import DropiAccount, OrderReport
+from core.utils.stdio import configure_utf8_stdio
 
 
 class DropiReporterBot:
@@ -74,7 +76,7 @@ class DropiReporterBot:
         "Pedido estancado, favor gestionar salida a reparto urgente."
     ]
     
-    def __init__(self, excel_path, headless=False, user_id=None, dropi_label="reporter"):
+    def __init__(self, excel_path, headless=False, user_id=None, dropi_label="reporter", email=None, password=None):
         """
         Inicializa el bot
         
@@ -83,15 +85,20 @@ class DropiReporterBot:
             headless: Si True, ejecuta el navegador sin interfaz gráfica
             user_id: ID del usuario (Django auth_user.id) para cargar credenciales de Dropi desde BD
             dropi_label: etiqueta de la cuenta Dropi a usar (default: reporter). Si no existe, usa la default.
+            email: Email de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
+            password: Password de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
         """
         self.excel_path = excel_path
         self.headless = headless
         self.user_id = user_id
         self.dropi_label = dropi_label
+        self.dropi_email_direct = email
+        self.dropi_password_direct = password
         self.driver = None
         self.wait = None
         self.logger = self._setup_logger()
         self.current_order_row = None  # Para guardar la fila correcta cuando hay múltiples resultados
+        self.df_data = None  # DataFrame completo con datos del CSV para acceso rápido
         self.stats = {
             'total': 0,
             'procesados': 0,
@@ -106,6 +113,10 @@ class DropiReporterBot:
         # Estado para tracking de sesión
         self.session_expired = False
         self.current_processing_step = None  # Para saber dónde retomar después de relogear
+
+        # Validar que tenemos user_id para usar BD
+        if not self.user_id:
+            raise ValueError("user_id es requerido para usar el sistema de reportes en BD")
 
         # Cargar credenciales antes de iniciar
         self._load_dropi_credentials()
@@ -144,10 +155,19 @@ class DropiReporterBot:
 
     def _load_dropi_credentials(self):
         """
-        1) Si viene user_id: buscar DropiAccount de ese usuario (primero por label, si no por is_default).
-        2) Si no hay user_id o no hay cuenta: fallback a ENV (DROPI_EMAIL/DROPI_PASSWORD).
+        Prioridad de carga de credenciales:
+        1) Si vienen email/password directamente (desde argumentos): usarlos
+        2) Si viene user_id: buscar DropiAccount de ese usuario (primero por label, si no por is_default)
+        3) Si no hay user_id o no hay cuenta: fallback a ENV (DROPI_EMAIL/DROPI_PASSWORD)
         """
-        # Intentar desde BD
+        # Prioridad 1: Credenciales directas (pasadas desde orquestador)
+        if self.dropi_email_direct and self.dropi_password_direct:
+            self.DROPI_EMAIL = self.dropi_email_direct
+            self.DROPI_PASSWORD = self.dropi_password_direct
+            self.logger.info("✅ Dropi creds desde argumentos directos (--email/--password)")
+            return
+
+        # Prioridad 2: Intentar desde BD
         if self.user_id:
             user = User.objects.filter(id=self.user_id).first()
             if not user:
@@ -169,7 +189,7 @@ class DropiReporterBot:
                 self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, label={acct.label})")
                 return
 
-        # Fallback ENV
+        # Prioridad 3: Fallback ENV
         self.DROPI_EMAIL = os.getenv("DROPI_EMAIL")
         self.DROPI_PASSWORD = os.getenv("DROPI_PASSWORD")
         if self.DROPI_EMAIL and self.DROPI_PASSWORD:
@@ -177,8 +197,8 @@ class DropiReporterBot:
             return
 
         raise ValueError(
-            "No hay credenciales Dropi. Configura DropiAccount en BD para ese usuario "
-            "o define DROPI_EMAIL/DROPI_PASSWORD en el entorno."
+            "No hay credenciales Dropi. Proporciona --email/--password, configura DropiAccount en BD "
+            "para ese usuario, o define DROPI_EMAIL/DROPI_PASSWORD en el entorno."
         )
     
     def _check_session_expired(self):
@@ -218,133 +238,124 @@ class DropiReporterBot:
                 self.logger.error("❌ Error al relogear")
                 return False
             
-            # SIEMPRE navegar a Mis Pedidos después de relogear
-            self.logger.info("📍 Navegando a Mis Pedidos después de relogin...")
+            # Navegar a Mis Pedidos después de relogear (la función ya verifica si ya está ahí)
+            self.logger.info("📍 Verificando navegación a Mis Pedidos después de relogin...")
             if not self._navigate_to_orders():
                 self.logger.error("❌ Error al navegar a Mis Pedidos después de relogin")
                 return False
             
             self.session_expired = False
-            self.logger.info("✅ Relogin exitoso - Navegado a Mis Pedidos - Continuando desde donde se quedó")
+            self.logger.info("✅ Relogin exitoso - En Mis Pedidos - Continuando desde donde se quedó")
             return True
             
         except Exception as e:
             self.logger.error(f"❌ Error en relogin: {str(e)}")
             return False
     
-    def _get_results_dir(self):
-        """Obtiene el directorio de resultados"""
-        base_dir = Path(__file__).parent.parent.parent.parent
-        results_dir = base_dir / 'results' / 'reporter'
-        results_dir.mkdir(parents=True, exist_ok=True)
-        return results_dir
-    
-    def _get_today_results_file(self):
-        """Obtiene el archivo de resultados del día actual"""
-        results_dir = self._get_results_dir()
-        today = datetime.now().strftime('%Y%m%d')
-        pattern = f'dropi_reporter_results_{today}*.csv'
-        files = list(results_dir.glob(pattern))
+    def _check_order_already_reported(self, phone):
+        """
+        Verifica si una orden ya fue reportada exitosamente (no se puede volver a reportar)
         
-        if files:
-            # Retornar el más reciente
-            return max(files, key=lambda f: f.stat().st_mtime)
-        return None
-    
-    def _load_checkpoint(self, df_input):
-        """Carga el checkpoint desde el último CSV del día actual"""
-        results_file = self._get_today_results_file()
-        
-        if not results_file:
-            self.logger.info("📋 No hay checkpoint - Comenzando desde el inicio")
-            return 0
-        
+        Returns:
+            OrderReport si existe y está reportada, None en caso contrario
+        """
         try:
-            df_checkpoint = pd.read_csv(results_file)
+            user = User.objects.get(id=self.user_id)
+            report = OrderReport.objects.filter(
+                user=user,
+                order_phone=str(phone),
+                status='reportado'
+            ).first()
             
-            if df_checkpoint.empty:
-                self.logger.info("📋 Checkpoint vacío - Comenzando desde el inicio")
-                return 0
-            
-            # Obtener la última línea procesada
-            if 'line_number' not in df_checkpoint.columns:
-                self.logger.info("📋 Checkpoint sin line_number - Comenzando desde el inicio")
-                return 0
-            
-            last_line = df_checkpoint['line_number'].max()
-            
-            if pd.isna(last_line):
-                self.logger.info("📋 Checkpoint sin line_number válido - Comenzando desde el inicio")
-                return 0
-            
-            start_line = int(last_line) + 1
-            
-            if start_line >= len(df_input):
-                self.logger.info("📋 Ya se procesaron todas las líneas del CSV")
-                return len(df_input)
-            
-            self.logger.info(f"📋 Checkpoint encontrado: Continuando desde línea {start_line + 1}")
-            return start_line
-            
+            if report:
+                self.logger.info(f"✅ Orden {phone} ya fue reportada exitosamente (ID: {report.id})")
+                return report
+            return None
         except Exception as e:
-            self.logger.warning(f"⚠️ Error al cargar checkpoint: {str(e)} - Comenzando desde el inicio")
-            return 0
+            self.logger.warning(f"⚠️ Error al verificar orden reportada: {str(e)}")
+            return None
     
-    def _check_order_can_be_processed(self, phone, df_checkpoint):
-        """Verifica si una orden puede ser procesada según tiempos requeridos"""
-        if df_checkpoint.empty:
+    def _get_order_report(self, phone):
+        """
+        Obtiene el reporte más reciente de una orden (si existe)
+        
+        Returns:
+            OrderReport o None
+        """
+        try:
+            user = User.objects.get(id=self.user_id)
+            report = OrderReport.objects.filter(
+                user=user,
+                order_phone=str(phone)
+            ).order_by('-created_at').first()
+            
+            return report
+        except Exception as e:
+            self.logger.warning(f"⚠️ Error al obtener reporte: {str(e)}")
+            return None
+    
+    def _check_order_can_be_processed(self, phone):
+        """
+        Verifica si una orden puede ser procesada según tiempos requeridos y estado
+        
+        Returns:
+            (can_process: bool, time_info: dict o None)
+        """
+        # Primero verificar si ya fue reportada exitosamente (no se puede volver a reportar)
+        if self._check_order_already_reported(phone):
+            return False, {
+                'status': 'reportado',
+                'reason': 'already_reported',
+                'message': 'Orden ya fue reportada exitosamente'
+            }
+        
+        # Obtener el reporte más reciente
+        report = self._get_order_report(phone)
+        
+        if not report:
+            # No hay reporte previo, se puede procesar
             return True, None
         
-        # Buscar la orden en el checkpoint
-        order_records = df_checkpoint[df_checkpoint['phone'] == str(phone)]
+        # Verificar si tiene next_attempt_time y aún no ha llegado
+        if report.next_attempt_time:
+            now = timezone.now()
+            if now < report.next_attempt_time:
+                hours_remaining = (report.next_attempt_time - now).total_seconds() / 3600
+                return False, {
+                    'status': report.status,
+                    'hours_remaining': hours_remaining,
+                    'next_attempt_time': report.next_attempt_time,
+                    'reason': 'waiting_time'
+                }
         
-        if order_records.empty:
-            return True, None
+        # Si el estado es 'reportado', no se puede procesar
+        if report.status == 'reportado':
+            return False, {
+                'status': 'reportado',
+                'reason': 'already_reported',
+                'message': 'Orden ya fue reportada exitosamente'
+            }
         
-        # Obtener el registro más reciente
-        latest_record = order_records.iloc[-1]
-        
-        # Verificar next_attempt_time
-        next_attempt_time = latest_record.get('next_attempt_time')
-        if pd.notna(next_attempt_time) and str(next_attempt_time).strip() != '':
-            try:
-                # Convertir a datetime si es string
-                if isinstance(next_attempt_time, str):
-                    next_attempt = pd.to_datetime(next_attempt_time)
-                else:
-                    next_attempt = pd.to_datetime(next_attempt_time)
-                
-                now = datetime.now()
-                
-                if now < next_attempt:
-                    hours_remaining = (next_attempt - now).total_seconds() / 3600
-                    return False, {
-                        'status': latest_record.get('status', 'unknown'),
-                        'hours_remaining': hours_remaining,
-                        'next_attempt_time': next_attempt
-                    }
-            except Exception as e:
-                self.logger.warning(f"⚠️ Error al parsear next_attempt_time: {str(e)}")
-                pass
-        
+        # En otros casos, se puede procesar
         return True, None
     
     def _calculate_next_attempt_time(self, status, retry_count=0):
-        """Calcula el tiempo del próximo intento según el estado"""
-        now = datetime.now()
+        """
+        Calcula el tiempo del próximo intento según el estado
         
-        if status == 'success' or status == 'already_has_case':
-            # 46 horas
-            return now + timedelta(hours=46)
-        elif status == 'cannot_generate_yet':
-            # 24 horas
+        Nota: 
+        - 'success' y 'already_has_case' → No se calcula (se marca como 'reportado' y no se reintenta)
+        - 'cannot_generate_yet' → 24 horas
+        - Otros estados → No se calcula (puede reintentar inmediatamente)
+        """
+        now = timezone.now()
+        
+        if status == 'cannot_generate_yet':
+            # 24 horas para órdenes que aún no cumplen el tiempo requerido
             return now + timedelta(hours=24)
-        elif status == 'in_movement':
-            # Si ya está en movimiento y falla de nuevo, esperar 46 horas más
-            return now + timedelta(hours=46)
         else:
-            # Para errores, puede reintentar inmediatamente
-            return now
+            # Para otros estados, no se calcula (None = puede reintentar inmediatamente)
+            return None
     
     def _init_driver(self):
         """
@@ -499,9 +510,10 @@ class DropiReporterBot:
         Navega a la sección de Mis Pedidos con estrategia de fallback
         
         Estrategia:
-        1. Intento 1: Navegación por menú (método tradicional)
-        2. Intento 2: Navegación directa por URL (fallback robusto)
-        3. Intento 3: Navegación directa con espera extendida
+        1. Verificar si ya está en la página correcta (evita navegación innecesaria)
+        2. Intento 1: Navegación por menú (método tradicional)
+        3. Intento 2: Navegación directa por URL (fallback robusto)
+        4. Intento 3: Navegación directa con espera extendida
         
         Args:
             retry_count: Número de intento actual
@@ -510,6 +522,20 @@ class DropiReporterBot:
         Returns:
             True si la navegación fue exitosa, False en caso contrario
         """
+        # VERIFICACIÓN INICIAL: Si ya estamos en la página correcta, no navegar
+        try:
+            current_url = self.driver.current_url
+            if '/dashboard/orders' in current_url:
+                self.logger.info("="*60)
+                self.logger.info("📍 VERIFICACIÓN: Ya estamos en Mis Pedidos")
+                self.logger.info("="*60)
+                self.logger.info(f"   ✅ URL actual: {current_url}")
+                self.logger.info("   ✅ No es necesario navegar - Continuando...")
+                return True
+        except Exception:
+            # Si hay error al obtener la URL, continuar con la navegación normal
+            pass
+        
         self.logger.info("="*60)
         self.logger.info(f"📍 NAVEGANDO A MIS PEDIDOS (Intento {retry_count + 1}/{max_retries + 1})")
         self.logger.info("="*60)
@@ -1426,9 +1452,10 @@ class DropiReporterBot:
             
             if popup_result['found']:
                 if popup_result['type'] == 'caso_existente':
-                    result['status'] = 'already_has_case'
-                    result['report_generated'] = False
-                    result['next_attempt_time'] = self._calculate_next_attempt_time('already_has_case', retry_count).strftime('%Y-%m-%d %H:%M:%S')
+                    # Orden ya tiene caso → marcar como 'reportado' (no se puede volver a reportar)
+                    result['status'] = 'reportado'  # Cambiado de 'already_has_case' a 'reportado'
+                    result['report_generated'] = True  # Se considera reportado aunque ya tenía caso
+                    result['next_attempt_time'] = None  # No se reintenta
                     self.stats['ya_tienen_caso'] += 1
                     return result
                 elif popup_result['type'] == 'estado_invalido':
@@ -1459,7 +1486,8 @@ class DropiReporterBot:
                 
                 result['status'] = 'cannot_generate_yet'
                 result['report_generated'] = False
-                result['next_attempt_time'] = self._calculate_next_attempt_time('cannot_generate_yet', retry_count).strftime('%Y-%m-%d %H:%M:%S')
+                next_attempt = self._calculate_next_attempt_time('cannot_generate_yet', retry_count)
+                result['next_attempt_time'] = next_attempt.strftime('%Y-%m-%d %H:%M:%S') if next_attempt else None
                 
                 # Cerrar modal con Cancelar antes de continuar
                 self.logger.info("   Cerrando modal con 'Cancelar'...")
@@ -1515,7 +1543,8 @@ class DropiReporterBot:
                     # No se pudo dar siguiente - probablemente falta tiempo (24 horas)
                     result['status'] = 'cannot_generate_yet'
                     result['report_generated'] = False
-                    result['next_attempt_time'] = self._calculate_next_attempt_time('cannot_generate_yet', retry_count).strftime('%Y-%m-%d %H:%M:%S')
+                    next_attempt = self._calculate_next_attempt_time('cannot_generate_yet', retry_count)
+                    result['next_attempt_time'] = next_attempt.strftime('%Y-%m-%d %H:%M:%S') if next_attempt else None
                     self.stats['errores'] += 1
                     return result
             
@@ -1540,9 +1569,9 @@ class DropiReporterBot:
                 return result
             
             # Éxito - Reporte generado
-            result['status'] = 'success'
+            result['status'] = 'reportado'  # Cambiado de 'success' a 'reportado'
             result['report_generated'] = True
-            result['next_attempt_time'] = self._calculate_next_attempt_time('success', retry_count).strftime('%Y-%m-%d %H:%M:%S')
+            result['next_attempt_time'] = None  # No se reintenta (ya está reportado)
             self.stats['procesados'] += 1
             self.current_processing_step = None
             
@@ -1594,13 +1623,65 @@ class DropiReporterBot:
             self.logger.info(f"Registros con estados válidos: {len(df_filtered)}")
             
             # Verificar que tenga la columna de teléfono
-            if 'Teléfono' not in df_filtered.columns:
+            tel_col = None
+            for col in df_filtered.columns:
+                if 'tel' in col.lower() or 'fono' in col.lower():
+                    tel_col = col
+                    break
+            
+            if not tel_col:
                 raise ValueError("El archivo no tiene la columna 'Teléfono'")
             
-            # Eliminar duplicados por teléfono
-            df_filtered = df_filtered.drop_duplicates(subset=['Teléfono'])
+            # Renombrar columna de teléfono para consistencia
+            if tel_col != 'Teléfono':
+                df_filtered = df_filtered.rename(columns={tel_col: 'Teléfono'})
             
-            self.logger.info(f"Registros únicos a procesar: {len(df_filtered)}")
+            # FILTRAR ÓRDENES MUY RECIENTES (menos de 2 días desde la orden)
+            # Esto optimiza el tiempo evitando procesar órdenes que definitivamente requerirán espera
+            # Basado en análisis: órdenes con <2 días siempre requieren espera de 24h
+            dias_col = None
+            for col in df_filtered.columns:
+                col_lower = col.lower()
+                if 'dias' in col_lower or 'día' in col_lower or 'dia' in col_lower or 'dias desde' in col_lower:
+                    dias_col = col
+                    break
+            
+            if dias_col:
+                antes_filtro = len(df_filtered)
+                # Asegurar que la columna sea numérica
+                df_filtered[dias_col] = pd.to_numeric(df_filtered[dias_col], errors='coerce')
+                df_filtered = df_filtered[df_filtered[dias_col] >= 2]
+                filtradas = antes_filtro - len(df_filtered)
+                if filtradas > 0:
+                    self.logger.info(f"   ⚡ Órdenes filtradas (muy recientes, <2 días): {filtradas}")
+                    self.logger.info(f"   ✅ Órdenes elegibles para procesar (≥2 días): {len(df_filtered)}")
+            elif 'Fecha' in df_filtered.columns:
+                # Calcular días desde orden si no existe la columna
+                try:
+                    from datetime import datetime as dt
+                    now = datetime.now()
+                    df_filtered['Fecha_parsed'] = pd.to_datetime(df_filtered['Fecha'], errors='coerce', dayfirst=True)
+                    df_filtered['Días desde Orden'] = (now - df_filtered['Fecha_parsed']).dt.days
+                    
+                    antes_filtro = len(df_filtered)
+                    df_filtered = df_filtered[df_filtered['Días desde Orden'] >= 2]
+                    filtradas = antes_filtro - len(df_filtered)
+                    if filtradas > 0:
+                        self.logger.info(f"   ⚡ Órdenes filtradas (muy recientes, <2 días): {filtradas}")
+                        self.logger.info(f"   ✅ Órdenes elegibles para procesar (≥2 días): {len(df_filtered)}")
+                    
+                    df_filtered = df_filtered.drop(columns=['Fecha_parsed'], errors='ignore')
+                except Exception as e:
+                    self.logger.warning(f"   ⚠️ No se pudo filtrar por días: {str(e)}")
+            
+            # Eliminar duplicados por teléfono
+            antes_dup = len(df_filtered)
+            df_filtered = df_filtered.drop_duplicates(subset=['Teléfono'])
+            duplicados = antes_dup - len(df_filtered)
+            if duplicados > 0:
+                self.logger.info(f"   📋 Duplicados eliminados: {duplicados}")
+            
+            self.logger.info(f"   ✅ Registros únicos a procesar: {len(df_filtered)}")
             
             return df_filtered
             
@@ -1609,9 +1690,9 @@ class DropiReporterBot:
             raise
     
     def run(self):
-        """Ejecuta el bot completo con checkpoint y verificación de tiempos"""
+        """Ejecuta el bot completo usando BD para tracking de reportes"""
         self.logger.info("="*80)
-        self.logger.info("INICIANDO BOT DE REPORTES DROPI")
+        self.logger.info("INICIANDO BOT DE REPORTES DROPI (BD Mode)")
         self.logger.info("="*80)
         
         try:
@@ -1619,18 +1700,16 @@ class DropiReporterBot:
             df = self._load_excel_data()
             self.stats['total'] = len(df)
             
-            # Cargar checkpoint del día actual
-            df_checkpoint = pd.DataFrame()
-            checkpoint_file = self._get_today_results_file()
-            if checkpoint_file:
-                try:
-                    df_checkpoint = pd.read_csv(checkpoint_file)
-                    self.logger.info(f"📋 Checkpoint cargado: {len(df_checkpoint)} registros")
-                except:
-                    self.logger.warning("⚠️ No se pudo cargar checkpoint")
+            # Guardar DataFrame completo para acceso rápido a información
+            self.df_data = df.set_index('Teléfono')  # Indexar por teléfono para búsqueda rápida
             
-            # Obtener línea de inicio desde checkpoint
-            start_line = self._load_checkpoint(df)
+            # Obtener usuario
+            user = User.objects.get(id=self.user_id)
+            self.logger.info(f"👤 Usuario: {user.email} (ID: {user.id})")
+            
+            # Contar órdenes ya reportadas en BD
+            reported_count = OrderReport.objects.filter(user=user, status='reportado').count()
+            self.logger.info(f"📊 Órdenes ya reportadas en BD: {reported_count}")
             
             # Inicializar navegador
             self._init_driver()
@@ -1647,64 +1726,68 @@ class DropiReporterBot:
             self.logger.info("✅ Navegado a Mis Pedidos exitosamente")
             self.logger.info("")
             
-            # Procesar cada orden desde el checkpoint
+            # Procesar cada orden
             results = []
-            df_to_process = df.iloc[start_line:].reset_index(drop=True)
             
             self.logger.info("")
-            self.logger.info(f"📊 Procesando {len(df_to_process)} órdenes (desde línea {start_line + 1})")
+            self.logger.info(f"📊 Procesando {len(df)} órdenes")
             self.logger.info("")
             
-            for idx, (index, row) in enumerate(df_to_process.iterrows()):
+            for idx, (index, row) in enumerate(df.iterrows()):
                 phone = row['Teléfono']
                 state = row['Estado Actual']
-                line_number = start_line + idx
                 
                 self.logger.info("")
                 self.logger.info(f"{'='*80}")
-                self.logger.info(f"Procesando orden {idx + 1}/{len(df_to_process)} (Línea {line_number + 1})")
+                self.logger.info(f"Procesando orden {idx + 1}/{len(df)}")
                 self.logger.info(f"Teléfono: {phone} | Estado: {state}")
                 self.logger.info(f"{'='*80}")
                 
-                # Verificar si la orden puede ser procesada según tiempos
-                can_process, time_info = self._check_order_can_be_processed(phone, df_checkpoint)
+                # Verificar si la orden puede ser procesada (BD check)
+                can_process, time_info = self._check_order_can_be_processed(phone)
                 
                 if not can_process:
-                    self.logger.warning(f"⏳ Orden saltada - Falta tiempo para reintentar")
-                    self.logger.warning(f"   Status anterior: {time_info['status']}")
-                    self.logger.warning(f"   Horas restantes: {time_info['hours_remaining']:.2f}")
-                    self.logger.warning(f"   Próximo intento: {time_info['next_attempt_time']}")
+                    reason = time_info.get('reason', 'unknown')
+                    if reason == 'already_reported':
+                        self.logger.info(f"⏭️  Orden saltada - Ya fue reportada exitosamente")
+                    elif reason == 'waiting_time':
+                        self.logger.warning(f"⏳ Orden saltada - Falta tiempo para reintentar")
+                        self.logger.warning(f"   Status: {time_info['status']}")
+                        self.logger.warning(f"   Horas restantes: {time_info['hours_remaining']:.2f}")
+                        self.logger.warning(f"   Próximo intento: {time_info['next_attempt_time']}")
                     
-                    # Agregar registro con información de tiempo
-                    result = {
-                        'line_number': line_number,
-                        'phone': str(phone),
-                        'order_id': '',
-                        'status': time_info['status'],
-                        'report_generated': False,
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'hours_since_last_report': None,
-                        'next_attempt_time': time_info['next_attempt_time'].strftime('%Y-%m-%d %H:%M:%S') if isinstance(time_info['next_attempt_time'], datetime) else str(time_info['next_attempt_time']),
-                        'retry_count': 0
-                    }
-                    results.append(result)
                     self.stats['saltados_por_tiempo'] += 1
-                    # Guardar en tiempo real
-                    self._save_results([result], append=True)
                     continue
                 
-                # Verificar si hay reintentos previos
+                # Obtener reporte previo si existe (para retry_count)
+                prev_report = self._get_order_report(phone)
                 retry_count = 0
-                if not df_checkpoint.empty:
-                    prev_records = df_checkpoint[df_checkpoint['phone'] == str(phone)]
-                    if not prev_records.empty:
-                        retry_count = int(prev_records.iloc[-1].get('retry_count', 0)) + 1
+                if prev_report:
+                    # Contar cuántas veces se ha intentado (excluyendo reportados)
+                    retry_count = OrderReport.objects.filter(
+                        user=user,
+                        order_phone=phone
+                    ).exclude(status='reportado').count()
                 
                 # Indicar si es la primera orden procesada
-                is_first = (idx == 0 and start_line == 0)
+                is_first = (idx == 0)
+                
+                # Extraer información del CSV ANTES de procesar (para tenerla disponible)
+                order_info = self._extract_order_info(phone)
                 
                 # Procesar orden
-                result = self._process_single_order(phone, state, line_number, is_first_order=is_first, retry_count=retry_count)
+                result = self._process_single_order(phone, state, idx, is_first_order=is_first, retry_count=retry_count)
+                
+                # Agregar información del CSV al resultado
+                result['order_info'] = order_info
+                result['customer_name'] = order_info.get('customer_name')
+                result['product_name'] = order_info.get('product_name')
+                result['order_id'] = order_info.get('order_id') or result.get('order_id', '')
+                result['order_state'] = state
+                
+                # Si hay información adicional del CSV, mostrarla en el log
+                if order_info.get('customer_name') or order_info.get('product_name'):
+                    self.logger.info(f"   📋 Info CSV: Cliente={order_info.get('customer_name', 'N/A')[:30]}, Producto={order_info.get('product_name', 'N/A')[:40]}")
                 
                 # Si hubo timeout y sesión expirada, relogear y reintentar
                 if result['status'] == 'session_expired':
@@ -1713,48 +1796,34 @@ class DropiReporterBot:
                         # _relogin_and_retry ya navegó a Mis Pedidos, solo reintentar la orden
                         self.logger.info(f"🔄 Reintentando orden después de relogin...")
                         # Reintentar la misma orden (ya estamos en Mis Pedidos)
-                        result = self._process_single_order(phone, state, line_number, is_first_order=False, retry_count=retry_count)
+                        result = self._process_single_order(phone, state, idx, is_first_order=False, retry_count=retry_count)
+                        # Re-agregar información del CSV
+                        result['order_info'] = order_info
+                        result['customer_name'] = order_info.get('customer_name')
+                        result['product_name'] = order_info.get('product_name')
+                        result['order_id'] = order_info.get('order_id') or result.get('order_id', '')
+                        result['order_state'] = state
                         self.stats['reintentos'] += 1
                     else:
                         self.logger.error("❌ No se pudo relogear - Abortando")
                         break
                 
-                # Verificar si después de reintentar falló de nuevo después del tiempo requerido
-                if result['status'] in ['cannot_generate_yet', 'already_has_case'] and retry_count > 0:
-                    # Si ya había intentado antes y vuelve a fallar, marcar como en movimiento
-                    prev_status = None
-                    if not df_checkpoint.empty:
-                        prev_records = df_checkpoint[df_checkpoint['phone'] == str(phone)]
-                        if not prev_records.empty:
-                            prev_status = prev_records.iloc[-1].get('status')
-                    
-                    if prev_status in ['cannot_generate_yet', 'already_has_case']:
-                        self.logger.warning(f"⚠️ Orden {phone} falló de nuevo después de tiempo requerido - Marcando como en movimiento")
-                        result['status'] = 'in_movement'
-                        result['next_attempt_time'] = self._calculate_next_attempt_time('in_movement', retry_count).strftime('%Y-%m-%d %H:%M:%S')
-                
                 # Log del resultado
-                if result['status'] == 'success':
-                    self.logger.info(f"✅ ÉXITO: Reporte generado exitosamente")
-                elif result['status'] == 'already_has_case':
-                    self.logger.warning(f"⚠️ Orden ya tiene caso - Próximo intento: {result.get('next_attempt_time', 'N/A')}")
+                if result['status'] == 'reportado':
+                    self.logger.info(f"✅ ÉXITO: Reporte generado exitosamente (marcado como reportado)")
                 elif result['status'] == 'cannot_generate_yet':
                     self.logger.warning(f"⚠️ No se puede generar aún - Próximo intento: {result.get('next_attempt_time', 'N/A')}")
-                elif result['status'] == 'in_movement':
-                    self.logger.warning(f"⚠️ Orden en movimiento - Próximo intento: {result.get('next_attempt_time', 'N/A')}")
                 else:
-                    self.logger.warning(f"⚠️ FALLO: {result.get('status', 'error')}")
+                    self.logger.warning(f"⚠️ Estado: {result.get('status', 'error')}")
                 
-                # Guardar en tiempo real INMEDIATAMENTE después de procesar cada orden
-                # Esto permite monitoreo en vivo y evita pérdida de datos si falla
-                # El guardado debe ser síncrono para asegurar que se escriba antes de continuar
+                # Guardar en BD INMEDIATAMENTE después de procesar cada orden
                 self._save_results([result], append=True)
                 
                 # Agregar a lista después de guardar (para estadísticas finales)
                 results.append(result)
                 
                 # Pequeña pausa entre órdenes
-                time.sleep(1)  # Reducido de 2s a 1s
+                time.sleep(1)
             
             # Mostrar estadísticas finales
             self._print_final_stats()
@@ -1771,53 +1840,163 @@ class DropiReporterBot:
                 self.logger.info("Cerrando navegador...")
                 self.driver.quit()
     
+    def _extract_order_info(self, phone):
+        """
+        Extrae información adicional de la orden desde el CSV (más confiable que la página web)
+        
+        Returns:
+            dict con customer_name, product_name, order_id si están disponibles
+        """
+        info = {
+            'customer_name': None,
+            'product_name': None,
+            'order_id': None
+        }
+        
+        try:
+            # Primero intentar desde el DataFrame del CSV (más confiable)
+            if hasattr(self, 'df_data') and self.df_data is not None:
+                try:
+                    phone_str = str(phone).strip()
+                    # Normalizar teléfono: remover espacios, guiones, paréntesis
+                    phone_normalized = ''.join(filter(str.isdigit, phone_str))
+                    
+                    # Buscar por columna 'Teléfono' en lugar del índice
+                    if 'Teléfono' in self.df_data.columns:
+                        # Normalizar también los teléfonos del DataFrame para comparación
+                        df_phones_normalized = self.df_data['Teléfono'].astype(str).apply(
+                            lambda x: ''.join(filter(str.isdigit, str(x)))
+                        )
+                        
+                        # Buscar la fila que coincida con el teléfono normalizado
+                        matches = self.df_data[df_phones_normalized == phone_normalized]
+                        
+                        if len(matches) > 0:
+                            row = matches.iloc[0]  # Tomar la primera coincidencia
+                            
+                            # Obtener Cliente
+                            if 'Cliente' in self.df_data.columns:
+                                customer = row['Cliente']
+                                if pd.notna(customer) and str(customer).strip():
+                                    info['customer_name'] = str(customer).strip()[:255]
+                            
+                            # Obtener Producto
+                            if 'Producto' in self.df_data.columns:
+                                product = row['Producto']
+                                if pd.notna(product) and str(product).strip():
+                                    info['product_name'] = str(product).strip()[:500]
+                            
+                            # Obtener ID Orden
+                            if 'ID Orden' in self.df_data.columns:
+                                order_id = row['ID Orden']
+                                if pd.notna(order_id):
+                                    info['order_id'] = str(order_id).strip()[:100]
+                            
+                            self.logger.info(f"   ✅ Información extraída del CSV: Cliente={info['customer_name']}, Producto={info['product_name'][:50] if info['product_name'] else None}...")
+                        else:
+                            self.logger.warning(f"   ⚠️ No se encontró teléfono {phone_str} en el CSV")
+                except Exception as e:
+                    self.logger.warning(f"   ⚠️ Error al obtener datos del CSV: {str(e)}")
+                    import traceback
+                    self.logger.debug(traceback.format_exc())
+            
+            # Fallback: Intentar desde la página web si no se encontró en CSV
+            if not info['customer_name'] or not info['product_name']:
+                try:
+                    if hasattr(self, 'current_order_row') and self.current_order_row:
+                        row = self.current_order_row
+                    else:
+                        row = self.driver.find_element(By.CSS_SELECTOR, "tbody.list tr:first-child")
+                    
+                    # Intentar encontrar nombre del cliente en la fila
+                    if not info['customer_name']:
+                        try:
+                            customer_cell = row.find_element(By.CSS_SELECTOR, "td:nth-child(2), td:nth-child(3)")
+                            info['customer_name'] = customer_cell.text.strip()[:255] if customer_cell.text else None
+                        except:
+                            pass
+                    
+                    # Intentar encontrar ID de orden
+                    if not info['order_id']:
+                        try:
+                            order_id_cell = row.find_element(By.CSS_SELECTOR, "td:first-child, td a")
+                            info['order_id'] = order_id_cell.text.strip()[:100] if order_id_cell.text else None
+                        except:
+                            pass
+                    
+                    # Intentar encontrar producto
+                    if not info['product_name']:
+                        try:
+                            product_cell = row.find_element(By.CSS_SELECTOR, "td:nth-child(4), td:nth-child(5)")
+                            info['product_name'] = product_cell.text.strip()[:500] if product_cell.text else None
+                        except:
+                            pass
+                except Exception as e:
+                    self.logger.debug(f"   No se pudo extraer información de la página: {str(e)}")
+                    
+        except Exception as e:
+            self.logger.debug(f"   Error general al extraer información: {str(e)}")
+        
+        return info
+    
     def _save_results(self, results, append=False):
-        """Guarda los resultados en un archivo CSV
+        """
+        Guarda los resultados en la base de datos (OrderReport)
         
         Args:
             results: Lista de diccionarios con los resultados
-            append: Si True, agrega los resultados al archivo más reciente. Si False, crea un nuevo archivo.
+            append: Ignorado (siempre actualiza/crea en BD)
         """
         try:
-            base_dir = Path(__file__).parent.parent.parent.parent
-            results_dir = base_dir / 'results' / 'reporter'
-            results_dir.mkdir(parents=True, exist_ok=True)
+            user = User.objects.get(id=self.user_id)
             
-            if append:
-                # Buscar el archivo más reciente
-                existing_files = list(results_dir.glob('dropi_reporter_results_*.csv'))
-                if existing_files:
-                    # Ordenar por fecha de modificación (más reciente primero)
-                    existing_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                    results_file = existing_files[0]
-                    
-                    # Leer resultados existentes
+            for result in results:
+                phone = str(result.get('phone', ''))
+                if not phone:
+                    continue
+                
+                # Extraer información adicional si está disponible
+                order_info = result.get('order_info', {})
+                customer_name = order_info.get('customer_name') or result.get('customer_name')
+                product_name = order_info.get('product_name') or result.get('product_name')
+                order_id = order_info.get('order_id') or result.get('order_id', '')
+                
+                # Convertir next_attempt_time si existe
+                next_attempt_time = None
+                if result.get('next_attempt_time'):
                     try:
-                        df_existing = pd.read_csv(results_file, encoding='utf-8-sig')
-                        df_new = pd.DataFrame(results)
-                        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-                        df_combined.to_csv(results_file, index=False, encoding='utf-8-sig')
-                        self.logger.info(f"[OK] Resultados agregados a: {results_file}")
-                    except Exception as e:
-                        # Si falla al leer, crear nuevo archivo
-                        self.logger.warning(f"[WARN] No se pudo leer archivo existente, creando nuevo: {str(e)}")
-                        append = False
+                        if isinstance(result['next_attempt_time'], str):
+                            next_attempt_time = datetime.strptime(result['next_attempt_time'], '%Y-%m-%d %H:%M:%S')
+                            next_attempt_time = timezone.make_aware(next_attempt_time)
+                        elif isinstance(result['next_attempt_time'], datetime):
+                            next_attempt_time = timezone.make_aware(result['next_attempt_time']) if timezone.is_naive(result['next_attempt_time']) else result['next_attempt_time']
+                    except:
+                        pass
+                
+                # Obtener o crear el reporte
+                report, created = OrderReport.objects.update_or_create(
+                    user=user,
+                    order_phone=phone,
+                    defaults={
+                        'order_id': order_id,
+                        'status': result.get('status', 'error'),
+                        'report_generated': result.get('report_generated', False),
+                        'customer_name': customer_name,
+                        'product_name': product_name,
+                        'order_state': result.get('order_state'),
+                        'next_attempt_time': next_attempt_time,
+                    }
+                )
+                
+                if created:
+                    self.logger.info(f"[OK] Reporte creado en BD: {phone} ({result.get('status')})")
                 else:
-                    # No hay archivos existentes, crear uno nuevo
-                    append = False
-            
-            if not append:
-                # Crear nuevo archivo
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                results_file = results_dir / f'dropi_reporter_results_{timestamp}.csv'
-                
-                df_results = pd.DataFrame(results)
-                df_results.to_csv(results_file, index=False, encoding='utf-8-sig')
-                
-                self.logger.info(f"[OK] Resultados guardados en: {results_file}")
+                    self.logger.info(f"[OK] Reporte actualizado en BD: {phone} ({result.get('status')})")
             
         except Exception as e:
-            self.logger.error(f"[ERROR] Error al guardar resultados: {str(e)}")
+            self.logger.error(f"[ERROR] Error al guardar resultados en BD: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
     
     def _print_final_stats(self):
         """Imprime las estadísticas finales"""
@@ -1864,8 +2043,8 @@ class Command(BaseCommand):
         parser.add_argument(
             '--user-id',
             type=int,
-            default=None,
-            help='ID del usuario (auth_user.id) para usar sus credenciales Dropi desde BD'
+            required=True,
+            help='ID del usuario (auth_user.id) - REQUERIDO para usar el sistema de reportes en BD'
         )
 
         parser.add_argument(
@@ -1874,12 +2053,29 @@ class Command(BaseCommand):
             default='reporter',
             help='Etiqueta de la cuenta Dropi a usar (default: reporter)'
         )
+
+        parser.add_argument(
+            '--email',
+            type=str,
+            default=None,
+            help='Email de DropiAccount a usar directamente (sobrescribe user-id/dropi-label)'
+        )
+
+        parser.add_argument(
+            '--password',
+            type=str,
+            default=None,
+            help='Password de DropiAccount a usar directamente (sobrescribe user-id/dropi-label)'
+        )
     
     def handle(self, *args, **options):
+        configure_utf8_stdio()
         excel_path = options['excel']
         headless = options['headless']
         user_id = options.get('user_id')
         dropi_label = options.get('dropi_label', 'reporter')
+        email = options.get('email')
+        password = options.get('password')
         
         # Verificar que el archivo existe
         if not os.path.exists(excel_path):
@@ -1894,6 +2090,8 @@ class Command(BaseCommand):
             headless=headless,
             user_id=user_id,
             dropi_label=dropi_label,
+            email=email,
+            password=password,
         )
         
         try:

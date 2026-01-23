@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import MainLayout from './components/layout/MainLayout';
 import Dashboard from './pages/Dashboard';
@@ -12,6 +12,7 @@ import Register from './pages/auth/Register';
 
 // User Pages
 import UserLayout from './components/layout/UserLayout';
+import ClientDashboard from './pages/user/ClientDashboard';
 import WinnerProducts from './pages/user/WinnerProducts';
 import ReporterConfig from './pages/user/ReporterConfig';
 import ReportAnalysis from './pages/user/ReportAnalysis';
@@ -64,14 +65,7 @@ function App() {
         }
       >
         <Route index element={<Navigate to="/user/dashboard" replace />} />
-        <Route
-          path="dashboard"
-          element={
-            <RequireTier minTier="GOLD">
-              <WinnerProducts />
-            </RequireTier>
-          }
-        />
+        <Route path="dashboard" element={<ClientDashboard />} />
         <Route path="reporter-setup" element={<ReporterConfig />} />
         <Route
           path="analysis"
@@ -81,6 +75,7 @@ function App() {
             </RequireTier>
           }
         />
+        <Route path="winner-products" element={<WinnerProducts />} />
         <Route path="subscriptions" element={<Subscriptions />} />
         <Route path="settings" element={<Settings type="user" />} />
       </Route>
@@ -89,3 +84,6 @@ function App() {
 }
 
 export default App;
+
+
+

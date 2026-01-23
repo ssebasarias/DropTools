@@ -10,16 +10,13 @@ export default function RequireAuth({ children }) {
 
   useEffect(() => {
     let mounted = true;
-    const run = async () => {
+    const refresh = async () => {
       if (!token) {
         if (mounted) setReady(true);
         return;
       }
-      if (user) {
-        if (mounted) setReady(true);
-        return;
-      }
       try {
+        // Always refresh user from backend so tier/active changes apply immediately.
         const u = await me();
         if (mounted) setUser(u);
       } catch {
@@ -28,11 +25,20 @@ export default function RequireAuth({ children }) {
         if (mounted) setReady(true);
       }
     };
-    run();
+    refresh();
+
+    const onFocus = () => {
+      // Re-check on tab focus to pick up admin changes quickly.
+      setReady(false);
+      refresh();
+    };
+    window.addEventListener("focus", onFocus);
+
     return () => {
       mounted = false;
+      window.removeEventListener("focus", onFocus);
     };
-  }, [token, user]);
+  }, [token]);
 
   if (!token) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;

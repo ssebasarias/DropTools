@@ -553,6 +553,8 @@ class UserProfile(models.Model):
     subscription_tier = models.CharField(max_length=10, choices=TIER_CHOICES, default=TIER_BRONZE)
     # If false: user can log in and see UI, but backend should block paid actions (no payments yet).
     subscription_active = models.BooleanField(default=False)
+    # Hora de ejecución diaria del workflow (formato HH:MM, ej: "23:38")
+    execution_time = models.TimeField(null=True, blank=True, help_text="Hora diaria para ejecutar el workflow de reportes (formato HH:MM)")
 
     # NOTE: usamos default=timezone.now para evitar prompt interactivo en migraciones
     created_at = models.DateTimeField(default=timezone.now)
@@ -624,3 +626,60 @@ class DropiAccount(models.Model):
             # Fail-open for local dev if crypto isn't configured; do not crash saves.
             pass
         return super().save(*args, **kwargs)
+
+
+class OrderReport(models.Model):
+    """
+    Tabla de reportes de órdenes generados por el bot reporter.
+    Reemplaza el sistema de checkpoints CSV por una base de datos más eficiente.
+    """
+    
+    STATUS_CHOICES = [
+        ('proximo_a_reportar', 'Próximo a Reportar'),
+        ('reportado', 'Reportado'),
+        ('error', 'Error'),
+        ('no_encontrado', 'No Encontrado'),
+        ('already_has_case', 'Ya Tiene Caso'),
+        ('cannot_generate_yet', 'No Se Puede Generar Aún'),
+        ('in_movement', 'En Movimiento'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='order_reports')
+    order_phone = models.CharField(max_length=50, db_index=True, help_text="Número de teléfono de la orden")
+    order_id = models.CharField(max_length=100, null=True, blank=True, help_text="ID de la orden en Dropi si está disponible")
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='proximo_a_reportar')
+    report_generated = models.BooleanField(default=False, help_text="True si el reporte se generó exitosamente")
+    
+    # Información adicional de la orden (para mostrar en frontend)
+    customer_name = models.CharField(max_length=255, null=True, blank=True, help_text="Nombre del cliente")
+    product_name = models.TextField(null=True, blank=True, help_text="Nombre del producto vinculado a la orden")
+    order_state = models.CharField(max_length=100, null=True, blank=True, help_text="Estado actual de la orden en Dropi")
+    
+    # Control de tiempos
+    next_attempt_time = models.DateTimeField(null=True, blank=True, help_text="Próximo intento (para estados que requieren espera)")
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'order_reports'
+        indexes = [
+            models.Index(fields=['user', 'order_phone']),
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['user', 'report_generated']),
+            models.Index(fields=['order_phone']),  # Para búsquedas rápidas
+            models.Index(fields=['next_attempt_time']),  # Para filtrar por tiempo
+        ]
+        # Un usuario no puede tener múltiples reportes activos para la misma orden
+        # (pero puede tener múltiples intentos históricos si falla)
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'order_phone'],
+                condition=models.Q(status__in=['reportado', 'proximo_a_reportar']),
+                name='unique_active_report_per_order'
+            )
+        ]
+    
+    def __str__(self):
+        return f"OrderReport {self.id} - {self.order_phone} ({self.status})"

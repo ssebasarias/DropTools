@@ -30,6 +30,9 @@ from core.views import (
     ContainerControlView,
     ClusterOrphanActionView,
     ReporterConfigView,
+    ReporterStartView,
+    ReporterStatusView,
+    ReporterListView,
     AuthLoginView,
     AuthRegisterView,
     AuthMeView,
@@ -67,6 +70,9 @@ urlpatterns = [
     
     # Reporter Configuration
     path('api/reporter/config/', ReporterConfigView.as_view(), name='reporter-config'),
+    path('api/reporter/start/', ReporterStartView.as_view(), name='reporter-start'),
+    path('api/reporter/status/', ReporterStatusView.as_view(), name='reporter-status'),
+    path('api/reporter/list/', ReporterListView.as_view(), name='reporter-list'),
 
     # Admin (no payments): manage users & subscriptions
     path('api/admin/users/', AdminUsersView.as_view(), name='admin-users'),

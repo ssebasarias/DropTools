@@ -15,6 +15,11 @@ export function clearToken() {
   localStorage.removeItem("auth_user");
 }
 
+export function logout() {
+  clearToken();
+  window.location.href = "/login";
+}
+
 export function getAuthUser() {
   const raw = localStorage.getItem("auth_user");
   return raw ? JSON.parse(raw) : null;
@@ -60,6 +65,10 @@ export async function me() {
     },
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    clearToken();
+    throw new Error("Sesión expirada");
+  }
   if (!res.ok) throw new Error(data.error || "No se pudo cargar el usuario");
   localStorage.setItem("auth_user", JSON.stringify(data.user));
   return data.user;

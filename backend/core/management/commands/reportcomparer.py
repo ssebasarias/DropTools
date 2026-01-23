@@ -35,6 +35,7 @@ from pathlib import Path
 
 import pandas as pd
 from django.core.management.base import BaseCommand
+from core.utils.stdio import configure_utf8_stdio
 
 
 class ReportComparator:
@@ -316,6 +317,7 @@ class ReportComparator:
                 ordenes_resultado.append(orden_data)
             
             # Definir el orden exacto de las columnas (sin Estado Anterior)
+            # Nota: 'Días desde Orden' se agregará después de 'Fecha'
             columnas_orden = [
                 'ID Orden',
                 'Guía',
@@ -343,6 +345,39 @@ class ReportComparator:
             
             # Reordenar columnas
             df_resultado = df_resultado[columnas_orden]
+            
+            # 7.4. Agregar columna de "Días desde orden" para facilitar filtrado
+            self.logger.info("   9.5) Calculando días desde orden...")
+            try:
+                from datetime import datetime as dt
+                now = datetime.now()
+                
+                # Convertir Fecha a datetime si es string
+                if df_resultado['Fecha'].dtype == 'object':
+                    df_resultado['Fecha_datetime'] = pd.to_datetime(df_resultado['Fecha'], errors='coerce', dayfirst=True)
+                else:
+                    df_resultado['Fecha_datetime'] = df_resultado['Fecha']
+                
+                # Calcular días desde orden
+                df_resultado['Días desde Orden'] = (now - df_resultado['Fecha_datetime']).dt.days
+                
+                # Mover la columna después de Fecha en el orden correcto
+                cols = list(df_resultado.columns)
+                if 'Días desde Orden' in cols:
+                    cols.remove('Días desde Orden')
+                    fecha_idx = cols.index('Fecha')
+                    cols.insert(fecha_idx + 1, 'Días desde Orden')
+                    df_resultado = df_resultado[cols]
+                
+                # Eliminar columna temporal
+                df_resultado = df_resultado.drop(columns=['Fecha_datetime'], errors='ignore')
+                
+                self.logger.info(f"      [OK] Columna 'Días desde Orden' agregada")
+                self.logger.info(f"      - Mínimo: {df_resultado['Días desde Orden'].min()} días")
+                self.logger.info(f"      - Máximo: {df_resultado['Días desde Orden'].max()} días")
+                self.logger.info(f"      - Promedio: {df_resultado['Días desde Orden'].mean():.1f} días")
+            except Exception as e:
+                self.logger.warning(f"      [WARNING] No se pudo calcular días desde orden: {str(e)}")
             
             # 7.5. Eliminar duplicados finales por ID Orden (por si acaso)
             duplicados_antes = len(df_resultado)
@@ -882,6 +917,7 @@ class Command(BaseCommand):
         )
     
     def handle(self, *args, **options):
+        configure_utf8_stdio()
         reporte_base_path = options.get('base')
         reporte_actual_path = options.get('actual')
         rename_old_files = options.get('rename_old_files', False)

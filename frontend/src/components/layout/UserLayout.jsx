@@ -1,6 +1,6 @@
-import React from 'react';
+﻿import React from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { Trophy, Bot, BarChart3 } from 'lucide-react';
+import { Trophy, Bot, BarChart3, LayoutDashboard } from 'lucide-react';
 import AppSidebar from './AppSidebar';
 import DashboardHeader from './DashboardHeader';
 import './MainLayout.css';
@@ -12,16 +12,18 @@ const UserLayout = () => {
     const user = getAuthUser();
     const tier = user?.subscription_tier || 'BRONZE';
 
-    // Always show reporter (core feature). Show others only when tier allows.
+        // Navigation items - Dashboard first, then reporter, then tier-based features
     const userNavItems = [
+        { path: '/user/dashboard', label: 'Dashboard', icon: LayoutDashboard, glow: false },
         { path: '/user/reporter-setup', label: 'Reporter Setup', icon: Bot, glow: true },
+        { path: '/user/winner-products', label: 'Winner Products', icon: Trophy, glow: false },
         ...(hasTier(user, 'SILVER') ? [{ path: '/user/analysis', label: 'Report Analysis', icon: BarChart3 }] : []),
-        ...(hasTier(user, 'GOLD') ? [{ path: '/user/dashboard', label: 'Winner Products', icon: Trophy }] : []),
     ];
 
     const getPageTitle = () => {
         switch (location.pathname) {
-            case '/user/dashboard': return 'Winner Products';
+            case '/user/dashboard': return 'Dashboard';
+            case '/user/winner-products': return 'Winner Products';
             case '/user/reporter-setup': return 'Reporter Configuration';
             case '/user/analysis': return 'Analysis Dashboard';
             case '/user/settings': return 'Settings';
@@ -53,3 +55,6 @@ const UserLayout = () => {
 };
 
 export default UserLayout;
+
+
+

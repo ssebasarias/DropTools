@@ -129,6 +129,51 @@ Endpoints (requieren rol `ADMIN`):
   - `subscription_tier`: `BRONZE|SILVER|GOLD|PLATINUM`
   - `subscription_active`: `true|false`
 
+### Ejecutar workflow de reportes para un usuario cliente
+
+El `workflow_orchestrator` ejecuta el flujo completo de generación de reportes:
+1. Descarga reportes de Dropi (`reporterdownloader`)
+2. Compara reportes y genera CSV (`reportcomparer`)
+3. Procesa órdenes sin movimiento (`reporter`)
+
+**Ejecutar con email del usuario cliente:**
+
+```bash
+# Desde backend/
+python manage.py workflow_orchestrator --user-email "tier.bronze@local.test"
+```
+
+**Ejecutar con ID del usuario:**
+
+```bash
+python manage.py workflow_orchestrator --user-id 2
+```
+
+**Modo headless (sin interfaz gráfica):**
+
+```bash
+python manage.py workflow_orchestrator --user-email "cliente@ejemplo.com" --headless
+```
+
+**Usando scripts de ayuda:**
+
+```powershell
+# Windows PowerShell
+.\scripts\run_workflow_for_client.ps1 -ClientEmail "tier.bronze@local.test"
+.\scripts\run_workflow_for_client.ps1 -ClientEmail "cliente@ejemplo.com" -Headless
+```
+
+```bash
+# Linux/Mac
+./scripts/run_workflow_for_client.sh tier.bronze@local.test
+./scripts/run_workflow_for_client.sh cliente@ejemplo.com --headless
+```
+
+**Requisitos:**
+- El usuario debe existir en la base de datos
+- El usuario debe tener `subscription_active=True` (o ser ADMIN)
+- El usuario debe tener una `DropiAccount` configurada con label "reporter" (o default)
+
 ---
 
 ## 📚 DOCUMENTACIÓN

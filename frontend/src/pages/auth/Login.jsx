@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Zap, Mail, Lock, ArrowRight, AlertCircle } from 'lucide-react';
+import { Zap, Mail, Lock, ArrowRight, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 import PublicNavbar from '../../components/layout/PublicNavbar';
 import { login as apiLogin } from '../../services/authService';
@@ -10,6 +10,7 @@ const Login = () => {
     const [credentials, setCredentials] = useState({ email: '', password: '' });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -60,14 +61,14 @@ const Login = () => {
 
                     <form onSubmit={handleSubmit}>
                         <div className="form-group">
-                            <label className="form-label">Email Address</label>
+                            <label className="form-label">Email or Username</label>
                             <div style={{ position: 'relative' }}>
                                 <Mail size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                                 <input
-                                    type="email"
+                                    type="text"
                                     className="glass-input"
                                     style={{ paddingLeft: '38px' }}
-                                    placeholder="name@company.com"
+                                    placeholder="email or username"
                                     value={credentials.email}
                                     onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
                                     disabled={loading}
@@ -79,17 +80,38 @@ const Login = () => {
                         <div className="form-group">
                             <label className="form-label">Password</label>
                             <div style={{ position: 'relative' }}>
-                                <Lock size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
+                                <Lock size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', zIndex: 1 }} />
                                 <input
-                                    type="password"
+                                    type={showPassword ? "text" : "password"}
                                     className="glass-input"
-                                    style={{ paddingLeft: '38px' }}
+                                    style={{ paddingLeft: '38px', paddingRight: '42px' }}
                                     placeholder="••••••••"
                                     value={credentials.password}
                                     onChange={(e) => setCredentials({ ...credentials, password: e.target.value })}
                                     disabled={loading}
                                     required
                                 />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    style={{
+                                        position: 'absolute',
+                                        right: '12px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        background: 'none',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        color: 'var(--text-muted)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        padding: '4px'
+                                    }}
+                                    tabIndex={-1}
+                                >
+                                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                </button>
                             </div>
                         </div>
 

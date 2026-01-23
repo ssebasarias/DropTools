@@ -20,6 +20,7 @@ import subprocess
 
 from django.core.management.base import BaseCommand
 from django.conf import settings
+from core.utils.stdio import configure_utf8_stdio
 
 
 class WorkflowOrchestrator:
@@ -32,16 +33,22 @@ class WorkflowOrchestrator:
     3. reporter → Lee el último CSV de ordenes_sin_movimiento/ y procesa las órdenes
     """
     
-    def __init__(self, headless=False, max_wait_time=600):
+    def __init__(self, headless=False, max_wait_time=600, dropi_email=None, dropi_password=None, user_id=None):
         """
         Inicializa el orquestador
         
         Args:
             headless: Si True, ejecuta los bots en modo headless
             max_wait_time: Tiempo máximo de espera por cada paso (en segundos)
+            dropi_email: Email de DropiAccount a usar (se pasa a comandos hijos)
+            dropi_password: Password de DropiAccount a usar (se pasa a comandos hijos)
+            user_id: ID del usuario (requerido para reporter BD)
         """
         self.headless = headless
         self.max_wait_time = max_wait_time
+        self.dropi_email = dropi_email
+        self.dropi_password = dropi_password
+        self.user_id = user_id
         self.logger = self._setup_logger()
         
         # Directorios de trabajo
@@ -248,6 +255,9 @@ class WorkflowOrchestrator:
         self.logger.info(f"   Directorio de trabajo: {manage_py.parent}")
         
         try:
+            env = os.environ.copy()
+            env.setdefault("PYTHONIOENCODING", "utf-8")
+            env.setdefault("PYTHONUTF8", "1")
             # Ejecutar comando y capturar salida en tiempo real
             # Usar encoding UTF-8 para evitar problemas con caracteres especiales
             process = subprocess.Popen(
@@ -256,7 +266,8 @@ class WorkflowOrchestrator:
                 stderr=subprocess.STDOUT,
                 text=False,  # No usar text=True, manejar bytes directamente
                 bufsize=1,
-                cwd=str(manage_py.parent)  # Ejecutar desde el directorio donde está manage.py
+                cwd=str(manage_py.parent),  # Ejecutar desde el directorio donde está manage.py
+                env=env,
             )
             
             # Leer salida en tiempo real con encoding UTF-8 y manejo de errores
@@ -279,10 +290,10 @@ class WorkflowOrchestrator:
             return_code = process.wait()
             
             if return_code == 0:
-                self.logger.info(f"   ✅ Comando ejecutado exitosamente")
+                self.logger.info(f"   [OK] Comando ejecutado exitosamente")
                 return True
             else:
-                self.logger.error(f"   ❌ Comando falló con código: {return_code}")
+                self.logger.error(f"   [ERROR] Comando falló con código: {return_code}")
                 return False
                 
         except Exception as e:
@@ -312,6 +323,12 @@ class WorkflowOrchestrator:
             
             # Construir comando (sin 'python' ni 'manage.py', ya se agregan en _run_command)
             command = ['reporterdownloader']
+
+            # Pasar credenciales directamente a los comandos hijos
+            if self.dropi_email:
+                command += ['--email', self.dropi_email]
+            if self.dropi_password:
+                command += ['--password', self.dropi_password]
             
             if self.headless:
                 command.append('--headless')
@@ -474,6 +491,16 @@ class WorkflowOrchestrator:
             
             # Construir comando
             command = ['reporter', '--excel', str(csv_file)]
+
+            # Pasar user_id (requerido para BD)
+            if hasattr(self, 'user_id') and self.user_id:
+                command += ['--user-id', str(self.user_id)]
+
+            # Pasar credenciales directamente a los comandos hijos
+            if self.dropi_email:
+                command += ['--email', self.dropi_email]
+            if self.dropi_password:
+                command += ['--password', self.dropi_password]
             
             if self.headless:
                 command.append('--headless')
@@ -647,19 +674,160 @@ class Command(BaseCommand):
             default=600,
             help='Tiempo máximo de espera por cada paso en segundos (default: 600)'
         )
+
+        parser.add_argument(
+            '--user-id',
+            type=int,
+            default=None,
+            help='ID del usuario (auth_user.id) con suscripción activa. Alternativa a --user-email.'
+        )
+
+        parser.add_argument(
+            '--user-email',
+            type=str,
+            default=None,
+            help='Email del usuario cliente con suscripción activa. El orquestador buscará el usuario por email y obtendrá sus credenciales DropiAccount.'
+        )
+
+        parser.add_argument(
+            '--dropi-label',
+            type=str,
+            default='reporter',
+            help='Etiqueta DropiAccount a usar para el workflow (default: reporter).'
+        )
     
     def handle(self, *args, **options):
+        configure_utf8_stdio()
         headless = options['headless']
         max_wait = options['max_wait']
+        user_id = options.get('user_id')
+        user_email = options.get('user_email')
+        dropi_label = options.get('dropi_label', 'reporter')
         
         self.stdout.write("="*80)
         self.stdout.write(self.style.SUCCESS('INICIANDO ORQUESTADOR DE FLUJO DE TRABAJO'))
         self.stdout.write("="*80)
         
-        # Crear y ejecutar el orquestador
+        # Validar que se proporcionó user_id o user_email
+        if not user_id and not user_email:
+            self.stdout.write(
+                self.style.ERROR(
+                    '[ERROR] Debes proporcionar --user-id o --user-email para identificar al usuario cliente'
+                )
+            )
+            sys.exit(1)
+        
+        # Obtener credenciales DropiAccount del usuario
+        dropi_email = None
+        dropi_password = None
+        
+        try:
+            from django.contrib.auth.models import User
+            from core.models import DropiAccount, UserProfile
+            
+            # Buscar usuario por ID o email
+            user = None
+            if user_id:
+                user = User.objects.filter(id=user_id).first()
+                if not user:
+                    self.stdout.write(
+                        self.style.ERROR(f'[ERROR] Usuario con ID {user_id} no existe')
+                    )
+                    sys.exit(1)
+            elif user_email:
+                # Buscar por email (puede ser email o username)
+                user = (
+                    User.objects.filter(email=user_email).first()
+                    or User.objects.filter(username=user_email).first()
+                )
+                if not user:
+                    self.stdout.write(
+                        self.style.ERROR(
+                            f'[ERROR] Usuario con email/username "{user_email}" no existe en la base de datos'
+                        )
+                    )
+                    sys.exit(1)
+                # Mostrar información del usuario encontrado
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f'[INFO] Usuario encontrado: ID={user.id}, Email={user.email}, Username={user.username}'
+                    )
+                )
+            
+            # Verificar que el usuario tiene suscripción activa
+            try:
+                profile = user.profile
+                if profile.role != "ADMIN" and not profile.subscription_active:
+                    self.stdout.write(
+                        self.style.ERROR(
+                            f'[ERROR] Usuario {user.email} (ID: {user.id}) no tiene suscripción activa. '
+                            f'Rol: {profile.role}, Suscripción activa: {profile.subscription_active}'
+                        )
+                    )
+                    sys.exit(1)
+                # Mostrar información de suscripción
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f'[INFO] Usuario verificado: Rol={profile.role}, '
+                        f'Tier={profile.subscription_tier}, Suscripción activa={profile.subscription_active}'
+                    )
+                )
+            except Exception as e:
+                # Si no tiene perfil, permitir continuar (puede ser admin sin perfil)
+                self.stdout.write(
+                    self.style.WARNING(
+                        f'[WARN] Usuario no tiene perfil completo: {str(e)}. Continuando...'
+                    )
+                )
+            
+            # Obtener DropiAccount del usuario (prioridad: label específico > default > cualquier)
+            acct = (
+                DropiAccount.objects.filter(user=user, label=dropi_label).first()
+                or DropiAccount.objects.filter(user=user, is_default=True).first()
+                or DropiAccount.objects.filter(user=user).first()
+            )
+            
+            if not acct or not acct.email or not acct.password:
+                self.stdout.write(
+                    self.style.ERROR(
+                        f'[ERROR] Usuario {user.email} (ID: {user.id}) no tiene DropiAccount configurada '
+                        f'(label={dropi_label}). '
+                        f'Por favor configura una cuenta DropiAccount para este usuario.'
+                    )
+                )
+                sys.exit(1)
+            
+            dropi_email = acct.email
+            try:
+                dropi_password = acct.get_password_plain()
+            except Exception:
+                dropi_password = acct.password
+            
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f'[INFO] DropiAccount obtenida exitosamente: '
+                    f'Email={dropi_email}, Label={acct.label}, Usuario={user.email} (ID: {user.id})'
+                )
+            )
+            
+        except Exception as e:
+            self.stdout.write(
+                self.style.ERROR(f'[ERROR] Error al obtener credenciales: {str(e)}')
+            )
+            import traceback
+            self.stdout.write(traceback.format_exc())
+            sys.exit(1)
+        
+        # Obtener user_id del usuario encontrado
+        user_id_for_orchestrator = user.id if user else None
+        
+        # Crear y ejecutar el orquestador con credenciales
         orchestrator = WorkflowOrchestrator(
             headless=headless,
-            max_wait_time=max_wait
+            max_wait_time=max_wait,
+            dropi_email=dropi_email,
+            dropi_password=dropi_password,
+            user_id=user_id_for_orchestrator
         )
         
         try:
@@ -668,18 +836,18 @@ class Command(BaseCommand):
             if success:
                 self.stdout.write("")
                 self.stdout.write(
-                    self.style.SUCCESS('✅ Flujo de trabajo completado exitosamente')
+                    self.style.SUCCESS('[OK] Flujo de trabajo completado exitosamente')
                 )
             else:
                 self.stdout.write("")
                 self.stdout.write(
-                    self.style.ERROR('❌ Flujo de trabajo falló')
+                    self.style.ERROR('[ERROR] Flujo de trabajo falló')
                 )
                 sys.exit(1)
                 
         except Exception as e:
             self.stdout.write("")
             self.stdout.write(
-                self.style.ERROR(f'❌ Error fatal: {str(e)}')
+                self.style.ERROR(f'[ERROR] Error fatal: {str(e)}')
             )
             raise

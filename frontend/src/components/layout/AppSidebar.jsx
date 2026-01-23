@@ -1,7 +1,8 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Zap, Settings as SettingsIcon } from 'lucide-react';
+import { Zap, Settings as SettingsIcon, LogOut } from 'lucide-react';
 import './Sidebar.css';
+import { logout } from '../../services/authService';
 
 const AppSidebar = ({
     navItems,
@@ -47,6 +48,22 @@ const AppSidebar = ({
                     <SettingsIcon size={20} />
                     <span>Settings</span>
                 </NavLink>
+                <button
+                    type="button"
+                    onClick={logout}
+                    className="nav-item"
+                    style={{
+                        justifyContent: 'flex-start',
+                        border: 'none',
+                        width: '100%',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        color: 'var(--danger)',
+                    }}
+                >
+                    <LogOut size={20} />
+                    <span>Logout</span>
+                </button>
                 <div className="user-profile">
                     <div className="avatar">{userProfile.initials}</div>
                     <div className="user-info">
