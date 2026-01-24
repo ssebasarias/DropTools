@@ -59,12 +59,10 @@ class WorkflowOrchestrator:
         # Directorios de trabajo
         self.base_dir = Path(__file__).parent.parent.parent.parent
         self.downloads_dir = self.base_dir / 'results' / 'downloads'
-        self.ordenes_dir = self.base_dir / 'results' / 'ordenes_sin_movimiento'
         self.logs_dir = self.base_dir / 'logs'
         
         # Crear directorios si no existen
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
-        self.ordenes_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         
         # Logging de configuración inicial
@@ -73,7 +71,6 @@ class WorkflowOrchestrator:
         self.logger.info("="*80)
         self.logger.info(f"Directorio base: {self.base_dir}")
         self.logger.info(f"Directorio de descargas: {self.downloads_dir}")
-        self.logger.info(f"Directorio de órdenes: {self.ordenes_dir}")
         self.logger.info(f"Directorio de logs: {self.logs_dir}")
         self.logger.info("="*80)
         
@@ -510,7 +507,7 @@ class WorkflowOrchestrator:
         PASO 2: Ejecutar reportcomparer para comparar reportes
         
         Returns:
-            dict con 'exito' (bool) y 'csv_path' (str)
+            dict con 'exito' (bool)
         """
         self.logger.info("")
         self.logger.info("="*80)
@@ -520,12 +517,7 @@ class WorkflowOrchestrator:
         self.stats['paso2_inicio'] = datetime.now()
         
         try:
-            # Obtener archivos existentes antes de ejecutar
-            initial_files = set(self.ordenes_dir.glob('*.csv'))
-            self.logger.info(f"   Archivos CSV existentes antes: {len(initial_files)}")
-            
             # Construir comando (sin argumentos, buscará automáticamente)
-            # reportcomparer busca automáticamente en results/downloads/ con subcarpetas por mes
             command = ['reportcomparer']
             
             # Ejecutar comando
@@ -533,49 +525,26 @@ class WorkflowOrchestrator:
             
             if not success:
                 self.logger.error("   ❌ reportcomparer falló")
-                return {'exito': False, 'csv_path': None}
+                return {'exito': False}
             
-            # Esperar a que aparezca el CSV (dar tiempo suficiente para escritura)
-            self.logger.info("   Esperando generación de CSV...")
-            time.sleep(5)
-            
-            # Buscar el CSV más reciente
-            csv_file = self._get_latest_file(self.ordenes_dir, 'ordenes_sin_movimiento_*.csv')
-            
-            if not csv_file:
-                self.logger.error("   ❌ No se encontró el CSV generado")
-                self.logger.error(f"   Buscado en: {self.ordenes_dir}")
-                return {'exito': False, 'csv_path': None}
-            
-            # Verificar que el CSV sea reciente (generado en los últimos 2 minutos)
-            file_age = time.time() - csv_file.stat().st_mtime
-            if file_age > 120:
-                self.logger.warning(f"   ⚠️ CSV encontrado pero es antiguo ({file_age:.0f}s)")
-                self.logger.warning("   Puede ser un archivo de una ejecución anterior")
-            
-            self.logger.info(f"   ✅ CSV generado: {csv_file.name}")
-            self.logger.info(f"   Ruta completa: {csv_file}")
+            self.logger.info("   ✅ Comparación completada y guardada en BD")
             
             self.stats['paso2_exito'] = True
-            self.stats['csv_generado'] = str(csv_file)
             
-            return {'exito': True, 'csv_path': str(csv_file)}
+            return {'exito': True}
             
         except Exception as e:
             self.logger.error(f"   ❌ Error en PASO 2: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return {'exito': False, 'csv_path': None}
+            return {'exito': False}
         
         finally:
             self.stats['paso2_fin'] = datetime.now()
     
-    def paso3_reporter(self, csv_path):
+    def paso3_reporter(self):
         """
-        PASO 3: Ejecutar reporter para procesar órdenes
-        
-        Args:
-            csv_path: Ruta al CSV con las órdenes sin movimiento
+        PASO 3: Ejecutar reporter para procesar órdenes desde la BD
         
         Returns:
             dict con 'exito' (bool)
@@ -588,24 +557,12 @@ class WorkflowOrchestrator:
         self.stats['paso3_inicio'] = datetime.now()
         
         try:
-            # Verificar que el archivo CSV existe
-            csv_file = Path(csv_path)
-            if not csv_file.exists():
-                self.logger.error(f"   ❌ El archivo CSV no existe: {csv_path}")
-                return {'exito': False}
+            self.logger.info(f"   Iniciando reporter en modo DB...")
+
             
-            # Convertir a ruta absoluta si es relativa
-            if not csv_file.is_absolute():
-                csv_file = self.base_dir / csv_path
-                if not csv_file.exists():
-                    self.logger.error(f"   ❌ El archivo CSV no existe en ruta absoluta: {csv_file}")
-                    return {'exito': False}
-            
-            self.logger.info(f"   Archivo CSV a procesar: {csv_file}")
-            self.logger.info(f"   Tamaño del archivo: {csv_file.stat().st_size:,} bytes")
-            
-            # Construir comando
-            command = ['reporter', '--excel', str(csv_file)]
+            # Construir comando (DB Mode)
+            # Ya no pasamos --excel, dejamos que reporter use la BD automáticamente
+            command = ['reporter']
 
             # Pasar user_id (requerido para BD)
             if hasattr(self, 'user_id') and self.user_id:
@@ -729,22 +686,14 @@ class WorkflowOrchestrator:
                     self._update_workflow_progress('failed', 'Error: Falló la comparación de reportes')
                 return False
             
-            # Verificar que se generó el CSV
-            if not resultado2['csv_path']:
-                self.logger.error("")
-                self.logger.error("="*80)
-                self.logger.error("❌ FLUJO INTERRUMPIDO: NO SE GENERÓ CSV")
-                self.logger.error("="*80)
-                if self.workflow_progress:
-                    self._update_workflow_progress('failed', 'Error: No se generó el CSV de órdenes')
-                return False
+            # Verificar éxito del paso 2 (Ya no hay CSV que chequear)
             
             # Paso 2 completado
             self._update_workflow_progress('step2_completed', 'Se han obtenido las órdenes sin movimiento')
             
             # PASO 3: Procesar órdenes
             self._update_workflow_progress('step3_running', 'Comenzando a reportar CAS, puedes ver la lista de las órdenes reportadas')
-            resultado3 = self.paso3_reporter(resultado2['csv_path'])
+            resultado3 = self.paso3_reporter()
             
             if not resultado3['exito']:
                 self.logger.error("")

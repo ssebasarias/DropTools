@@ -24,6 +24,9 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 import glob
+import pandas as pd
+from django.utils import timezone
+from core.models import ReportBatch, RawOrderSnapshot
 
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options as EdgeOptions
@@ -63,7 +66,7 @@ class DropiDownloaderReporterBot:
     ORDERS_URL = "https://app.dropi.co/dashboard/orders"
     REPORTS_URL = "https://app.dropi.co/dashboard/reports/downloads"
     
-    def __init__(self, headless=False, download_dir=None, use_chrome_fallback=False, email=None, password=None):
+    def __init__(self, headless=False, download_dir=None, use_chrome_fallback=False, email=None, password=None, user=None):
         """
         Inicializa el bot
         
@@ -95,10 +98,10 @@ class DropiDownloaderReporterBot:
         self.download_dir_base = Path(download_dir)
         self.download_dir_base.mkdir(parents=True, exist_ok=True)
         
-        # El directorio específico del mes se creará dinámicamente
-        self.download_dir = None
+        # El directorio de descarga será siempre el base
+        self.download_dir = self.download_dir_base
         
-        # Las preferencias de descarga se configurarán después de crear la carpeta del mes
+        # Las preferencias de descarga se configurarán después
         self.download_prefs = {
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
@@ -118,6 +121,8 @@ class DropiDownloaderReporterBot:
         self.reporte_actual_path = None
         self.reporte_anterior_path = None
         self.excel_resultante_path = None
+        
+        self.user = user
         
     def _setup_logger(self):
         """Configura el logger para el bot con salida a consola y archivo"""
@@ -582,75 +587,6 @@ class DropiDownloaderReporterBot:
         
         return fecha_inicio, fecha_fin
     
-    def _get_month_folder_name(self, fecha=None):
-        """
-        Obtiene el nombre de la carpeta del mes en español + año
-        
-        Args:
-            fecha: datetime opcional (default: fecha actual)
-        
-        Returns:
-            str: Nombre de la carpeta (ej: "enero_2026")
-        """
-        if fecha is None:
-            fecha = datetime.now()
-        
-        meses_espanol = {
-            1: 'enero', 2: 'febrero', 3: 'marzo', 4: 'abril',
-            5: 'mayo', 6: 'junio', 7: 'julio', 8: 'agosto',
-            9: 'septiembre', 10: 'octubre', 11: 'noviembre', 12: 'diciembre'
-        }
-        
-        mes_nombre = meses_espanol[fecha.month]
-        año = fecha.year
-        
-        return f"{mes_nombre}_{año}"
-    
-    def _get_month_folder_path(self, fecha=None):
-        """
-        Obtiene la ruta completa de la carpeta del mes
-        
-        Args:
-            fecha: datetime opcional (default: fecha actual)
-        
-        Returns:
-            Path: Ruta completa de la carpeta del mes
-        """
-        nombre_carpeta = self._get_month_folder_name(fecha)
-        return self.download_dir_base / nombre_carpeta
-    
-    def _ensure_month_folder_exists(self, fecha=None):
-        """
-        Crea la carpeta del mes si no existe y configura el directorio de descarga
-        
-        Args:
-            fecha: datetime opcional (default: fecha actual)
-        
-        Returns:
-            Path: Ruta de la carpeta del mes creada/verificada
-        """
-        if fecha is None:
-            fecha = datetime.now()
-        
-        carpeta_mes = self._get_month_folder_path(fecha)
-        nombre_carpeta = self._get_month_folder_name(fecha)
-        
-        self.logger.info(f"   📂 Verificando carpeta del mes: {nombre_carpeta}")
-        
-        if not carpeta_mes.exists():
-            self.logger.info(f"      ⚠️ Carpeta no existe, creando: {carpeta_mes}")
-            carpeta_mes.mkdir(parents=True, exist_ok=True)
-            self.logger.info(f"      ✅ Carpeta creada exitosamente")
-        else:
-            self.logger.info(f"      ✅ Carpeta ya existe")
-        
-        # Actualizar directorio de descarga y preferencias de Edge
-        self.download_dir = carpeta_mes
-        self.download_prefs["download.default_directory"] = str(self.download_dir)
-        
-        self.logger.info(f"      📁 Directorio de descarga configurado: {self.download_dir}")
-        
-        return carpeta_mes
     
     def _is_download_dir_empty(self):
         """
@@ -896,15 +832,6 @@ class DropiDownloaderReporterBot:
         self.logger.info("   📥 Descargando reporte...")
         
         try:
-            # DEBUG: Tomar screenshot antes de buscar el dropdown
-            try:
-                import datetime
-                timestamp = datetime.datetime.now().strftime('%H%M%S')
-                debug_screenshot = os.path.join(self.download_dir_base, f"debug_dropdown_{timestamp}.png")
-                self.driver.save_screenshot(debug_screenshot)
-                self.logger.info(f"      📸 Screenshot de debug guardado en: {debug_screenshot}")
-            except: pass
-            
             # 1. BUSCAR DROPDOWN DE ACCIONES
             self.logger.info("      1) Buscando dropdown (Actions/Acciones)...")
             
@@ -953,14 +880,6 @@ class DropiDownloaderReporterBot:
             
             time.sleep(2)
             
-            # DEBUG: Screenshot con el menú abierto
-            try:
-                timestamp = datetime.datetime.now().strftime('%H%M%S')
-                debug_menu = os.path.join(self.download_dir_base, f"debug_menu_open_{timestamp}.png")
-                self.driver.save_screenshot(debug_menu)
-                self.logger.info(f"      📸 Screenshot menú abierto: {debug_menu}")
-            except: pass
-            
             # 2. BUSCAR OPCIÓN DE REPORTE (Multilingüe: Español / Inglés)
             self.logger.info("      2) Buscando opción 'Órdenes con Productos' (Multilingüe)...")
             
@@ -1002,16 +921,7 @@ class DropiDownloaderReporterBot:
             return True
         
         except Exception as e:
-            # GUARDAR HTML PARA DEPURACIÓN
-            try:
-                import datetime
-                timestamp = datetime.datetime.now().strftime('%H%M%S')
-                html_debug = os.path.join(self.download_dir_base, f"debug_page_{timestamp}.html")
-                with open(html_debug, "w", encoding="utf-8") as f:
-                    f.write(self.driver.page_source)
-                self.logger.error(f"      ❌ Error/Timeout buscando elemento. HTML guardado en: {html_debug}")
-            except: pass
-            
+        except Exception as e:
             self.logger.error(f"      ❌ Error al descargar reporte: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
@@ -1332,18 +1242,13 @@ class DropiDownloaderReporterBot:
                 self.logger.info("   📋 ACCIÓN: Se descargará 1 reporte (día actual)")
             self.logger.info("="*80)
             
-            # Paso 2: Obtener fecha actual y crear/verificar carpeta del mes
+            # Paso 2: Obtener fecha actual
             self.logger.info("")
             self.logger.info("="*80)
-            self.logger.info("📅 PASO 2: CONFIGURANDO CARPETA DEL MES ACTUAL")
+            self.logger.info("📅 PASO 2: CONFIGURANDO FECHA ACTUAL")
             self.logger.info("="*80)
             hoy = datetime.now()
-            nombre_carpeta_mes = self._get_month_folder_name(hoy)
             self.logger.info(f"   📆 Fecha actual: {hoy.strftime('%d/%m/%Y')}")
-            self.logger.info(f"   📂 Carpeta del mes: {nombre_carpeta_mes}")
-            
-            carpeta_mes = self._ensure_month_folder_exists(hoy)
-            self.logger.info(f"   ✅ Carpeta del mes configurada: {carpeta_mes}")
             self.logger.info("="*80)
             
             # Paso 3: Inicializar navegador (después de configurar carpeta del mes)
@@ -1410,6 +1315,10 @@ class DropiDownloaderReporterBot:
                 })
                 self.stats['reporte_anterior_descargado'] = True
                 
+                # GUARDAR EN BASE DE DATOS
+                if self.user:
+                    self._process_excel_to_db(reporte_ayer, fecha_fin_ayer)
+                
                 # Pequeña pausa entre descargas
                 self.logger.info("   ⏳ Esperando 5 segundos antes de la siguiente descarga...")
                 time.sleep(5)
@@ -1431,6 +1340,11 @@ class DropiDownloaderReporterBot:
                 'fecha_fin': fecha_fin_hoy
             })
             self.stats['reporte_actual_descargado'] = True
+            
+            # GUARDAR EN BASE DE DATOS
+            if self.user:
+                self._process_excel_to_db(reporte_hoy, fecha_fin_hoy)
+            
             self.logger.info("="*80)
             
             # Paso 7: Mostrar resumen final
@@ -1440,8 +1354,7 @@ class DropiDownloaderReporterBot:
             self.logger.info("="*80)
             self.logger.info("   🎉 PROCESO DE DESCARGA COMPLETADO EXITOSAMENTE")
             self.logger.info("")
-            self.logger.info(f"   📂 Carpeta del mes: {nombre_carpeta_mes}")
-            self.logger.info(f"   📁 Ubicación: {carpeta_mes}")
+            self.logger.info(f"   📁 Ubicación: {self.download_dir}")
             self.logger.info("")
             self.logger.info(f"   📊 Total de reportes descargados: {len(reportes_descargados)}")
             self.logger.info("")
@@ -1477,6 +1390,127 @@ class DropiDownloaderReporterBot:
                 self.logger.info("🔒 Cerrando navegador...")
                 self.driver.quit()
                 self.logger.info("   ✅ Navegador cerrado")
+
+    def _process_excel_to_db(self, file_path, report_date):
+        """
+        Lee el archivo Excel descargado y guarda los datos en la base de datos (RawOrderSnapshot)
+        Vincula el reporte al usuario actual.
+        """
+        self.logger.info("="*80)
+        self.logger.info(f"💾 GUARDANDO EN BASE DE DATOS: {Path(file_path).name}")
+        self.logger.info("="*80)
+        
+        if not self.user:
+            self.logger.warning("   ⚠️ No hay usuario asignado al bot, saltando guardado en DB")
+            return
+
+        try:
+            # 1. Verificar si ya existe un batch para esta fecha/usuario/cuenta
+            # IMPORTANTE: Usamos la fecha del reporte (report_date) para identificar el batch
+            
+            # Resetear fecha a medianoche para búsqueda precisa y hacerlo timezone aware
+            report_date_aware = timezone.make_aware(report_date.replace(hour=12, minute=0, second=0, microsecond=0))
+            
+            existing_batch = ReportBatch.objects.filter(
+                user=self.user,
+                created_at__year=report_date.year,
+                created_at__month=report_date.month,
+                created_at__day=report_date.day,
+                account_email=self.DROPI_EMAIL
+            ).first()
+            
+            if existing_batch:
+                self.logger.info(f"   ⚠️ Ya existe un lote para esta fecha ({report_date.strftime('%Y-%m-%d')}). Reemplazando...")
+                existing_batch.delete()
+                self.logger.info("      ✅ Lote anterior eliminado")
+            
+            # 2. Crear nuevo Batch
+            batch = ReportBatch.objects.create(
+                user=self.user,
+                account_email=self.DROPI_EMAIL,
+                status="PROCESSING",
+                total_records=0
+            ) 
+            # Force update created_at to match report date
+            ReportBatch.objects.filter(id=batch.id).update(created_at=report_date_aware)
+            batch.refresh_from_db()
+
+            self.logger.info(f"   ✅ Lote creado: ID {batch.id}")
+            
+            # 3. Leer Excel
+            df = pd.read_excel(file_path)
+            total_rows = len(df)
+            self.logger.info(f"   📊 Filas encontradas: {total_rows}")
+            
+            snapshots = []
+            
+            for idx, row in df.iterrows():
+                try:
+                    dropi_id = str(row.get('ID', '')).strip()
+                    # Skip empty or weird IDs
+                    if not dropi_id or dropi_id.lower() == 'nan': continue
+                    
+                    # Parse dates safely
+                    fecha_val = row.get('FECHA')
+                    order_date_obj = None
+                    if pd.notna(fecha_val):
+                        if isinstance(fecha_val, str):
+                            try:
+                                order_date_obj = datetime.strptime(fecha_val, '%d-%m-%Y').date()
+                            except: pass
+                        else:
+                            try:
+                                order_date_obj = fecha_val.date()
+                            except: pass
+
+                    snapshot = RawOrderSnapshot(
+                        batch=batch,
+                        dropi_order_id=dropi_id,
+                        shopify_order_id=str(row.get('NUMERO DE PEDIDO DE TIENDA', '')).replace('.0', '') if pd.notna(row.get('NUMERO DE PEDIDO DE TIENDA')) else None,
+                        guide_number=str(row.get('NÚMERO GUIA', '')) if pd.notna(row.get('NÚMERO GUIA')) else None,
+                        current_status=str(row.get('ESTATUS', '')).strip(),
+                        carrier=str(row.get('TRANSPORTADORA', '')) if pd.notna(row.get('TRANSPORTADORA')) else None,
+                        customer_name=str(row.get('NOMBRE CLIENTE', '')) if pd.notna(row.get('NOMBRE CLIENTE')) else None,
+                        customer_phone=str(row.get('TELÉFONO', '')) if pd.notna(row.get('TELÉFONO')) else None,
+                        address=str(row.get('DIRECCION', '')) if pd.notna(row.get('DIRECCION')) else None,
+                        city=str(row.get('CIUDAD DESTINO', '')) if pd.notna(row.get('CIUDAD DESTINO')) else None,
+                        department=str(row.get('DEPARTAMENTO DESTINO', '')) if pd.notna(row.get('DEPARTAMENTO DESTINO')) else None,
+                        product_name=str(row.get('PRODUCTO', '')) if pd.notna(row.get('PRODUCTO')) else None,
+                        quantity=int(row.get('CANTIDAD', 1)) if pd.notna(row.get('CANTIDAD')) else 1,
+                        total_amount=float(row.get('TOTAL DE LA ORDEN', 0)) if pd.notna(row.get('TOTAL DE LA ORDEN')) else 0.0,
+                        order_date=order_date_obj
+                    )
+                    snapshots.append(snapshot)
+                    
+                    if len(snapshots) >= 2000:
+                        RawOrderSnapshot.objects.bulk_create(snapshots)
+                        snapshots = []
+                        self.logger.info(f"      📥 Insertados 2000 registros...")
+                        
+                except Exception as row_error:
+                    continue # Skip problematic rows silently or log debug
+            
+            if snapshots:
+                RawOrderSnapshot.objects.bulk_create(snapshots)
+                self.logger.info(f"      📥 Insertados restantes {len(snapshots)} registros")
+            
+            batch.total_records = total_rows
+            batch.status = "SUCCESS"
+            batch.save()
+            
+            self.logger.info(f"   ✅ Guardado en DB completado para {report_date.strftime('%d/%m/%Y')}")
+            
+            # Eliminar archivo Excel después de guardarlo en DB
+            try:
+                os.remove(file_path)
+                self.logger.info(f"   🗑️ Archivo Excel eliminado: {Path(file_path).name}")
+            except Exception as del_err:
+                self.logger.warning(f"   ⚠️ No se pudo eliminar el archivo Excel: {del_err}")
+            
+        except Exception as e:
+            self.logger.error(f"   ❌ Error al guardar en DB: {e}")
+            # No fallar el bot entero si falla la DB, solo loguear
+
 
 
 class Command(BaseCommand):
@@ -1558,7 +1592,8 @@ class Command(BaseCommand):
             download_dir=download_dir,
             use_chrome_fallback=use_chrome_fallback,
             email=email,
-            password=password
+            password=password,
+            user=user if 'user' in locals() else None
         )
         
         try:

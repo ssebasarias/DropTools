@@ -1,7 +1,8 @@
-
+﻿
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.auth.models import AbstractUser
+from django.conf import settings
 
 # -----------------------------------------------------------------------------
 # CONSTANTS CONTRACT (DSA v1.0)
@@ -121,7 +122,7 @@ class FutureEvent(models.Model):
 
 class Product(models.Model):
     # Clave compuesta: (product_id, supplier_id)
-    # Permite que múltiples proveedores vendan el mismo producto
+    # Permite que mÃºltiples proveedores vendan el mismo producto
     product_id = models.BigIntegerField(primary_key=True)  # RESTORED PK to avoid migration hell
 
     supplier = models.ForeignKey(
@@ -163,8 +164,8 @@ class Product(models.Model):
         unique_together = ('product_id', 'supplier')
         indexes = [
             models.Index(fields=['-profit_margin', '-created_at']),
-            models.Index(fields=['product_id']),  # Para búsquedas por producto
-            models.Index(fields=['supplier']),     # Para búsquedas por proveedor
+            models.Index(fields=['product_id']),  # Para bÃºsquedas por producto
+            models.Index(fields=['supplier']),     # Para bÃºsquedas por proveedor
         ]
 
     def __str__(self):
@@ -206,7 +207,7 @@ class ProductStockLog(models.Model):
 
 class ConceptWeights(models.Model):
     """
-    Tabla de Pesos Dinámicos por Concepto (Personalidad del Clusterizer).
+    Tabla de Pesos DinÃ¡micos por Concepto (Personalidad del Clusterizer).
     Usa COSINE SIMILARITY (Mayor es mejor).
     """
     concept = models.CharField(max_length=255, primary_key=True) # "Tenis Deportivos", "DEFAULT"
@@ -448,7 +449,7 @@ class DomainReputation(models.Model):
 
 class MarketAnalysisReport(models.Model):
     """
-    Cabecera de un análisis de saturación para un cluster.
+    Cabecera de un anÃ¡lisis de saturaciÃ³n para un cluster.
     """
     cluster = models.ForeignKey(UniqueProductCluster, on_delete=models.CASCADE, related_name='market_reports')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -456,7 +457,7 @@ class MarketAnalysisReport(models.Model):
     # Fingerprint usado
     search_fingerprint = models.JSONField(default=dict) # Keywords, queries usadas
     
-    # Métricas Raw
+    # MÃ©tricas Raw
     candidates_found_raw = models.IntegerField(default=0) # Total URLs antes de verificar
     shopify_likely_candidates_count = models.IntegerField(default=0) # Circuit Breaker Counter (DSA v1.0)
     candidates_processed = models.IntegerField(default=0) # Cuantos pasaron a verificacion
@@ -467,7 +468,7 @@ class MarketAnalysisReport(models.Model):
     indirect_competitors_count = models.IntegerField(default=0) # Match Visual >= Threshold (Indirect)
 
     
-    # Validación de Mercado
+    # ValidaciÃ³n de Mercado
     competitors_with_ads = models.IntegerField(default=0)
     
     # Scores Finales
@@ -487,7 +488,7 @@ class MarketAnalysisReport(models.Model):
 
 class CompetitorFinding(models.Model):
     """
-    Detalle: Un competidor encontrado para un análisis específico.
+    Detalle: Un competidor encontrado para un anÃ¡lisis especÃ­fico.
     """
     report = models.ForeignKey(MarketAnalysisReport, on_delete=models.CASCADE, related_name='findings')
     domain_ref = models.ForeignKey(DomainReputation, on_delete=models.SET_NULL, null=True)
@@ -499,7 +500,7 @@ class CompetitorFinding(models.Model):
 
     # Evidencia Visual
     image_url = models.URLField(max_length=1000, blank=True)
-    visual_similarity = models.FloatField(null=True) # Cosine Similarity (1.0 = Idéntico)
+    visual_similarity = models.FloatField(null=True) # Cosine Similarity (1.0 = IdÃ©ntico)
     match_type = models.CharField(max_length=20) # DIRECT, INDIRECT, REJECTED
 
     
@@ -522,10 +523,10 @@ class User(AbstractUser):
     """
     Modelo de usuario unificado que combina:
     - auth_user (login del aplicativo) - heredado de AbstractUser
-    - user_profiles (perfil, rol, suscripción)
+    - user_profiles (perfil, rol, suscripciÃ³n)
     - dropi_accounts (credenciales Dropi)
     
-    Esta es la única tabla de usuarios en el sistema.
+    Esta es la Ãºnica tabla de usuarios en el sistema.
     """
     
     ROLE_ADMIN = "ADMIN"
@@ -546,7 +547,7 @@ class User(AbstractUser):
         (TIER_PLATINUM, "Platinum"),
     ]
     
-    # Campos de user_profiles (perfil y suscripción)
+    # Campos de user_profiles (perfil y suscripciÃ³n)
     full_name = models.CharField(max_length=120, blank=True, default="")
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_CLIENT)
     subscription_tier = models.CharField(max_length=10, choices=TIER_CHOICES, default=TIER_BRONZE)
@@ -581,13 +582,13 @@ class User(AbstractUser):
     
     def get_dropi_password_plain(self) -> str:
         """
-        Retorna la contraseña Dropi sin encriptar (siempre como string simple)
+        Retorna la contraseÃ±a Dropi sin encriptar (siempre como string simple)
         """
         return self.dropi_password or ""
     
     def set_dropi_password_plain(self, raw: str) -> None:
         """
-        Guarda la contraseña Dropi como string simple (sin encriptar)
+        Guarda la contraseÃ±a Dropi como string simple (sin encriptar)
         """
         self.dropi_password = raw or ""
 
@@ -597,10 +598,10 @@ class UserProfile(models.Model):
     Perfil del usuario para:
     - Datos de perfil (nombre)
     - Rol (ADMIN / CLIENT)
-    - Suscripción (qué módulos puede usar)
+    - SuscripciÃ³n (quÃ© mÃ³dulos puede usar)
 
     Nota: El login del aplicativo se maneja con `auth_user` (Django User: email/username + password hasheada).
-    Las credenciales externas (Dropi) se modelan aparte para permitir múltiples cuentas por usuario.
+    Las credenciales externas (Dropi) se modelan aparte para permitir mÃºltiples cuentas por usuario.
     """
 
     ROLE_ADMIN = "ADMIN"
@@ -621,14 +622,14 @@ class UserProfile(models.Model):
         (TIER_PLATINUM, "Platinum"),
     ]
 
-    user = models.OneToOneField('core.User', on_delete=models.CASCADE, related_name="profile", unique=True)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile", unique=True)
     full_name = models.CharField(max_length=120, blank=True, default="")
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_CLIENT)
     # Subscription tier controls which client modules are enabled.
     subscription_tier = models.CharField(max_length=10, choices=TIER_CHOICES, default=TIER_BRONZE)
     # If false: user can log in and see UI, but backend should block paid actions (no payments yet).
     subscription_active = models.BooleanField(default=False)
-    # Hora de ejecución diaria del workflow (formato HH:MM, ej: "23:38")
+    # Hora de ejecuciÃ³n diaria del workflow (formato HH:MM, ej: "23:38")
     execution_time = models.TimeField(null=True, blank=True, help_text="Hora diaria para ejecutar el workflow de reportes (formato HH:MM)")
 
     # NOTE: usamos default=timezone.now para evitar prompt interactivo en migraciones
@@ -636,7 +637,7 @@ class UserProfile(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     # Campos legacy (compatibilidad con la tabla existente y UI actual).
-    # Se migrarán a `DropiAccount` y luego se podrán eliminar.
+    # Se migrarÃ¡n a `DropiAccount` y luego se podrÃ¡n eliminar.
     dropi_email = models.EmailField(max_length=255, null=True, blank=True)
     dropi_password = models.CharField(max_length=255, null=True, blank=True)
 
@@ -650,10 +651,10 @@ class UserProfile(models.Model):
 class DropiAccount(models.Model):
     """
     Cuenta(s) de Dropi asociadas a un usuario.
-    Un usuario puede tener múltiples cuentas secundarias (por ejemplo: una para scraper, otra para reporter).
+    Un usuario puede tener mÃºltiples cuentas secundarias (por ejemplo: una para scraper, otra para reporter).
     """
 
-    user = models.ForeignKey('core.User', on_delete=models.CASCADE, related_name="dropi_accounts")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="dropi_accounts")
     label = models.CharField(max_length=50, default="default")
     email = models.EmailField(max_length=255)
     # Stored encrypted-at-rest when encryption key is configured.
@@ -687,7 +688,7 @@ class DropiAccount(models.Model):
 
     def set_password_plain(self, raw: str) -> None:
         """
-        Guarda la contraseña. Solo encripta si DROPIPASS_ENCRYPTION_KEY está configurado.
+        Guarda la contraseÃ±a. Solo encripta si DROPIPASS_ENCRYPTION_KEY estÃ¡ configurado.
         Por defecto guarda como string simple para facilitar el uso en scripts.
         """
         from .crypto import encrypt_if_needed
@@ -696,12 +697,12 @@ class DropiAccount(models.Model):
 
     def save(self, *args, **kwargs):
         """
-        Guarda la contraseña. Solo intenta encriptar si:
-        1. La contraseña no está vacía
-        2. No está ya encriptada (no empieza con "enc:v1:")
+        Guarda la contraseÃ±a. Solo intenta encriptar si:
+        1. La contraseÃ±a no estÃ¡ vacÃ­a
+        2. No estÃ¡ ya encriptada (no empieza con "enc:v1:")
         3. Existe DROPIPASS_ENCRYPTION_KEY en el entorno
         
-        Por defecto, si no hay key de encriptación, guarda como string simple.
+        Por defecto, si no hay key de encriptaciÃ³n, guarda como string simple.
         """
         if self.password and not self.password.startswith("enc:v1:"):
             try:
@@ -716,36 +717,36 @@ class DropiAccount(models.Model):
 
 class OrderReport(models.Model):
     """
-    Tabla de reportes de órdenes generados por el bot reporter.
-    Reemplaza el sistema de checkpoints CSV por una base de datos más eficiente.
+    Tabla de reportes de Ã³rdenes generados por el bot reporter.
+    Reemplaza el sistema de checkpoints CSV por una base de datos mÃ¡s eficiente.
     """
     
     STATUS_CHOICES = [
-        ('proximo_a_reportar', 'Próximo a Reportar'),
+        ('proximo_a_reportar', 'PrÃ³ximo a Reportar'),
         ('reportado', 'Reportado'),
         ('error', 'Error'),
         ('no_encontrado', 'No Encontrado'),
         ('already_has_case', 'Ya Tiene Caso'),
-        ('cannot_generate_yet', 'No Se Puede Generar Aún'),
+        ('cannot_generate_yet', 'No Se Puede Generar AÃºn'),
         ('in_movement', 'En Movimiento'),
     ]
     
-    user = models.ForeignKey('core.User', on_delete=models.CASCADE, related_name='order_reports')
-    order_phone = models.CharField(max_length=50, db_index=True, help_text="Número de teléfono de la orden")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='order_reports')
+    order_phone = models.CharField(max_length=50, db_index=True, help_text="NÃºmero de telÃ©fono de la orden")
     order_id = models.CharField(max_length=100, null=True, blank=True, help_text="ID de la orden en Dropi")
-    tracking_number = models.CharField(max_length=100, null=True, blank=True, help_text="Número de guía / Tracking")
+    tracking_number = models.CharField(max_length=100, null=True, blank=True, help_text="NÃºmero de guÃ­a / Tracking")
     
     status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='proximo_a_reportar')
-    report_generated = models.BooleanField(default=False, help_text="True si el reporte se generó exitosamente")
+    report_generated = models.BooleanField(default=False, help_text="True si el reporte se generÃ³ exitosamente")
     
-    # Información adicional de la orden
+    # InformaciÃ³n adicional de la orden
     customer_name = models.CharField(max_length=255, null=True, blank=True, help_text="Nombre del cliente")
     product_name = models.TextField(null=True, blank=True, help_text="Nombre del producto vinculado a la orden")
     order_state = models.CharField(max_length=100, null=True, blank=True, help_text="Estado actual de la orden en Dropi")
-    days_since_order = models.IntegerField(null=True, blank=True, help_text="Días transcurridos desde la orden (del CSV)")
+    days_since_order = models.IntegerField(null=True, blank=True, help_text="DÃ­as transcurridos desde la orden (del CSV)")
     
     # Control de tiempos
-    next_attempt_time = models.DateTimeField(null=True, blank=True, help_text="Próximo intento (para estados que requieren espera)")
+    next_attempt_time = models.DateTimeField(null=True, blank=True, help_text="PrÃ³ximo intento (para estados que requieren espera)")
     
     # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
@@ -757,11 +758,11 @@ class OrderReport(models.Model):
             models.Index(fields=['user', 'order_phone']),
             models.Index(fields=['user', 'status']),
             models.Index(fields=['user', 'report_generated']),
-            models.Index(fields=['order_phone']),  # Para búsquedas rápidas
+            models.Index(fields=['order_phone']),  # Para bÃºsquedas rÃ¡pidas
             models.Index(fields=['next_attempt_time']),  # Para filtrar por tiempo
         ]
-        # Un usuario no puede tener múltiples reportes activos para la misma orden
-        # (pero puede tener múltiples intentos históricos si falla)
+        # Un usuario no puede tener mÃºltiples reportes activos para la misma orden
+        # (pero puede tener mÃºltiples intentos histÃ³ricos si falla)
         constraints = [
             models.UniqueConstraint(
                 fields=['user', 'order_phone'],
@@ -790,7 +791,7 @@ class WorkflowProgress(models.Model):
         ('failed', 'Fallido'),
     ]
     
-    user = models.ForeignKey('core.User', on_delete=models.CASCADE, related_name='workflow_progresses')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='workflow_progresses')
     status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='pending')
     
     # Mensajes de progreso
@@ -815,3 +816,116 @@ class WorkflowProgress(models.Model):
     
     def __str__(self):
         return f"WorkflowProgress {self.id} - {self.user.email} ({self.status})"
+
+
+# -----------------------------------------------------------------------------
+# REPORT BATCH MANAGEMENT (ADDED FOR DB-BASED REPORTING)
+# -----------------------------------------------------------------------------
+
+class ReportBatch(models.Model):
+    """
+    Representa un lote de descarga de reportes de Dropi.
+    Reemplaza la dependencia de carpetas/archivos fÃ­sicos y permite trazabilidad total.
+    """
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='report_batches')
+    account_email = models.EmailField(max_length=255, help_text="Email de la cuenta Dropi de donde vino este reporte")
+    created_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=50, default="SUCCESS") # SUCCESS, FAILED, PROCESSING
+    
+    # Metadata opcional del lote
+    total_records = models.IntegerField(default=0, help_text="Total de filas leÃ­das del Excel")
+
+    class Meta:
+        db_table = 'report_batches'
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['account_email']),
+        ]
+        verbose_name = "Lote de Reporte"
+        verbose_name_plural = "Lotes de Reportes"
+
+    def __str__(self):
+        return f"Batch {self.id} - {self.account_email} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class RawOrderSnapshot(models.Model):
+    """
+    Una 'foto' de una orden en un momento especÃ­fico (traÃ­da de un ReportBatch).
+    Contiene la data cruda del Excel de Dropi mapeada a columnas estructuradas.
+    Permite comparar estados entre Batches para detectar 'Sin Movimiento'.
+    """
+    id = models.BigAutoField(primary_key=True)
+    batch = models.ForeignKey(ReportBatch, on_delete=models.CASCADE, related_name='snapshots')
+    
+    # IDs e Identificadores Clave
+    dropi_order_id = models.CharField(max_length=100, db_index=True, help_text="Columna: ID")
+    shopify_order_id = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: NUMERO DE PEDIDO DE TIENDA")
+    guide_number = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: NÃšMERO GUIA")
+    
+    # Estado y LogÃ­stica
+    current_status = models.CharField(max_length=100, db_index=True, help_text="Columna: ESTATUS")
+    carrier = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: TRANSPORTADORA")
+    
+    # Cliente
+    customer_name = models.CharField(max_length=255, null=True, blank=True, help_text="Columna: NOMBRE CLIENTE")
+    customer_phone = models.CharField(max_length=50, db_index=True, null=True, blank=True, help_text="Columna: TELÃ‰FONO")
+    address = models.TextField(null=True, blank=True, help_text="Columna: DIRECCION")
+    city = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: CIUDAD DESTINO")
+    department = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: DEPARTAMENTO DESTINO")
+    
+    # Producto
+    product_name = models.TextField(null=True, blank=True, help_text="Columna: PRODUCTO")
+    quantity = models.IntegerField(default=1, help_text="Columna: CANTIDAD")
+    
+    # Finanzas
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Columna: TOTAL DE LA ORDEN")
+    
+    # Tiempos
+    order_date = models.DateField(null=True, blank=True, help_text="Columna: FECHA (convertida a Date)")
+    
+    
+    class Meta:
+        db_table = 'raw_order_snapshots'
+        indexes = [
+            models.Index(fields=['dropi_order_id']),
+            models.Index(fields=['current_status']),
+            models.Index(fields=['batch', 'current_status']), # Optimiza queries de comparaciÃ³n
+        ]
+
+    def __str__(self):
+        return f"Snapshot {self.dropi_order_id} ({self.current_status})"
+
+
+class OrderMovementReport(models.Model):
+    """
+    Registro de órdenes detectadas sin movimiento al comparar reportes.
+    Sirve como 'cola de trabajo' para los agentes de resolución.
+    """
+    id = models.BigAutoField(primary_key=True)
+    
+    # Vinculación
+    batch = models.ForeignKey(ReportBatch, on_delete=models.CASCADE, related_name='stagnant_orders', help_text="El reporte donde se detectó (HOY)")
+    snapshot = models.ForeignKey(RawOrderSnapshot, on_delete=models.CASCADE, related_name='stagnant_findings', help_text="La foto de la orden hoy")
+    
+    # Datos calculados en el momento
+    days_since_order = models.IntegerField(default=0, help_text="Días desde que se creó la orden hasta hoy")
+    
+    # Gestión de la incidencia
+    is_resolved = models.BooleanField(default=False, db_index=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution_note = models.TextField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'order_movement_reports'
+        verbose_name = "Orden Sin Movimiento"
+        verbose_name_plural = "Órdenes Sin Movimiento"
+        indexes = [
+            models.Index(fields=['batch', 'is_resolved']),
+        ]
+
+    def __str__(self):
+        return f"Stagnant Order {self.snapshot.dropi_order_id} ({self.days_since_order} days)"
+

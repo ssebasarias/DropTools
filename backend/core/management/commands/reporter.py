@@ -1,8 +1,3 @@
-"""
-Bot de Reportes Automáticos para Dropi
-Este bot automatiza la generación de observaciones en Dropi para productos sin movimiento.
-"""
-
 import os
 import time
 import logging
@@ -24,9 +19,8 @@ from selenium.common.exceptions import (
 )
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from core.models import User
+from core.models import User, OrderReport, ReportBatch, OrderMovementReport, RawOrderSnapshot
 from django.utils import timezone
-from core.models import OrderReport
 from core.utils.stdio import configure_utf8_stdio
 
 
@@ -76,17 +70,17 @@ class DropiReporterBot:
         "Pedido estancado, favor gestionar salida a reparto urgente."
     ]
     
-    def __init__(self, excel_path, headless=False, user_id=None, dropi_label="reporter", email=None, password=None):
+    def __init__(self, excel_path=None, headless=False, user_id=None, dropi_label="reporter", email=None, password=None):
         """
         Inicializa el bot
         
         Args:
-            excel_path: Ruta al archivo Excel o CSV con los datos
+            excel_path: (Opcional) Ruta al archivo Excel o CSV. Si es None, carga de BD.
             headless: Si True, ejecuta el navegador sin interfaz gráfica
             user_id: ID del usuario (tabla users.id) para cargar credenciales de Dropi desde BD
-            dropi_label: etiqueta de la cuenta Dropi a usar (default: reporter). Si no existe, usa la default.
-            email: Email de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
-            password: Password de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
+            dropi_label: etiqueta de la cuenta Dropi a usar (default: reporter).
+            email: Email de DropiAccount a usar directamente.
+            password: Password de DropiAccount a usar directamente.
         """
         self.excel_path = excel_path
         self.headless = headless
@@ -97,8 +91,8 @@ class DropiReporterBot:
         self.driver = None
         self.wait = None
         self.logger = self._setup_logger()
-        self.current_order_row = None  # Para guardar la fila correcta cuando hay múltiples resultados
-        self.df_data = None  # DataFrame completo con datos del CSV para acceso rápido
+        self.current_order_row = None
+        self.df_data = None
         self.stats = {
             'total': 0,
             'procesados': 0,
@@ -108,17 +102,13 @@ class DropiReporterBot:
             'saltados_por_tiempo': 0,
             'reintentos': 0
         }
-        # Timeout global de 15 segundos para detectar sesión expirada
         self.TIMEOUT_SECONDS = 15
-        # Estado para tracking de sesión
         self.session_expired = False
-        self.current_processing_step = None  # Para saber dónde retomar después de relogear
+        self.current_processing_step = None
 
-        # Validar que tenemos user_id para usar BD
         if not self.user_id:
             raise ValueError("user_id es requerido para usar el sistema de reportes en BD")
 
-        # Cargar credenciales antes de iniciar
         self._load_dropi_credentials()
         
     def _setup_logger(self):
@@ -1767,27 +1757,109 @@ class DropiReporterBot:
             self.logger.error(f"✗ Error al cargar archivo: {str(e)}")
             raise
     
+    def _load_db_data(self):
+        """
+        Carga las órdenes pendientes desde OrderMovementReport en lugar de un archivo.
+        
+        Returns:
+            DataFrame con las columnas esperadas por el bot
+        """
+        self.logger.info("🔍 CONSULTANDO BASE DE DATOS (OrderMovementReport)...")
+        
+        # 1. Buscar último Batch exitoso del usuario
+        try:
+            latest_batch = ReportBatch.objects.filter(
+                user_id=self.user_id,
+                status='SUCCESS'
+            ).order_by('-created_at').first()
+            
+            if not latest_batch:
+                self.logger.error("❌ No se encontraron lotes de reportes para este usuario.")
+                return pd.DataFrame() # Vacío
+            
+            self.logger.info(f"   📅 Lote encontrado: ID {latest_batch.id} ({latest_batch.created_at})")
+            
+            # 2. Buscar órdenes pendientes no resueltas
+            pending_items = OrderMovementReport.objects.filter(
+                batch=latest_batch,
+                is_resolved=False
+            ).select_related('snapshot')
+            
+            count = pending_items.count()
+            self.logger.info(f"   📊 Órdenes pendientes por resolver: {count}")
+            
+            if count == 0:
+                self.logger.info("   ✅ Nada pendiente. Todo está limpio.")
+                return pd.DataFrame()
+
+            # 3. Construir lista de diccionarios con el formato esperado
+            data_list = []
+            for item in pending_items:
+                snap = item.snapshot
+                data_list.append({
+                    'Teléfono': snap.customer_phone,
+                    'Estado Actual': snap.current_status,
+                    'ID Orden': snap.dropi_order_id,
+                    'Cliente': snap.customer_name,
+                    'Producto': snap.product_name,
+                    'Días desde Orden': item.days_since_order,
+                    # COLUMNAS NUEVAS PARA CONTROL INTERNO
+                    '_db_report_id': item.id,  # Para marcar resolved después
+                })
+            
+            # 4. Crear DataFrame
+            df = pd.DataFrame(data_list)
+            
+            # Asegurar tipos
+            df['Teléfono'] = df['Teléfono'].astype(str)
+            
+            self.logger.info(f"   ✅ DataFrame construido con {len(df)} registros.")
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error al consultar DB: {str(e)}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            raise
+
     def run(self):
-        """Ejecuta el bot completo usando BD para tracking de reportes"""
+        """Ejecuta el bot completo usando BD o Archivo según configuración"""
         self.logger.info("="*80)
-        self.logger.info("INICIANDO BOT DE REPORTES DROPI (BD Mode)")
+        self.logger.info("INICIANDO BOT DE REPORTES DROPI")
         self.logger.info("="*80)
         
         try:
-            # Cargar datos
-            df = self._load_excel_data()
+            # 1. Cargar datos (DB o Excel)
+            if self.excel_path:
+                self.logger.info("📂 Modo: Archivo Excel/CSV")
+                df = self._load_excel_data()
+            else:
+                self.logger.info("🗄️ Modo: Base de Datos")
+                df = self._load_db_data()
+            
+            if df.empty:
+                self.logger.info("⚠️ No hay datos para procesar.")
+                return 
+
+            # Filtrar si todavía no está filtrado (solo aplica si viene de Excel/CSV a veces, 
+            # pero desde DB ya viene filtrado is_resolved=False. 
+            # El filtro de estados validos ya se aplicó en ReportComparer, pero no daña re-checkear)
+            # Reutilizamos validación de estados por seguridad
+            if 'Estado Actual' in df.columns:
+                 df = df[df['Estado Actual'].isin(self.VALID_STATES)]
+            
             self.stats['total'] = len(df)
             
             # Guardar DataFrame completo para acceso rápido a información
-            self.df_data = df.set_index('Teléfono')  # Indexar por teléfono para búsqueda rápida
+            self.df_data = df.set_index('Teléfono', drop=False)
             
             # Obtener usuario
             user = User.objects.get(id=self.user_id)
             self.logger.info(f"👤 Usuario: {user.email} (ID: {user.id})")
             
-            # Contar órdenes ya reportadas en BD
+            # Contar órdenes ya reportadas en BD (Histórico legado)
             reported_count = OrderReport.objects.filter(user=user, status='reportado').count()
-            self.logger.info(f"📊 Órdenes ya reportadas en BD: {reported_count}")
+            self.logger.info(f"📊 Histórico global reportado: {reported_count}")
             
             # Inicializar navegador
             self._init_driver()
@@ -1815,6 +1887,9 @@ class DropiReporterBot:
                 phone = row['Teléfono']
                 state = row['Estado Actual']
                 
+                # Obtener ID de DB si existe
+                db_report_id = row.get('_db_report_id')
+                
                 self.logger.info("")
                 self.logger.info(f"{'='*80}")
                 self.logger.info(f"Procesando orden {idx + 1}/{len(df)}")
@@ -1830,80 +1905,62 @@ class DropiReporterBot:
                         self.logger.info(f"⏭️  Orden saltada - Ya fue reportada exitosamente")
                     elif reason == 'waiting_time':
                         self.logger.warning(f"⏳ Orden saltada - Falta tiempo para reintentar")
-                        self.logger.warning(f"   Status: {time_info['status']}")
-                        self.logger.warning(f"   Horas restantes: {time_info['hours_remaining']:.2f}")
-                        self.logger.warning(f"   Próximo intento: {time_info['next_attempt_time']}")
-                    
                     self.stats['saltados_por_tiempo'] += 1
                     continue
                 
-                # Obtener reporte previo si existe (para retry_count)
+                # Obtener reporte previo si existe
                 prev_report = self._get_order_report(phone)
                 retry_count = 0
                 if prev_report:
-                    # Contar cuántas veces se ha intentado (excluyendo reportados)
-                    retry_count = OrderReport.objects.filter(
-                        user=user,
-                        order_phone=phone
-                    ).exclude(status='reportado').count()
+                    retry_count = OrderReport.objects.filter(user=user, order_phone=phone).exclude(status='reportado').count()
                 
                 # Indicar si es la primera orden procesada
                 is_first = (idx == 0)
                 
-                # Extraer información del CSV ANTES de procesar (para tenerla disponible)
-                order_info = self._extract_order_info(phone)
-                
-                # Procesar orden
+                # Procesar orden (Selenium Logic)
                 result = self._process_single_order(phone, state, idx, is_first_order=is_first, retry_count=retry_count)
                 
-                # Agregar información del CSV al resultado
-                result['order_info'] = order_info
-                result['customer_name'] = order_info.get('customer_name')
-                result['product_name'] = order_info.get('product_name')
-                result['order_id'] = order_info.get('order_id') or result.get('order_id', '')
-                result['order_state'] = state
+                # ACTUALIZACIÓN EN BASE DE DATOS (OrderMovementReport)
+                if result['status'] == 'reportado' and db_report_id:
+                    self.logger.info(f"   💾 Marcando registro DB {db_report_id} como RESUELTO.")
+                    try:
+                        OrderMovementReport.objects.filter(id=db_report_id).update(
+                            is_resolved=True,
+                            resolved_at=timezone.now(),
+                            resolution_note="Reportado exitosamente por Bot"
+                        )
+                    except Exception as db_err:
+                        self.logger.error(f"   ❌ Error actualizando OrderMovementReport: {db_err}")
+
+                # Guardar en BD (Legacy Tracker)
+                # Extraer info adicional
+                order_info = {
+                    'customer_name': row.get('Cliente'),
+                    'product_name': row.get('Producto'),
+                    'order_id': row.get('ID Orden')
+                }
+                result['order_info'] = order_info # Para que _save_results lo use
                 
-                # Si hay información adicional del CSV, mostrarla en el log
-                if order_info.get('customer_name') or order_info.get('product_name'):
-                    self.logger.info(f"   📋 Info CSV: Cliente={order_info.get('customer_name', 'N/A')[:30]}, Producto={order_info.get('product_name', 'N/A')[:40]}")
+                self._save_results([result], append=True)
+                results.append(result)
                 
                 # Si hubo timeout y sesión expirada, relogear y reintentar
                 if result['status'] == 'session_expired':
                     self.logger.warning("⚠️ Sesión expirada durante procesamiento - Relogueando...")
                     if self._relogin_and_retry():
-                        # _relogin_and_retry ya navegó a Mis Pedidos, solo reintentar la orden
                         self.logger.info(f"🔄 Reintentando orden después de relogin...")
-                        # Reintentar la misma orden (ya estamos en Mis Pedidos)
                         result = self._process_single_order(phone, state, idx, is_first_order=False, retry_count=retry_count)
-                        # Re-agregar información del CSV
+                        if result['status'] == 'reportado' and db_report_id:
+                             OrderMovementReport.objects.filter(id=db_report_id).update(is_resolved=True, resolved_at=timezone.now(), resolution_note="Reportado tras retry")
+                        
                         result['order_info'] = order_info
-                        result['customer_name'] = order_info.get('customer_name')
-                        result['product_name'] = order_info.get('product_name')
-                        result['order_id'] = order_info.get('order_id') or result.get('order_id', '')
-                        result['order_state'] = state
+                        self._save_results([result], append=True)
                         self.stats['reintentos'] += 1
                     else:
-                        self.logger.error("❌ No se pudo relogear - Abortando")
                         break
                 
-                # Log del resultado
-                if result['status'] == 'reportado':
-                    self.logger.info(f"✅ ÉXITO: Reporte generado exitosamente (marcado como reportado)")
-                elif result['status'] == 'cannot_generate_yet':
-                    self.logger.warning(f"⚠️ No se puede generar aún - Próximo intento: {result.get('next_attempt_time', 'N/A')}")
-                else:
-                    self.logger.warning(f"⚠️ Estado: {result.get('status', 'error')}")
-                
-                # Guardar en BD INMEDIATAMENTE después de procesar cada orden
-                self._save_results([result], append=True)
-                
-                # Agregar a lista después de guardar (para estadísticas finales)
-                results.append(result)
-                
-                # Pequeña pausa entre órdenes
                 time.sleep(1)
             
-            # Mostrar estadísticas finales
             self._print_final_stats()
             
         except Exception as e:
@@ -1913,7 +1970,6 @@ class DropiReporterBot:
             raise
             
         finally:
-            # Cerrar navegador
             if self.driver:
                 self.logger.info("Cerrando navegador...")
                 self.driver.quit()
@@ -2108,8 +2164,8 @@ class Command(BaseCommand):
         parser.add_argument(
             '--excel',
             type=str,
-            required=True,
-            help='Ruta al archivo Excel o CSV con los datos de trazabilidad'
+            default=None,
+            help='(Opcional) Ruta al archivo Excel o CSV con los datos de trazabilidad. Si no se provee, usa la BD.'
         )
         
         parser.add_argument(
@@ -2148,15 +2204,15 @@ class Command(BaseCommand):
     
     def handle(self, *args, **options):
         configure_utf8_stdio()
-        excel_path = options['excel']
+        excel_path = options.get('excel')
         headless = options['headless']
         user_id = options.get('user_id')
         dropi_label = options.get('dropi_label', 'reporter')
         email = options.get('email')
         password = options.get('password')
         
-        # Verificar que el archivo existe
-        if not os.path.exists(excel_path):
+        # Verificar que el archivo existe si se proporcionó
+        if excel_path and not os.path.exists(excel_path):
             self.stdout.write(
                 self.style.ERROR(f'El archivo no existe: {excel_path}')
             )

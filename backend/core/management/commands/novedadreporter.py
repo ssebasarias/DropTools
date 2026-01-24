@@ -10,6 +10,7 @@ Para ambas, la respuesta es: "Volver a pasar"
 import os
 import time
 import logging
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -26,7 +27,7 @@ from selenium.common.exceptions import (
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from core.models import User
-# DropiAccount ya no se usa, las credenciales están en User directamente
+# Las credenciales Dropi están en la tabla unificada users (campos dropi_email y dropi_password)
 from core.utils.stdio import configure_utf8_stdio
 
 
@@ -42,7 +43,8 @@ class NovedadReporterBot:
     # Novedades que requieren la respuesta "Volver a pasar"
     TARGET_NOVEDADES = [
         "No hay quien reciba",
-        "Déficit de Capacidad"
+        "Déficit de Capacidad",
+        "Reprogramar entrega"
     ]
     
     # Respuesta estándar para estas novedades
@@ -55,9 +57,9 @@ class NovedadReporterBot:
         Args:
             headless: Si True, ejecuta el navegador sin interfaz gráfica
             user_id: ID del usuario (tabla users.id) para cargar credenciales de Dropi desde BD
-            dropi_label: etiqueta de la cuenta Dropi a usar (default: reporter)
-            email: Email de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
-            password: Password de DropiAccount a usar directamente (sobrescribe user_id/dropi_label)
+            dropi_label: (deprecated) Ya no se usa, las credenciales están en la tabla users directamente
+            email: Email de Dropi a usar directamente (sobrescribe user_id)
+            password: Password de Dropi a usar directamente (sobrescribe user_id)
         """
         self.headless = headless
         self.user_id = user_id
@@ -111,10 +113,10 @@ class NovedadReporterBot:
 
     def _load_dropi_credentials(self):
         """
-        Prioridad de carga de credenciales:
+        Prioridad de carga de credenciales desde la tabla unificada users:
         1) Si vienen email/password directamente (desde argumentos): usarlos
-        2) Si viene user_id: buscar DropiAccount de ese usuario (primero por label, si no por is_default)
-        3) Si no hay user_id o no hay cuenta: fallback a ENV (DROPI_EMAIL/DROPI_PASSWORD)
+        2) Si viene user_id: buscar credenciales Dropi en la tabla users (campos dropi_email y dropi_password)
+        3) Si no hay user_id o no hay credenciales: fallback a ENV (DROPI_EMAIL/DROPI_PASSWORD)
         """
         # Prioridad 1: Credenciales directas
         if self.dropi_email_direct and self.dropi_password_direct:
@@ -123,18 +125,24 @@ class NovedadReporterBot:
             self.logger.info("✅ Dropi creds desde argumentos directos (--email/--password)")
             return
 
-        # Prioridad 2: Intentar desde BD
+        # Prioridad 2: Intentar desde BD (tabla unificada users)
         if self.user_id:
-            user = User.objects.filter(id=self.user_id).first()
-            if not user:
-                raise ValueError(f"user_id={self.user_id} no existe en la tabla users")
+            try:
+                user = User.objects.filter(id=self.user_id).first()
+                if not user:
+                    raise ValueError(f"user_id={self.user_id} no existe en la tabla users")
 
-            # Usar credenciales Dropi directamente del User (ahora están en la tabla users)
-            if user.dropi_email and user.dropi_password:
-                self.DROPI_EMAIL = user.dropi_email
-                self.DROPI_PASSWORD = user.get_dropi_password_plain()
-                self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, email={user.dropi_email})")
-                return
+                # Usar credenciales Dropi directamente del User (tabla unificada users)
+                if user.dropi_email and user.dropi_password:
+                    self.DROPI_EMAIL = user.dropi_email
+                    self.DROPI_PASSWORD = user.get_dropi_password_plain()
+                    self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, email={user.dropi_email})")
+                    return
+                else:
+                    self.logger.warning(f"⚠️ Usuario {self.user_id} no tiene credenciales Dropi configuradas (dropi_email o dropi_password vacíos)")
+            except Exception as e:
+                self.logger.error(f"❌ Error al obtener credenciales del usuario {self.user_id}: {str(e)}")
+                raise
 
         # Prioridad 3: Fallback ENV
         self.DROPI_EMAIL = os.getenv("DROPI_EMAIL")
@@ -144,8 +152,8 @@ class NovedadReporterBot:
             return
 
         raise ValueError(
-            "No hay credenciales Dropi. Proporciona --email/--password, configura DropiAccount en BD "
-            "para ese usuario, o define DROPI_EMAIL/DROPI_PASSWORD en el entorno."
+            "No hay credenciales Dropi. Proporciona --email/--password, configura dropi_email y dropi_password "
+            "en la tabla users para ese usuario, o define DROPI_EMAIL/DROPI_PASSWORD en el entorno."
         )
     
     def _init_driver(self):
@@ -162,12 +170,12 @@ class NovedadReporterBot:
         else:
             self.logger.info("👀 Modo VISIBLE activado")
         
+        # Optimizaciones para Windows local
         options.add_argument('--start-maximized')
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_argument('--disable-infobars')
-        options.add_argument('--disable-extensions')
         
-        # Modo incógnito para evitar usar ubicación del usuario
+        # Modo incógnito simple (más confiable en Windows local)
         options.add_argument('--incognito')
         self.logger.info("   🔒 Modo incógnito activado")
         
@@ -1280,17 +1288,17 @@ class Command(BaseCommand):
             '--dropi-label',
             type=str,
             default='reporter',
-            help='Etiqueta de la cuenta Dropi a usar (default: reporter)',
+            help='(Deprecated) Ya no se usa. Las credenciales están en la tabla users directamente.',
         )
         parser.add_argument(
             '--email',
             type=str,
-            help='Email de Dropi (sobrescribe user_id/dropi_label)',
+            help='Email de Dropi (sobrescribe user_id)',
         )
         parser.add_argument(
             '--password',
             type=str,
-            help='Password de Dropi (sobrescribe user_id/dropi_label)',
+            help='Password de Dropi (sobrescribe user_id)',
         )
     
     def handle(self, *args, **options):
