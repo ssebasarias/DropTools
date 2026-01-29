@@ -6,7 +6,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
 from core.models import User
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, Q, Sum
 from .models import (
     Product,
     UniqueProductCluster,
@@ -19,6 +19,8 @@ from .models import (
     # UserProfile y DropiAccount ya no se usan, todo está en User
     OrderReport,
     WorkflowProgress,
+    ReportBatch,
+    RawOrderSnapshot,
 )
 from .permissions import IsAdminRole, MinSubscriptionTier
 from datetime import datetime, timedelta, time as dt_time
@@ -779,132 +781,75 @@ class ReporterConfigView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
+
 class ReporterStartView(APIView):
     """
-    Inicia el workflow de reportes manualmente (reemplaza el scheduler automático)
-    Funciona tanto en desarrollo local como en Docker
+    Inicia el workflow de reportes manualmente.
+    MODO LOCAL: Ejecuta directametne el comando unified_reporter con subprocess (Bypass Docker/Celery)
     """
     def post(self, request):
         user = request.user
         if not user or not user.is_authenticated:
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
-        
+
         try:
-            import subprocess
-            import sys
-            import platform
-            from pathlib import Path
-            
             # Obtener email Dropi directamente del User (ahora está en la tabla users)
             if not user.dropi_email:
                 return Response(
                     {"error": "No Dropi account configured. Please configure dropi_email in user settings."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+
+            print(f"DEBUG: Starting local workflow for user {user.username} ({user.id})")
             
             # Crear registro de progreso del workflow
             from core.models import WorkflowProgress
             from django.utils import timezone
+            import subprocess
+            import sys
+            
+            # Reset previous running progress
+            WorkflowProgress.objects.filter(
+                user=user, 
+                status__in=['pending', 'step1_running', 'step2_running', 'step3_running']
+            ).update(status='failed', current_message='Reiniciado por nueva solicitud')
+
             workflow_progress = WorkflowProgress.objects.create(
                 user=user,
                 status='step1_running',
-                current_message='Esto puede tardar unos minutos...',
-                messages=['Esto puede tardar unos minutos...']
+                current_message='Iniciando bot localmente...',
+                messages=['Iniciando proceso local...']
             )
+            print(f"DEBUG: Created WorkflowProgress ID {workflow_progress.id}")
 
-            # Detectar si estamos en Docker
-            is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER') == 'true'
-            log_file = None  # Inicializar para evitar error si is_docker=True
-            
-            if is_docker:
-                # En Docker: ejecutar dentro del contenedor backend
-                # El comando debe ejecutarse en el mismo contenedor
-                manage_py = Path('/app/backend/manage.py')
-                
-                if not manage_py.exists():
-                    return Response(
-                        {"error": "No se encontró manage.py en Docker"},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
-                
-                command = [
-                    sys.executable,
-                    str(manage_py),
-                    'workflow_orchestrator',
-                    '--user-id',
-                    str(user.id),
-                    '--headless',  # Modo headless para Docker (sin interfaz gráfica)
-                    '--use-chrome-fallback'  # Usar Chrome en Docker (Edge no disponible)
-                ]
-                
-                
-                # Crear archivo de log para este proceso (igual que en desarrollo local)
-                from datetime import datetime
-                log_dir = Path(manage_py.parent) / 'logs'
-                log_dir.mkdir(exist_ok=True)
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                log_file = log_dir / f'workflow_button_{timestamp}.log'
-                
-                # Abrir archivo de log para escritura
-                log_f = open(log_file, 'w', encoding='utf-8')
-                
-                # Ejecutar en background dentro del contenedor con logs en archivo
-                process = subprocess.Popen(
-                    command,
-                    stdout=log_f,
-                    stderr=subprocess.STDOUT,
-                    cwd=str(manage_py.parent),
-                    env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
-                )
-            else:
-                # En desarrollo local
-                manage_py = Path(__file__).parent.parent / 'manage.py'
-                
-                if not manage_py.exists():
-                    return Response(
-                        {"error": "No se encontró manage.py"},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
-                
-                command = [
-                    sys.executable,
-                    str(manage_py),
-                    'workflow_orchestrator',
-                    '--user-id',
-                    str(user.id)
-                    # Sin --headless para modo visible
-                ]
-                
-                # Ejecutar en background con logs capturados en archivo
-                # IMPORTANTE: NO usar CREATE_NEW_CONSOLE porque si hay un error al iniciar el navegador,
-                # la ventana se cierra inmediatamente y no podemos ver qué pasó.
-                # En su lugar, ejecutamos en background y los logs se guardan en archivos.
-                
-                # Crear archivo de log para este proceso
-                from datetime import datetime
-                log_dir = Path(manage_py.parent) / 'logs'
-                log_dir.mkdir(exist_ok=True)
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                log_file = log_dir / f'workflow_button_{timestamp}.log'
-                
-                # Abrir archivo de log para escritura
-                log_f = open(log_file, 'w', encoding='utf-8')
-                
-                process = subprocess.Popen(
-                    command,
-                    stdout=log_f,
-                    stderr=subprocess.STDOUT,
-                    cwd=str(manage_py.parent),
-                    env=dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
-                )
-            
-            return Response({
-                "status": "started",
-                "message": f"Workflow iniciado en background. Logs en: {log_file if not is_docker else 'contenedor Docker'}",
-                "process_id": process.pid,
-                "environment": "docker" if is_docker else "local",
-                "log_file": str(log_file) if not is_docker else None
-            })
+            # Usar Celery para ejecutar el workflow de forma asíncrona
+            # Esto permite que múltiples usuarios ejecuten workflows simultáneamente
+            from core.tasks import execute_workflow_task
+
+            try:
+                # Encolar la tarea en Celery
+                task_result = execute_workflow_task.delay(user.id)
+                print(f"DEBUG: Enqueued Celery task {task_result.id}")
+
+                return Response({
+                    "status": "enqueued",
+                    "message": "Workflow encolado para ejecución asíncrona",
+                    "task_id": task_result.id,
+                    "environment": "celery_async",
+                    "workflow_progress_id": workflow_progress.id
+                })
+
+            except Exception as celery_error:
+                # Si falla Celery, intentar método alternativo (aunque no recomendado)
+                import traceback
+                workflow_progress.status = 'failed'
+                workflow_progress.current_message = f'Error al encolar tarea: {str(celery_error)}'
+                workflow_progress.save()
+
+                return Response({
+                    "error": f"No se pudo encolar la tarea: {str(celery_error)}",
+                    "traceback": traceback.format_exc()
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
         except Exception as e:
             import traceback
@@ -927,6 +872,8 @@ class ReporterStatusView(APIView):
             from django.utils import timezone
             from core.models import WorkflowProgress
             
+            print(f"DEBUG: Status check for user {user.username} ({user.id})")
+
             # Contar reportes por estado
             # CORRECCIÓN KPI: Solo contar los reportes realizados HOY
             today = timezone.now().date()
@@ -989,13 +936,18 @@ class ReporterListView(APIView):
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
         
         try:
+            from django.utils import timezone
             # Obtener parámetros de paginación
             page = int(request.query_params.get('page', 1))
             page_size = int(request.query_params.get('page_size', 50))
             status_filter = request.query_params.get('status', 'reportado')
             
-            # Filtrar reportes
-            queryset = OrderReport.objects.filter(user=user)
+            # Filtrar reportes - Solo mostrar reportes del día actual
+            today = timezone.now().date()
+            queryset = OrderReport.objects.filter(
+                user=user,
+                updated_at__date=today  # Solo reportes del día actual
+            )
             
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
@@ -1060,6 +1012,173 @@ class ReporterListView(APIView):
         except Exception as e:
             return Response(
                 {"error": f"Error al obtener lista: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ClientDashboardAnalyticsView(APIView):
+    """
+    Analytics para el dashboard del cliente: KPIs, regiones, top productos y
+    efectividad por transportadora, derivados de RawOrderSnapshot (reportes Dropi).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.utils import timezone
+        from django.db.models.functions import Coalesce
+
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        period = (request.query_params.get("period") or "week").strip().lower()
+        if period not in ("day", "week", "fortnight", "month"):
+            period = "week"
+        batch_id_param = request.query_params.get("batch_id")
+
+        now = timezone.now()
+        if period == "day":
+            since = now - timedelta(days=1)
+        elif period == "week":
+            since = now - timedelta(days=7)
+        elif period == "fortnight":
+            since = now - timedelta(days=15)
+        else:
+            since = now - timedelta(days=30)
+
+        empty_response = {
+            "kpis": {
+                "total_orders": 0,
+                "delivered": 0,
+                "products_sold": 0,
+                "total_revenue": 0,
+                "confirmation_pct": 0.0,
+                "cancellation_pct": 0.0,
+            },
+            "by_region": [],
+            "top_products": [],
+            "by_carrier": [],
+            "last_updated": None,
+        }
+
+        try:
+            if batch_id_param:
+                try:
+                    batch_id = int(batch_id_param)
+                except (TypeError, ValueError):
+                    return Response(empty_response, status=status.HTTP_200_OK)
+                batches = ReportBatch.objects.filter(
+                    user=user, id=batch_id, status="SUCCESS"
+                )[:1]
+            else:
+                batches = ReportBatch.objects.filter(
+                    user=user,
+                    status="SUCCESS",
+                    created_at__gte=since,
+                ).order_by("-created_at")
+
+            batch_ids = list(batches.values_list("id", flat=True))
+            if not batch_ids:
+                return Response(empty_response, status=status.HTTP_200_OK)
+
+            last_batch = batches.first()
+            last_updated = last_batch.created_at.isoformat() if last_batch else None
+
+            snapshots = RawOrderSnapshot.objects.filter(batch_id__in=batch_ids)
+            total_orders = snapshots.count()
+            if total_orders == 0:
+                return Response({
+                    **empty_response,
+                    "last_updated": last_updated,
+                }, status=status.HTTP_200_OK)
+
+            delivered_count = snapshots.filter(
+                current_status__icontains="ENTREGAD"
+            ).count()
+            cancelled_count = snapshots.filter(
+                current_status__icontains="CANCELAD"
+            ).count()
+            products_sold = snapshots.aggregate(s=Coalesce(Sum("quantity"), 0))["s"] or 0
+            total_revenue = snapshots.aggregate(s=Coalesce(Sum("total_amount"), 0))["s"] or 0
+            confirmation_pct = round(
+                (total_orders - cancelled_count) / total_orders * 100, 1
+            )
+            cancellation_pct = round(cancelled_count / total_orders * 100, 1)
+
+            by_region_qs = (
+                snapshots.values("department")
+                .annotate(
+                    orders=Count("id"),
+                    revenue=Coalesce(Sum("total_amount"), 0),
+                )
+                .order_by("-orders")
+            )
+            by_region = [
+                {
+                    "department": (x["department"] or "Sin departamento").strip() or "Sin departamento",
+                    "orders": x["orders"],
+                    "revenue": float(x["revenue"]),
+                }
+                for x in by_region_qs
+            ]
+
+            top_products_qs = (
+                snapshots.values("product_name")
+                .annotate(
+                    quantity=Coalesce(Sum("quantity"), 0),
+                    revenue=Coalesce(Sum("total_amount"), 0),
+                )
+                .order_by("-quantity")[:10]
+            )
+            top_products = [
+                {
+                    "product_name": (x["product_name"] or "Sin nombre").strip() or "Sin nombre",
+                    "quantity": x["quantity"],
+                    "revenue": float(x["revenue"]),
+                }
+                for x in top_products_qs
+            ]
+
+            carriers = list(
+                snapshots.exclude(carrier__isnull=True)
+                .exclude(carrier="")
+                .values_list("carrier", flat=True)
+                .distinct()
+            )
+            by_carrier = []
+            for carrier in carriers:
+                carrier_snap = snapshots.filter(carrier=carrier)
+                total_c = carrier_snap.count()
+                delivered_c = carrier_snap.filter(
+                    current_status__icontains="ENTREGAD"
+                ).count()
+                pct = round(delivered_c / total_c * 100, 1) if total_c else 0
+                by_carrier.append({
+                    "carrier": carrier,
+                    "total": total_c,
+                    "delivered": delivered_c,
+                    "effectiveness_pct": pct,
+                })
+            by_carrier.sort(key=lambda x: -x["effectiveness_pct"])
+
+            return Response({
+                "kpis": {
+                    "total_orders": total_orders,
+                    "delivered": delivered_count,
+                    "products_sold": products_sold,
+                    "total_revenue": float(total_revenue),
+                    "confirmation_pct": confirmation_pct,
+                    "cancellation_pct": cancellation_pct,
+                },
+                "by_region": by_region,
+                "top_products": top_products,
+                "by_carrier": by_carrier,
+                "last_updated": last_updated,
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {"error": f"Error al calcular analytics: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

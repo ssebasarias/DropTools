@@ -10,9 +10,9 @@ import { hasTier } from '../../utils/subscription';
 const UserLayout = () => {
     const location = useLocation();
     const user = getAuthUser();
-    const tier = user?.subscription_tier || 'BRONZE';
+    const tier = (user?.subscription_tier || 'BRONZE').toUpperCase();
 
-        // Navigation items - Dashboard first, then reporter, then tier-based features
+    // Navigation items - Dashboard first, then reporter, then tier-based features
     const userNavItems = [
         { path: '/user/dashboard', label: 'Dashboard', icon: LayoutDashboard, glow: false },
         { path: '/user/reporter-setup', label: 'Reporter Setup', icon: Bot, glow: true },

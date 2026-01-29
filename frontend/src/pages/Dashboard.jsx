@@ -8,8 +8,10 @@ import './Dashboard.css';
 
 import GlassCard from '../components/common/GlassCard';
 import OpportunityCard from '../components/domain/market/OpportunityCard';
+import ErrorState from '../components/common/ErrorState';
+import EmptyState from '../components/common/EmptyState';
 
-const CustomTooltip = ({ active, payload }) => {
+const CustomTooltip = React.memo(({ active, payload }) => {
     if (active && payload && payload.length) {
         const data = payload[0].payload;
         return (
@@ -24,35 +26,78 @@ const CustomTooltip = ({ active, payload }) => {
         );
     }
     return null;
-};
+});
 
 const Dashboard = () => {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
+        let mounted = true;
+        
         const loadStats = async () => {
             try {
+                setError(null);
                 const res = await fetchDashboardStats();
-                setData(res);
-            } catch {
-                console.error("Failed to load intelligence");
+                if (mounted) {
+                    setData(res);
+                }
+            } catch (err) {
+                console.error("Failed to load intelligence:", err);
+                if (mounted) {
+                    setError(err.message || "Error al cargar los datos del dashboard");
+                }
             } finally {
-                setLoading(false);
+                if (mounted) {
+                    setLoading(false);
+                }
             }
         };
+        
         loadStats();
+        
+        return () => {
+            mounted = false;
+        };
     }, []);
 
-    if (loading) return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '50vh', color: '#6366f1' }}>
-            <Zap className="spin" size={48} />
-            <p style={{ marginTop: '1rem' }}>Sincronizando Inteligencia de Mercado...</p>
-            <style jsx>{` .spin { animation: spin 1s infinite linear; } @keyframes spin { 100% { transform: rotate(360deg); } } `}</style>
-        </div>
-    );
+    // Error state - always show errors first
+    if (error) {
+        return (
+            <ErrorState
+                error={error}
+                onRetry={() => {
+                    setError(null);
+                    setLoading(true);
+                    window.location.reload();
+                }}
+                title="Error al cargar datos"
+            />
+        );
+    }
 
-    if (!data) return <div style={{ padding: '2rem', color: '#fff' }}>Error de conexión con Neural Core.</div>;
+    // Loading state - ONLY when loading AND no data exists (prevents flash on refetch)
+    if (loading && !data) {
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '50vh', color: '#6366f1' }}>
+                <Zap className="spin" size={48} />
+                <p style={{ marginTop: '1rem' }}>Sincronizando Inteligencia de Mercado...</p>
+                <style jsx>{` .spin { animation: spin 1s infinite linear; } @keyframes spin { 100% { transform: rotate(360deg); } } `}</style>
+            </div>
+        );
+    }
+
+    // Empty state - when no data available
+    if (!data) {
+        return (
+            <EmptyState
+                icon={Zap}
+                title="No hay datos disponibles"
+                description="Los datos del dashboard aparecerán aquí una vez que estén disponibles."
+            />
+        );
+    }
 
     const { tactical_feed = [], market_radar = [] } = data;
 
@@ -78,9 +123,11 @@ const Dashboard = () => {
                 </div>
 
                 {tactical_feed.length === 0 ? (
-                    <GlassCard>
-                        <p style={{ color: '#94a3b8' }}>El escaneo de hoy no ha encontrado "Unicornios" todavía. Revisa Gold Mine.</p>
-                    </GlassCard>
+                    <EmptyState
+                        icon={Zap}
+                        title="No hay hallazgos flash"
+                        description="El escaneo de hoy no ha encontrado 'Unicornios' todavía. Revisa Gold Mine."
+                    />
                 ) : (
                     <div className="cards-grid">
                         {tactical_feed.map(item => (

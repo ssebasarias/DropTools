@@ -3,16 +3,16 @@ import { API_BASE_URL } from "../config/constants";
 const API_URL = API_BASE_URL;
 
 export function getToken() {
-  return localStorage.getItem("auth_token");
+  return sessionStorage.getItem("auth_token");
 }
 
 export function setToken(token) {
-  localStorage.setItem("auth_token", token);
+  sessionStorage.setItem("auth_token", token);
 }
 
 export function clearToken() {
-  localStorage.removeItem("auth_token");
-  localStorage.removeItem("auth_user");
+  sessionStorage.removeItem("auth_token");
+  sessionStorage.removeItem("auth_user");
 }
 
 export function logout() {
@@ -21,7 +21,7 @@ export function logout() {
 }
 
 export function getAuthUser() {
-  const raw = localStorage.getItem("auth_user");
+  const raw = sessionStorage.getItem("auth_user");
   return raw ? JSON.parse(raw) : null;
 }
 
@@ -38,7 +38,7 @@ export async function login(email, password) {
   }
 
   setToken(data.token);
-  localStorage.setItem("auth_user", JSON.stringify(data.user));
+  sessionStorage.setItem("auth_user", JSON.stringify(data.user));
   return data;
 }
 
@@ -51,7 +51,7 @@ export async function register({ full_name, name, email, password }) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Registro falló");
   setToken(data.token);
-  localStorage.setItem("auth_user", JSON.stringify(data.user));
+  sessionStorage.setItem("auth_user", JSON.stringify(data.user));
   return data;
 }
 
@@ -70,7 +70,7 @@ export async function me() {
     throw new Error("Sesión expirada");
   }
   if (!res.ok) throw new Error(data.error || "No se pudo cargar el usuario");
-  localStorage.setItem("auth_user", JSON.stringify(data.user));
+  sessionStorage.setItem("auth_user", JSON.stringify(data.user));
   return data.user;
 }
 

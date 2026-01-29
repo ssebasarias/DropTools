@@ -3,7 +3,7 @@ import { ArrowRight, Target } from 'lucide-react';
 import LazyImage from '../../common/LazyImage';
 import GlassCard from '../../common/GlassCard';
 
-const OpportunityCard = ({ product }) => {
+const OpportunityCard = React.memo(({ product }) => {
     // const navigate = useNavigate(); // If needed for internal navigation
 
     return (
@@ -81,6 +81,8 @@ const OpportunityCard = ({ product }) => {
             `}</style>
         </GlassCard>
     );
-};
+});
+
+OpportunityCard.displayName = 'OpportunityCard';
 
 export default OpportunityCard;

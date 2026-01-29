@@ -1,0 +1,269 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Bogotá D.C.", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-74.2, 4.5], [-74.0, 4.5], [-74.0, 4.75], [-74.2, 4.75], [-74.2, 4.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Cundinamarca", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-74.8, 4.0], [-73.8, 4.0], [-73.8, 5.2], [-74.8, 5.2], [-74.8, 4.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Antioquia", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-76.2, 5.5], [-74.8, 5.5], [-74.8, 8.0], [-76.2, 8.0], [-76.2, 5.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Valle del Cauca", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-77.2, 3.0], [-75.8, 3.0], [-75.8, 4.8], [-77.2, 4.8], [-77.2, 3.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Atlántico", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-75.2, 10.3], [-74.6, 10.3], [-74.6, 11.0], [-75.2, 11.0], [-75.2, 10.3]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Santander", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-74.2, 5.8], [-72.8, 5.8], [-72.8, 7.5], [-74.2, 7.5], [-74.2, 5.8]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Bolívar", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-75.8, 8.0], [-73.5, 8.0], [-73.5, 10.5], [-75.8, 10.5], [-75.8, 8.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Nariño", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-78.0, 0.8], [-76.8, 0.8], [-76.8, 2.0], [-78.0, 2.0], [-78.0, 0.8]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Meta", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-74.5, 2.0], [-71.5, 2.0], [-71.5, 4.5], [-74.5, 4.5], [-74.5, 2.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Risaralda", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-76.2, 4.8], [-75.2, 4.8], [-75.2, 5.5], [-76.2, 5.5], [-76.2, 4.8]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Caldas", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-75.8, 4.5], [-74.8, 4.5], [-74.8, 5.5], [-75.8, 5.5], [-75.8, 4.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Boyacá", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-74.2, 4.8], [-72.2, 4.8], [-72.2, 6.8], [-74.2, 6.8], [-74.2, 4.8]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Tolima", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-76.0, 3.2], [-74.5, 3.2], [-74.5, 5.2], [-76.0, 5.2], [-76.0, 3.2]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Huila", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-76.2, 1.8], [-74.8, 1.8], [-74.8, 3.5], [-76.2, 3.5], [-76.2, 1.8]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Magdalena", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-74.8, 9.5], [-73.5, 9.5], [-73.5, 11.2], [-74.8, 11.2], [-74.8, 9.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Norte de Santander", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-73.2, 7.0], [-71.8, 7.0], [-71.8, 9.0], [-73.2, 9.0], [-73.2, 7.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Quindío", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-75.8, 4.2], [-75.4, 4.2], [-75.4, 4.6], [-75.8, 4.6], [-75.8, 4.2]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Cauca", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-77.5, 1.0], [-76.2, 1.0], [-76.2, 3.2], [-77.5, 3.2], [-77.5, 1.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Cesar", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-73.8, 8.5], [-72.5, 8.5], [-72.5, 10.5], [-73.8, 10.5], [-73.8, 8.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Córdoba", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-76.2, 7.8], [-75.2, 7.8], [-75.2, 9.2], [-76.2, 9.2], [-76.2, 7.8]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "La Guajira", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-73.0, 10.2], [-71.2, 10.2], [-71.2, 12.5], [-73.0, 12.5], [-73.0, 10.2]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Chocó", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-77.5, 3.5], [-76.2, 3.5], [-76.2, 8.2], [-77.5, 8.2], [-77.5, 3.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Sucre", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-75.5, 8.2], [-74.8, 8.2], [-74.8, 9.5], [-75.5, 9.5], [-75.5, 8.2]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Putumayo", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-76.8, -0.2], [-74.5, -0.2], [-74.5, 1.5], [-76.8, 1.5], [-76.8, -0.2]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Casanare", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-72.5, 4.0], [-70.5, 4.0], [-70.5, 6.2], [-72.5, 6.2], [-72.5, 4.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Caquetá", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-75.5, 0.0], [-73.5, 0.0], [-73.5, 2.2], [-75.5, 2.2], [-75.5, 0.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Amazonas", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-74.0, -2.0], [-69.5, -2.0], [-69.5, 2.0], [-74.0, 2.0], [-74.0, -2.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Arauca", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-71.5, 6.0], [-69.8, 6.0], [-69.8, 7.5], [-71.5, 7.5], [-71.5, 6.0]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Guainía", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-70.0, 1.5], [-66.5, 1.5], [-66.5, 4.0], [-70.0, 4.0], [-70.0, 1.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Guaviare", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-73.0, 0.5], [-70.5, 0.5], [-70.5, 2.5], [-73.0, 2.5], [-73.0, 0.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Vaupés", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-71.5, -0.5], [-69.5, -0.5], [-69.5, 1.5], [-71.5, 1.5], [-71.5, -0.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Vichada", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-71.0, 3.5], [-67.5, 3.5], [-67.5, 6.5], [-71.0, 6.5], [-71.0, 3.5]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "shapeName": "Archipiélago de San Andrés, Providencia y Santa Catalina", "shapeType": "ADM1" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-81.8, 12.4], [-81.6, 12.4], [-81.6, 12.6], [-81.8, 12.6], [-81.8, 12.4]]]
+      }
+    }
+  ]
+}

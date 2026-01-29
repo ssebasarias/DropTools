@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, XCircle, Play, RefreshCw, FileText, Phone, User, Package } from 'lucide-react';
 import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount, fetchReporterConfig, updateReporterConfig, startReporterWorkflow, fetchReporterStatus, fetchReporterList } from '../../services/api';
 import SubscriptionGate from '../../components/common/SubscriptionGate';
 import { getAuthUser } from '../../services/authService';
 import { hasTier } from '../../utils/subscription';
+import ErrorState from '../../components/common/ErrorState';
+import EmptyState from '../../components/common/EmptyState';
 
 const ReporterConfigInner = () => {
     const [accounts, setAccounts] = useState([]);
@@ -27,7 +29,7 @@ const ReporterConfigInner = () => {
         executionTime: '08:00'
     });
 
-    const load = async () => {
+    const load = useCallback(async () => {
         setError('');
         setLoading(true);
         try {
@@ -42,9 +44,9 @@ const ReporterConfigInner = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
-    const loadStatus = async (silent = false) => {
+    const loadStatus = useCallback(async (silent = false) => {
         if (!silent) setStatusLoading(true);
         try {
             const statusData = await fetchReporterStatus();
@@ -52,37 +54,57 @@ const ReporterConfigInner = () => {
             if (statusData?.workflow_progress) {
                 setWorkflowProgress(statusData.workflow_progress);
             }
+            // Clear error on success
+            if (!silent) setError('');
         } catch (e) {
             console.error('Error cargando estado:', e);
+            // Always surface errors to user
+            if (!silent) {
+                setError(e.message || 'Error al cargar el estado del reporter');
+            }
         } finally {
             if (!silent) setStatusLoading(false);
         }
-    };
+    }, []);
 
-    const loadReportsList = async (silent = false) => {
+    const loadReportsList = useCallback(async (silent = false) => {
         if (!silent) setReportsLoading(true);
         try {
             const data = await fetchReporterList(1, 50, 'reportado');
             setReportsList(data.results || []);
         } catch (e) {
             console.error('Error cargando lista de reportes:', e);
+            // Always surface errors to user (non-silent only)
+            if (!silent) {
+                setError(e.message || 'Error al cargar la lista de reportes');
+            }
         } finally {
             if (!silent) setReportsLoading(false);
         }
-    };
+    }, []);
 
     const handleStartWorkflow = async () => {
         setError('');
         setStarting(true);
         try {
             await startReporterWorkflow();
+
+            // ACTUALIZACIÓN OPTIMISTA: Evitar parpadeo
+            setWorkflowProgress({
+                status: 'step1_running',
+                current_message: 'Iniciando servicio...',
+                messages: ['Solicitud enviada. Esperando respuesta del worker...']
+            });
+
+            // Dar tiempo al worker para arrancar antes de liberar el botón
             setTimeout(() => {
-                loadStatus(true);
+                loadStatus(true); // Recargar estado real
                 loadReportsList(true);
-            }, 2000);
+                setStarting(false);
+            }, 3000);
+
         } catch (e) {
             setError(e.message || 'Error al iniciar workflow');
-        } finally {
             setStarting(false);
         }
     };
@@ -91,27 +113,33 @@ const ReporterConfigInner = () => {
         load();
         loadStatus();
         loadReportsList();
-    }, []);
+    }, [load, loadStatus, loadReportsList]);
 
     // Auto-refresh status every 3 seconds when workflow is running
     useEffect(() => {
         const isWorkflowRunning = workflowProgress &&
             ['step1_running', 'step2_running', 'step3_running', 'step1_completed', 'step2_completed'].includes(workflowProgress.status);
 
+        let interval;
+
         if (isWorkflowRunning) {
-            const interval = setInterval(() => {
+            interval = setInterval(() => {
                 loadStatus(true);
                 loadReportsList(true); // También actualizar lista de reportes cuando el workflow está corriendo
             }, 3000); // Polling más frecuente cuando está corriendo
-            return () => clearInterval(interval);
         } else {
             // Polling normal cuando no está corriendo
-            const interval = setInterval(() => {
+            interval = setInterval(() => {
                 loadStatus(true);
             }, 10000);
-            return () => clearInterval(interval);
         }
-    }, [workflowProgress?.status]);
+
+        return () => {
+            if (interval) {
+                clearInterval(interval);
+            }
+        };
+    }, [workflowProgress?.status, loadStatus, loadReportsList]);
 
     // Auto-refresh reports list when status updates
     useEffect(() => {
@@ -136,7 +164,7 @@ const ReporterConfigInner = () => {
             `}</style>
             <div style={{ marginBottom: '2rem' }}>
                 <h1 className="text-gradient" style={{ fontSize: '2.5rem', margin: 0 }}>Reporter Configuration</h1>
-                <p className="text-muted" style={{ marginTop: '0.5rem' }}>Gestiona la generaciÃ³n de reportes de Ã³rdenes sin movimiento.</p>
+                <p className="text-muted" style={{ marginTop: '0.5rem' }}>Gestiona la generación de reportes de órdenes sin movimiento.</p>
             </div>
 
             {/* Primera fila: Instrucciones y Formulario de cuenta */}
@@ -171,19 +199,19 @@ const ReporterConfigInner = () => {
                                     Esta cuenta secundaria debe tener acceso a:
                                 </p>
                                 <ul style={{ marginLeft: '1.5rem', marginBottom: '1rem', color: 'var(--text-muted)' }}>
-                                    <li>Visualizar Ã³rdenes</li>
+                                    <li>Visualizar órdenes</li>
                                     <li>Generar reportes</li>
                                     <li>Acceso de solo lectura recomendado</li>
                                 </ul>
                                 <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                                    El reporter usarÃ¡ estas credenciales para acceder a tu dashboard y generar reportes automÃ¡ticamente.
+                                    El reporter usará estas credenciales para acceder a tu dashboard y generar reportes automáticamente.
                                 </p>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                {/* Cuadrado de Inputs y BotÃ³n Guardar */}
+                {/* Cuadrado de Inputs y Botón Guardar */}
                 <div className="glass-card">
                     <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem' }}>Guardar Cuenta Secundaria</h3>
 
@@ -248,34 +276,43 @@ const ReporterConfigInner = () => {
                     )}
 
                     <div className="form-group">
-                        <label className="form-label">Correo ElectrÃ³nico</label>
+                        <label className="form-label">Correo Electrónico</label>
                         <div style={{ position: 'relative' }}>
                             <Mail size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', zIndex: 1 }} />
                             <input
                                 type="email"
                                 className="glass-input"
-                                style={{ paddingLeft: '38px' }}
+                                style={{ paddingLeft: '38px', opacity: accounts.length > 0 ? 0.6 : 1 }}
                                 placeholder="reporter@yourdomain.com"
                                 value={form.email}
                                 onChange={(e) => setForm({ ...form, email: e.target.value })}
+                                disabled={accounts.length > 0}
                             />
                         </div>
                     </div>
 
                     <div className="form-group">
-                        <label className="form-label">ContraseÃ±a</label>
+                        <label className="form-label">Contraseña</label>
                         <div style={{ position: 'relative' }}>
                             <Key size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', zIndex: 1 }} />
                             <input
                                 type="password"
                                 className="glass-input"
-                                style={{ paddingLeft: '38px' }}
-                                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                                style={{ paddingLeft: '38px', opacity: accounts.length > 0 ? 0.6 : 1 }}
+                                placeholder={accounts.length > 0 ? "••••••••• (Oculto)" : "•••••••••"}
                                 value={form.password}
                                 onChange={(e) => setForm({ ...form, password: e.target.value })}
+                                disabled={accounts.length > 0}
                             />
                         </div>
                     </div>
+
+                    {accounts.length > 0 && (
+                        <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(234, 179, 8, 0.1)', borderRadius: '8px', border: '1px solid rgba(234, 179, 8, 0.2)', color: '#fbbf24', fontSize: '0.9rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <Info size={16} />
+                            <span>Ya tienes una cuenta vinculada. Para cambiarla, contacta soporte o usa el botón de editar (próximamente).</span>
+                        </div>
+                    )}
 
                     <button
                         type="button"
@@ -286,9 +323,10 @@ const ReporterConfigInner = () => {
                             alignItems: 'center',
                             justifyContent: 'center',
                             gap: '0.5rem',
-                            opacity: creating ? 0.7 : 1
+                            opacity: (creating || accounts.length > 0) ? 0.5 : 1,
+                            cursor: (creating || accounts.length > 0) ? 'not-allowed' : 'pointer'
                         }}
-                        disabled={creating || !form.email || !form.password}
+                        disabled={creating || !form.email || !form.password || accounts.length > 0}
                         onClick={async () => {
                             setError('');
                             setCreating(true);
@@ -313,6 +351,11 @@ const ReporterConfigInner = () => {
                                 <RefreshCw size={18} className="spinning" />
                                 Guardando...
                             </>
+                        ) : accounts.length > 0 ? (
+                            <>
+                                <CheckCircle2 size={18} />
+                                Cuenta Vinculada
+                            </>
                         ) : (
                             <>
                                 <Save size={18} />
@@ -323,7 +366,7 @@ const ReporterConfigInner = () => {
                 </div>
             </div>
 
-            {/* Segunda fila: BotÃ³n Iniciar y KPI Contador */}
+            {/* Segunda fila: Botón Iniciar y KPI Contador */}
             <div className="glass-card" style={{ marginBottom: '2rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '2rem', flexWrap: 'wrap' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1 }}>
@@ -355,7 +398,7 @@ const ReporterConfigInner = () => {
                         </button>
                     </div>
 
-                    {/* KPI Contador de Reportes del DÃ­a */}
+                    {/* KPI Contador de Reportes del Día */}
                     <div style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -473,18 +516,11 @@ const ReporterConfigInner = () => {
                         <p className="text-muted" style={{ marginTop: '0.5rem' }}>Cargando estado...</p>
                     </div>
                 ) : reportsList.length === 0 ? (
-                    <div style={{
-                        textAlign: 'center',
-                        padding: '3rem',
-                        background: 'rgba(255,255,255,0.02)',
-                        borderRadius: '12px',
-                        border: '1px dashed var(--glass-border)'
-                    }}>
-                        <Package size={48} className="text-muted" style={{ opacity: 0.5, marginBottom: '1rem' }} />
-                        <p className="text-muted" style={{ margin: 0 }}>
-                            No hay órdenes reportadas aún. Presiona "Iniciar a Reportar" para comenzar.
-                        </p>
-                    </div>
+                    <EmptyState
+                        icon={Package}
+                        title="No hay órdenes reportadas aún"
+                        description="Presiona 'Iniciar a Reportar' para comenzar."
+                    />
                 ) : (
                     <div style={{
                         display: 'grid',
@@ -618,7 +654,7 @@ const ReporterConfigInner = () => {
 const ReporterConfig = () => {
     const user = getAuthUser();
     const ok = hasTier(user, 'BRONZE');
-    if (!ok) return <SubscriptionGate minTier="BRONZE" title="Reporter (requiere suscripciÃ³n activa)">{null}</SubscriptionGate>;
+    if (!ok) return <SubscriptionGate minTier="BRONZE" title="Reporter (requiere suscripción activa)">{null}</SubscriptionGate>;
     return <ReporterConfigInner />;
 };
 

@@ -33,6 +33,7 @@ from core.views import (
     ReporterStartView,
     ReporterStatusView,
     ReporterListView,
+    ClientDashboardAnalyticsView,
     AuthLoginView,
     AuthRegisterView,
     AuthMeView,
@@ -73,6 +74,7 @@ urlpatterns = [
     path('api/reporter/start/', ReporterStartView.as_view(), name='reporter-start'),
     path('api/reporter/status/', ReporterStatusView.as_view(), name='reporter-status'),
     path('api/reporter/list/', ReporterListView.as_view(), name='reporter-list'),
+    path('api/user/dashboard/analytics/', ClientDashboardAnalyticsView.as_view(), name='client-dashboard-analytics'),
 
     # Admin (no payments): manage users & subscriptions
     path('api/admin/users/', AdminUsersView.as_view(), name='admin-users'),

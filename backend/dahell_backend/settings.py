@@ -135,3 +135,19 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ],
 }
+
+# ============================================================================
+# CELERY CONFIGURATION
+# ============================================================================
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'America/Bogota'
+CELERY_ENABLE_UTC = True
+CELERY_WORKER_CONCURRENCY = 3  # Número de tareas simultáneas por worker
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # Tomar 1 tarea a la vez
+CELERY_TASK_TIME_LIMIT = 3600  # 1 hora máximo por tarea
+CELERY_TASK_SOFT_TIME_LIMIT = 3300  # Advertencia a los 55 minutos
+CELERY_RESULT_EXPIRES = 3600  # Resultados expiran en 1 hora

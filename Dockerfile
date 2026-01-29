@@ -22,15 +22,24 @@ FROM base AS full_app
 
 # Instalar Chromium y chromedriver para Selenium
 # Y librerías gráficas necesarias para PyTorch/Pillow/OpenCV
+# TAMBIÉN INSTALAMOS MICROSOFT EDGE para consistencia con local
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     chromium chromium-driver \
     libgl1 libglib2.0-0 \
+    wget gnupg2 ca-certificates \
+    && wget -q -O - https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg \
+    && install -o root -g root -m 644 microsoft.gpg /etc/apt/trusted.gpg.d/ \
+    && sh -c 'echo "deb [arch=amd64] https://packages.microsoft.com/repos/edge stable main" > /etc/apt/sources.list.d/microsoft-edge-dev.list' \
+    && rm microsoft.gpg \
+    && apt-get update \
+    && apt-get install -y microsoft-edge-stable \
     && rm -rf /var/lib/apt/lists/*
 
 # Variables de entorno para Selenium
 ENV CHROME_BIN=/usr/bin/chromium \
-    CHROMEDRIVER=/usr/bin/chromedriver
+    CHROMEDRIVER=/usr/bin/chromedriver \
+    EDGE_BIN=/usr/bin/microsoft-edge
 
 # Copiar todo el código del proyecto
 COPY . .

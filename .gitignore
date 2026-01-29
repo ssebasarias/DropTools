@@ -1,10 +1,10 @@
-# ============================================================================
-# .gitignore - DAHELL INTELLIGENCE
-# ============================================================================
+# =============================================================================
+# .gitignore - Dahell Intelligence
+# =============================================================================
 
 # --- Python ---
 __pycache__/
-# *.py[cod]
+*.py[cod]
 *$py.class
 *.so
 .Python
@@ -25,7 +25,7 @@ wheels/
 *.egg
 MANIFEST
 
-# --- Entorno Virtual ---
+# --- Entorno virtual ---
 venv/
 ENV/
 env/
@@ -36,86 +36,24 @@ env/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
-# Media content (user uploads)
 media/
-# Static collection
 staticfiles/
 
-# --- Datos Crudos y Procesados ---
-# Evitar subir datasets grandes o scraping temporal
-raw_data/*.jsonl
-raw_data/*.json
-raw_data/processed/
-raw_data/failed/
-raw_data_old/
-!raw_data/.gitkeep
-!raw_data/processed/.gitkeep
-!raw_data/failed/.gitkeep
+# --- Environment (sensibles; no subir) ---
+.env
+.env.local
+.env.docker
+.env.*
+!.env.example
 
-# --- Backups de Base de Datos ---
-backups/*.sql
-!backups/.gitkeep
-*.dump
-
-# --- Logs ---
-logs/*.log
-logs/*.png
-logs/*.jpg
-logs/*.jsonl
-!logs/.gitkeep
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-# --- Debug y Test Files ---
-*debug*.py
-*debug*.txt
-*test_*.py
-*test_*.txt
-*audit*.py
-*audit*.txt
-*check*.py
-*cleanup*.py
-*recover*.py
-*fix_*.py
-crash_*.log
-run_*.log
-loader_logs*.txt
-loader_status*.txt
-candidates*.log
-products_table_details.txt
-
-# Excepción: Permitir tests oficiales de Django
-!backend/core/tests/test_*.py
-!backend/*/tests/test_*.py
-
-# --- Screenshots y Capturas ---
-screenshots_docker/
-*.png
-*.jpg
-*.jpeg
-!docs/**/*.png
-!docs/**/*.jpg
-!frontend/public/**/*.png
-!frontend/public/**/*.jpg
-
-# --- Caché de Modelos IA ---
-cache_huggingface/
-.cache/
-*.pt
-*.pth
-*.ckpt
-*.onnx
-
-# --- IDEs y Editores ---
+# --- IDE / Editor / Agent ---
 .vscode/
 !.vscode/extensions.json
 .idea/
+.cursor/
+.agent/
 *.swp
 *.swo
-*.sw?
 *~
 .DS_Store
 *.suo
@@ -131,20 +69,98 @@ frontend/build/
 dist/
 dist-ssr/
 
-# --- Archivos Temporales ---
+# --- Logs y dumps (local) ---
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+celery_logs*.txt
+celery_*_logs*.txt
+*_celery_*.txt
+worker_logs.txt
+combined_logs.txt
+full_celery_log.txt
+logs_failure_edge.txt
+backend/celery_log_dump.txt
+backend/worker_logs.txt
+backend/*_logs.txt
+celery_log_snapshot.txt
+backend/test_*.py
+
+# --- Backups y SQL (local) ---
+backups/*.sql
+!backups/.gitkeep
+*.dump
+bd_dahell.sql
+
+# --- Datos crudos y procesados ---
+raw_data/*.jsonl
+raw_data/*.json
+raw_data/processed/
+raw_data/failed/
+raw_data_old/
+!raw_data/.gitkeep
+!raw_data/processed/.gitkeep
+!raw_data/failed/.gitkeep
+backend/raw_data/
+!backend/raw_data/.gitkeep
+*.jsonl
+*.csv
+
+# --- Caché y modelos IA ---
+cache_huggingface/
+.cache/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# --- Debug / Test / Scripts temporales ---
+*debug*.py
+*debug*.txt
+*test_*.txt
+*audit*.txt
+*check*.py
+*cleanup*.py
+*recover*.py
+*fix_*.py
+crash_*.log
+run_*.log
+loader_logs*.txt
+loader_status*.txt
+candidates*.log
+products_table_details.txt
+!backend/core/tests/test_*.py
+!backend/*/tests/test_*.py
+
+# --- Screenshots / imágenes (excepto docs y public) ---
+screenshots_docker/
+*.png
+*.jpg
+*.jpeg
+!docs/**/*.png
+!docs/**/*.jpg
+!frontend/public/**/*.png
+!frontend/public/**/*.jpg
+!frontend/public/**/*.svg
+
+# --- Archivos temporales ---
 *.tmp
 *.temp
 *.bak
 *.old
 
-# --- Archivos de Sistema ---
+# --- Sistema ---
 Thumbs.db
 desktop.ini
 
-# --- Jupyter Notebooks ---
+# --- Jupyter ---
 .ipynb_checkpoints/
 
-# --- Coverage y Tests ---
+# --- Coverage / Tests ---
 htmlcov/
 .tox/
 .coverage
@@ -152,25 +168,5 @@ htmlcov/
 nosetests.xml
 coverage.xml
 
-# --- Project-specific large artifacts ---
-# Screenshots, raw backend data and model caches
-screenshots_docker/
-backend/raw_data/
-!backend/raw_data/.gitkeep
-cache_huggingface/**
-raw_data/processed/
-raw_data/processed/**
-
-# Additional explicit ignores to ensure large artifacts are not tracked
-# Logs and large JSONL datasets
-*.log
-*.jsonl
-logs/
-backend/raw_data/*.jsonl
-*.csv
-
-# Environment files (sensitive)
-.env
-.env.local
-.env.*
-
+# --- Resultados Celery (si se escriben en disco) ---
+results/

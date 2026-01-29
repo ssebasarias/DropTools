@@ -2,8 +2,9 @@
 
 **Sistema de Análisis de Saturación de Mercado para Dropshipping con IA**
 
-[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
-[![Django](https://img.shields.io/badge/Django-6.0-green.svg)](https://www.djangoproject.com/)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
+[![Django](https://img.shields.io/badge/Django-5.x-green.svg)](https://www.djangoproject.com/)
+[![React](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-blue.svg)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-Enabled-blue.svg)](https://www.docker.com/)
 
@@ -23,36 +24,149 @@ Sistema de inteligencia artificial que detecta la saturación de mercado en prod
 
 ---
 
-## ⚡ INICIO RÁPIDO (5 minutos)
+## 📦 Clonar e instalar en otro equipo
 
-### 1. Prerequisitos
+Sigue estos pasos para replicar el proyecto tal cual en otra máquina (Windows, Linux o Mac).
 
-- Python 3.12+
-- Docker y Docker Compose
-- Git
+### Prerrequisitos
 
-### 2. Instalación
+- **Git**
+- **Python 3.11+** (para desarrollo local del backend)
+- **Node.js 18+** y npm (para el frontend React)
+- **Docker y Docker Compose** (para base de datos, Redis, backend y frontend en contenedores)
+
+### 1. Clonar el repositorio
 
 ```bash
-# Clonar repositorio
-git clone [url_del_repositorio]
+git clone https://github.com/TU_USUARIO/Dahell.git
 cd Dahell
+```
 
+(Sustituye `TU_USUARIO/Dahell` por la URL real de tu repositorio.)
+
+### 2. Variables de entorno
+
+Crea los archivos de entorno a partir del ejemplo (nunca subas `.env` ni `.env.docker` a Git):
+
+```bash
+# Copiar plantilla
+cp .env.example .env
+
+# Para Docker (base de datos, backend, Celery, etc.)
+cp .env.example .env.docker
+```
+
+Edita `.env` y `.env.docker` con tus valores:
+
+- **POSTGRES_PASSWORD** y **SECRET_KEY**: cambia por valores seguros.
+- **DROPI_EMAIL** y **DROPI_PASSWORD**: credenciales de Dropi para el reporter.
+- En `.env.docker`, **POSTGRES_HOST=db** y **CELERY_BROKER_URL=redis://redis:6379/0** (nombres de servicio Docker).
+
+### 3. Backend (Python)
+
+```bash
 # Crear y activar entorno virtual
+
+# Windows (PowerShell o CMD)
 python -m venv venv
-.\activate_env.bat
+.\venv\Scripts\activate
+# o usar:  .\scripts\activate_env.bat
+
+# Linux / Mac
+python3 -m venv venv
+source venv/bin/activate
 
 # Instalar dependencias
 pip install -r requirements.txt
-
-# Configurar variables de entorno
-# Editar .env con tus credenciales de Dropi
-
-# Iniciar servicios Docker
-docker-compose up -d
 ```
 
-### 3. Ejecutar Pipeline ETL (4 Terminales)
+### 4. Frontend (React + Vite)
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+### 5. Levantar servicios con Docker
+
+Asegúrate de tener `.env.docker` configurado (o que Docker use las variables necesarias). Luego:
+
+```bash
+docker compose up -d
+```
+
+Esto levanta: PostgreSQL, Redis, backend Django, Celery worker, Flower y frontend. La base de datos se inicializa con `docs/dahell_db.sql` si existe en el primer arranque.
+
+### 6. Migraciones (si corres backend fuera de Docker)
+
+Si en algún momento ejecutas Django en local (no en contenedor), aplica migraciones:
+
+```bash
+# Con venv activado, desde la raíz del proyecto
+cd backend
+python manage.py migrate
+cd ..
+```
+
+Si todo corre en Docker, el backend en el contenedor puede ejecutar migraciones al iniciar (o hazlo una vez con `docker compose exec backend python manage.py migrate`).
+
+### 7. Crear superusuario (opcional)
+
+Para acceder al admin de Django:
+
+```bash
+# Con Docker
+docker compose exec backend python manage.py createsuperuser
+
+# O en local (venv activado)
+cd backend && python manage.py createsuperuser && cd ..
+```
+
+### 8. URLs de los servicios
+
+| Servicio    | URL                    |
+|------------|-------------------------|
+| Frontend   | http://localhost:5173   |
+| Backend API| http://localhost:8000   |
+| Django Admin | http://localhost:8000/admin |
+| Flower (Celery) | http://localhost:5555 |
+| pgAdmin   | http://localhost:5050   |
+
+### 9. Desarrollo local sin Docker (opcional)
+
+- **Base de datos:** necesitas PostgreSQL y Redis en local (o solo levantar `db` y `redis` con Docker).
+- **Backend:** con venv activado: `cd backend && python manage.py runserver`.
+- **Frontend:** `cd frontend && npm run dev`.
+- Ajusta en `.env`: `POSTGRES_HOST=localhost`, `CELERY_BROKER_URL=redis://localhost:6379/0`.
+
+---
+
+## ⚡ INICIO RÁPIDO (resumen)
+
+### Prerequisitos
+
+- Python 3.11+, Node.js 18+, Docker y Docker Compose, Git
+
+### Instalación mínima
+
+```bash
+git clone https://github.com/TU_USUARIO/Dahell.git
+cd Dahell
+cp .env.example .env
+cp .env.example .env.docker
+# Editar .env y .env.docker con tus valores
+
+python -m venv venv
+.\venv\Scripts\activate   # Windows
+# source venv/bin/activate  # Linux/Mac
+pip install -r requirements.txt
+
+cd frontend && npm install && cd ..
+docker compose up -d
+```
+
+### Ejecutar Pipeline ETL (4 Terminales)
 
 ```bash
 # Terminal 1: Scraper (Extracción)
@@ -72,11 +186,13 @@ python backend/manage.py vectorizer
 python backend/manage.py clusterizer
 ```
 
-### 4. Acceder a Servicios
+### Acceder a Servicios
 
-- **pgAdmin:** http://localhost:5050
-- **Dashboard:** http://localhost:8501 (próximamente)
+- **Frontend (React):** http://localhost:5173
+- **Backend API:** http://localhost:8000
 - **Django Admin:** http://localhost:8000/admin
+- **Flower (Celery):** http://localhost:5555
+- **pgAdmin:** http://localhost:5050
 
 ---
 
@@ -182,7 +298,7 @@ python manage.py workflow_orchestrator --user-email "cliente@ejemplo.com" --head
 
 | Quiero... | Leer... | Tiempo |
 |-----------|---------|--------|
-| **Empezar rápido** | [INICIO_RAPIDO.md](INICIO_RAPIDO.md) | 10 min |
+| **Empezar rápido** | [docs/INICIO_RAPIDO.md](docs/INICIO_RAPIDO.md) | 10 min |
 | **Ver comandos** | [docs/GUIA_COMANDOS.md](docs/GUIA_COMANDOS.md) | Referencia |
 | **Solucionar problemas** | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Referencia |
 | **Configurar desarrollo** | [docs/GUIA_DESARROLLO.md](docs/GUIA_DESARROLLO.md) | 20 min |
@@ -229,9 +345,11 @@ Ver **[docs/README.md](docs/README.md)** para el índice completo de documentaci
 ## 🛠️ TECNOLOGÍAS
 
 ### Backend
-- **Django 6.0** - Framework web
+- **Django 5.x** - Framework web
+- **Django REST Framework** - API
 - **PostgreSQL 17** - Base de datos relacional
 - **pgvector** - Extensión para búsqueda vectorial
+- **Celery + Redis** - Cola de tareas (reportes)
 
 ### IA / Machine Learning
 - **PyTorch** - Framework de deep learning
@@ -242,6 +360,12 @@ Ver **[docs/README.md](docs/README.md)** para el índice completo de documentaci
 ### Web Scraping
 - **Selenium** - Automatización de navegador
 - **WebDriver Manager** - Gestión de drivers
+
+### Frontend
+- **React 19** - UI
+- **Vite** - Build y dev server
+- **React Router** - Navegación
+- **Leaflet / react-leaflet** - Mapa Colombia (dashboard cliente)
 
 ### DevOps
 - **Docker** - Contenedores
@@ -255,39 +379,39 @@ Ver **[docs/README.md](docs/README.md)** para el índice completo de documentaci
 ```
 Dahell/
 ├── 📄 README.md                    ← EMPEZAR AQUÍ
-├── 📄 INICIO_RAPIDO.md             ← Guía visual rápida
-├── 📄 requirements.txt             ← Dependencias
-├── 📄 activate_env.bat             ← Activar venv (USAR SIEMPRE)
-├── 📄 config_encoding.py           ← Configuración UTF-8
-├── 📄 docker-compose.yml           ← Orquestación Docker
+├── 📄 requirements.txt             ← Dependencias Python
+├── 📄 .env.example                 ← Plantilla de variables (copiar a .env)
+├── 📄 docker-compose.yml            ← Orquestación Docker
 ├── 📄 Dockerfile                   ← Imagen Docker
-├── 📄 .env                         ← Config local (NO SUBIR A GIT)
-├── 📄 .gitignore                   ← Git ignore
+├── 📄 .gitignore                   ← Archivos ignorados por Git
 │
-├── 📂 backend/                     ← DJANGO BACKEND
-│   ├── manage.py                   ← CLI de Django
-│   ├── dahell_db.sql               ← Esquema de DB
-│   ├── dahell_backend/             ← Configuración Django
-│   └── core/                       ← App principal
-│       └── management/commands/    ← COMANDOS ETL ⭐
-│           ├── scraper.py          ← Extracción de Dropi
-│           ├── loader.py           ← Carga a PostgreSQL
-│           ├── vectorizer.py       ← Generación de embeddings
-│           ├── clusterizer.py      ← Agrupación de productos
-│           └── diagnose_stats.py   ← Diagnóstico del sistema
+├── 📂 backend/                      ← DJANGO BACKEND
+│   ├── manage.py                    ← CLI de Django
+│   ├── dahell_backend/              ← Configuración Django (settings, urls, celery)
+│   └── core/                        ← App principal
+│       ├── management/commands/    ← COMANDOS ETL y Reporter ⭐
+│       │   ├── scraper.py           ← Extracción de Dropi
+│       │   ├── loader.py            ← Carga a PostgreSQL
+│       │   ├── vectorizer.py        ← Embeddings
+│       │   ├── clusterizer.py      ← Agrupación
+│       │   └── unified_reporter.py ← Reporter unificado
+│       └── reporter_bot/            ← Lógica del reporter (Dropi)
 │
-├── 📂 docs/                        ← DOCUMENTACIÓN
-│   ├── GUIA_COMANDOS.md            ← Guía principal ⭐
-│   ├── ARQUITECTURA.md             ← Arquitectura técnica
-│   ├── GUIA_VENV.md                ← Entorno virtual
-│   ├── PROYECTO.md                 ← Descripción del proyecto
+├── 📂 frontend/                     ← REACT + VITE
+│   ├── package.json                 ← Dependencias Node
+│   ├── public/                      ← Assets estáticos (incl. colombia-deptos.geojson)
+│   └── src/                         ← Componentes, páginas, servicios
+│
+├── 📂 docs/                         ← DOCUMENTACIÓN
+│   ├── dahell_db.sql                ← Script init DB (Docker)
+│   ├── GUIA_COMANDOS.md             ← Guía de comandos
+│   ├── ARQUITECTURA.md              ← Arquitectura
 │   └── examples/                   ← Archivos de ejemplo
 │
-├── 📂 logs/                        ← Logs de producción
-├── 📂 backups/                     ← Backups de DB
-├── 📂 raw_data/                    ← Datos crudos (JSONL)
-├── 📂 cache_huggingface/           ← Caché de modelos IA
-└── 📂 venv/                        ← Entorno virtual (NO SUBIR)
+├── 📂 scripts/                      ← Scripts de ayuda (activate_env.bat, run_unified_reporter_local.*)
+├── 📂 backups/                      ← Backups de DB (no subir *.sql)
+├── 📂 raw_data/                     ← Datos crudos (no subir)
+└── 📂 venv/                         ← Entorno virtual (no subir)
 ```
 
 ---
@@ -374,16 +498,13 @@ docker-compose down
 - [x] Vectorización con CLIP
 - [x] Clustering multi-criterio
 - [x] Dockerización completa
-- [x] Normalización UTF-8
-- [x] Documentación completa
-
-### 🚧 En Desarrollo
-- [ ] Dashboard con Streamlit
-- [ ] API REST con Django REST Framework
-- [ ] Sistema de alertas
+- [x] API REST con Django REST Framework
+- [x] Frontend con React + Vite
+- [x] Reporter unificado (Dropi) y Celery
+- [x] Dashboard cliente con KPIs y mapa Colombia
+- [x] Documentación y .env.example
 
 ### 🔮 Futuro
-- [ ] Frontend con React
 - [ ] Análisis de tendencias temporales
 - [ ] Predicción de demanda con ML
 - [ ] App móvil
@@ -470,6 +591,6 @@ Abre un issue con:
 
 ---
 
-**Última actualización:** 2025-12-15  
-**Versión:** 2.1 (Optimizado y Correcciones Docker)  
-**Estado:** ✅ EN EJECUCIÓN
+**Última actualización:** 2026-01  
+**Versión:** 2.2  
+**Estado:** ✅ En ejecución

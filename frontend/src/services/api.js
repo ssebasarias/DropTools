@@ -212,6 +212,18 @@ export const fetchReporterList = async (page = 1, pageSize = 50, statusFilter = 
     return data;
 };
 
+export const fetchClientDashboardAnalytics = async (period = 'week') => {
+    try {
+        const params = new URLSearchParams({ period });
+        const response = await authFetch(`${API_URL}/user/dashboard/analytics/?${params.toString()}`);
+        if (!response.ok) throw new Error('Error al cargar analytics');
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching client dashboard analytics:', error);
+        throw error;
+    }
+};
+
 // Legacy function (keeping for compatibility)
 export const updateReporterConfigLegacy = async ({ executionTime }) => {
     const response = await authFetch(`${API_URL}/reporter/config/`, {

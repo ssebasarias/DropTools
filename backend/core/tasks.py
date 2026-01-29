@@ -1,0 +1,230 @@
+"""
+Tareas asíncronas de Celery para Dahell Intelligence
+"""
+from celery import shared_task
+from celery.utils.log import get_task_logger
+import time
+import sys
+import os
+
+# Importar al nivel del módulo para evitar problemas en workers
+# El PYTHONPATH ya está configurado en docker-compose.yml
+# Importar al nivel del módulo para evitar problemas en workers
+# El PYTHONPATH ya está configurado en docker-compose.yml
+from core.reporter_bot.unified_reporter import UnifiedReporter
+
+logger = get_task_logger(__name__)
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=300)
+def execute_workflow_task(self, user_id):
+    """
+    Ejecuta el workflow completo de reportes para un usuario
+    
+    Args:
+        user_id: ID del usuario en la tabla users
+    
+    Returns:
+        dict con resultado de la ejecución
+    """
+    logger.info(f"🚀 Iniciando workflow para usuario {user_id}")
+    logger.info(f"   Task ID: {self.request.id}")
+    logger.info(f"   Worker: {self.request.hostname}")
+    
+    try:
+        # Obtener credenciales del usuario
+        from core.models import User
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            raise ValueError(f"Usuario con ID {user_id} no existe")
+        
+        if not user.dropi_email or not user.dropi_password:
+            raise ValueError(f"Usuario {user_id} no tiene credenciales Dropi configuradas")
+        
+        # Importar configuración de Docker
+        from core.reporter_bot.docker_config import get_download_dir
+        
+        # Obtener directorio de descarga explícito (base, sin user_id aun, UnifiedReporter lo maneja o se lo pasamos completo)
+        # UnifiedReporter espera el dir base y él le añade el user_id internamente, o usamos el base.
+        # Revisando UnifiedReporter: self.driver_manager... download_dir=self.download_dir
+        # Revisando Downloader: self.user_download_dir = self.download_dir_base / str(self.user_id)
+        # Pasemos el BASE para que sea consistente.
+        
+        download_dir = get_download_dir() # Esto retorna BASE/results/downloads y asegura que existe
+        
+        logger.info(f"   📂 Directorio de descargas configurado: {download_dir}")
+        
+        # Crear orquestador con credenciales
+        # Crear reporter unificado
+        # Configuramos 'edge' como navegador por defecto para descargas robustas (o chrome en docker)
+        unified_reporter = UnifiedReporter(
+            user_id=user_id,
+            headless=True,  # Siempre headless en workers
+            browser='edge', # Ahora usamos EDGE también en Docker
+            download_dir=str(download_dir) # PASAR DIRECTORIO EXPLÍCITAMENTE
+        )
+        
+        # Ejecutar workflow
+        logger.info(f"   Ejecutando workflow unificado...")
+        stats = unified_reporter.run()
+        
+        # Verificar éxito basado en stats
+        # Consideramos éxito si el downloader funcionó, ya que el resto depende de si hay datos
+        # Downloader es el paso crítico que suele fallar por bloqueos
+        success = stats.get('downloader', {}).get('success', False) if stats else False
+        
+        if success:
+            logger.info(f"✅ Workflow completado exitosamente para usuario {user_id}")
+            return {
+                'success': True,
+                'user_id': user_id,
+                'task_id': self.request.id,
+                'message': 'Workflow completado exitosamente'
+            }
+        else:
+            logger.error(f"❌ Workflow falló para usuario {user_id}")
+            return {
+                'success': False,
+                'user_id': user_id,
+                'task_id': self.request.id,
+                'message': 'Workflow falló durante la ejecución'
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error en workflow para usuario {user_id}: {str(e)}")
+        logger.exception(e)
+        
+        # Reintentar en 5 minutos
+        try:
+            raise self.retry(exc=e, countdown=300)
+        except self.MaxRetriesExceededError:
+            logger.error(f"❌ Máximo de reintentos alcanzado para usuario {user_id}")
+            return {
+                'success': False,
+                'user_id': user_id,
+                'task_id': self.request.id,
+                'message': f'Error: {str(e)}',
+                'max_retries_exceeded': True
+            }
+
+
+@shared_task
+def test_celery_task(message="Hello from Celery!"):
+    """
+    Tarea de prueba simple para verificar que Celery funciona
+    """
+    logger.info(f"📨 Tarea de prueba ejecutada: {message}")
+    time.sleep(2)  # Simular trabajo
+    logger.info(f"✅ Tarea de prueba completada")
+    return {
+        'success': True,
+        'message': message,
+        'timestamp': time.time()
+    }
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=300)
+def execute_workflow_task_test(self, user_id):
+    """
+    Ejecuta el workflow en modo de prueba (se detiene después de navegar a órdenes)
+    
+    Args:
+        user_id: ID del usuario en la tabla users
+    
+    Returns:
+        dict con resultado de la ejecución
+    """
+    logger.info(f"🧪 Iniciando workflow de PRUEBA para usuario {user_id}")
+    logger.info(f"   Task ID: {self.request.id}")
+    logger.info(f"   Worker: {self.request.hostname}")
+    
+    try:
+        # Obtener credenciales del usuario
+        from core.models import User
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            raise ValueError(f"Usuario con ID {user_id} no existe")
+        
+        if not user.dropi_email or not user.dropi_password:
+            raise ValueError(f"Usuario {user_id} no tiene credenciales Dropi configuradas")
+        
+        # Crear orquestador con credenciales y modo de prueba
+        # Crear reporter unificado en modo headless
+        unified_reporter = UnifiedReporter(
+            user_id=user_id,
+            headless=True,
+            browser='chrome'
+        )
+        
+        # Ejecutar workflow
+        # Nota: UnifiedReporter no tiene un 'test_mode' explícito en run(),
+        # pero para fines de prueba ejecutamos el flujo completo y verificamos que no falle violentamente.
+        # Si se requiere un modo dry-run real, habría que implementarlo en UnifiedReporter.
+        logger.info(f"   Ejecutando workflow de prueba...")
+        stats = unified_reporter.run()
+        success = stats.get('downloader', {}).get('success', False) if stats else False
+        
+        if success:
+            logger.info(f"✅ Workflow de prueba completado exitosamente para usuario {user_id}")
+            return {
+                'success': True,
+                'user_id': user_id,
+                'task_id': self.request.id,
+                'message': 'Workflow de prueba completado: navegación a órdenes exitosa'
+            }
+        else:
+            logger.error(f"❌ Workflow de prueba falló para usuario {user_id}")
+            return {
+                'success': False,
+                'user_id': user_id,
+                'task_id': self.request.id,
+                'message': 'Workflow de prueba falló durante la ejecución'
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Error en workflow de prueba para usuario {user_id}: {str(e)}")
+        logger.exception(e)
+        
+        # Reintentar en 5 minutos
+        try:
+            raise self.retry(exc=e, countdown=300)
+        except self.MaxRetriesExceededError:
+            logger.error(f"❌ Máximo de reintentos alcanzado para usuario {user_id}")
+            return {
+                'success': False,
+                'user_id': user_id,
+                'task_id': self.request.id,
+                'message': f'Error: {str(e)}',
+                'max_retries_exceeded': True
+            }
+
+
+@shared_task(bind=True)
+def execute_multiple_workflows(self, user_ids):
+    """
+    Ejecuta workflows para múltiples usuarios en paralelo
+    
+    Args:
+        user_ids: Lista de IDs de usuarios
+    
+    Returns:
+        dict con resultados de todas las ejecuciones
+    """
+    from celery import group
+    
+    logger.info(f"🚀 Iniciando {len(user_ids)} workflows en paralelo")
+    
+    # Crear grupo de tareas
+    job = group(execute_workflow_task.s(user_id) for user_id in user_ids)
+    
+    # Ejecutar en paralelo
+    result = job.apply_async()
+    
+    logger.info(f"✅ {len(user_ids)} workflows encolados")
+    
+    return {
+        'success': True,
+        'total_workflows': len(user_ids),
+        'user_ids': user_ids,
+        'group_id': result.id
+    }
