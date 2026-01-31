@@ -234,3 +234,239 @@ def execute_multiple_workflows(self, user_ids):
         'user_ids': user_ids,
         'group_id': result.id
     }
+
+
+# -----------------------------------------------------------------------------
+# Reporter slot system: process_slot_task, download_compare_task, report_range_task
+# -----------------------------------------------------------------------------
+
+@shared_task(bind=True)
+def process_slot_task(self, slot_time_iso=None):
+    """
+    Disparado por Celery Beat cada hora. Crea ReporterRun para ese slot,
+    lista usuarios con reserva en esa hora y encola download_compare_task por cada uno.
+    slot_time_iso: datetime en ISO (ej. "2025-01-31T10:00:00"). Si None, usa hora actual redondeada a la hora.
+    """
+    from django.utils import timezone as tz
+    from datetime import datetime
+    from core.models import ReporterHourSlot, ReporterReservation, ReporterRun, ReporterRunUser
+
+    if slot_time_iso is None:
+        now = tz.now()
+        slot_dt = now.replace(minute=0, second=0, microsecond=0)
+        slot_time_iso = slot_dt.isoformat()
+    else:
+        try:
+            if isinstance(slot_time_iso, str):
+                slot_dt = datetime.fromisoformat(slot_time_iso.replace('Z', '+00:00'))
+                if slot_dt.tzinfo is None:
+                    slot_dt = tz.make_aware(slot_dt, tz.get_current_timezone())
+            else:
+                slot_dt = slot_time_iso
+        except Exception as e:
+            logger.error(f"Invalid slot_time_iso: {slot_time_iso}: {e}")
+            return {'success': False, 'error': str(e)}
+    hour = slot_dt.hour
+    logger.info(f"⏰ process_slot_task: slot_time={slot_time_iso} hour={hour}")
+
+    slot = ReporterHourSlot.objects.filter(hour=hour).first()
+    if not slot:
+        logger.warning(f"No ReporterHourSlot for hour={hour}")
+        return {'success': False, 'error': f'No slot for hour {hour}'}
+
+    run = ReporterRun.objects.create(
+        slot=slot,
+        scheduled_at=slot_dt,
+        status=ReporterRun.STATUS_RUNNING,
+        started_at=tz.now()
+    )
+    users = ReporterReservation.objects.filter(slot=slot).values_list('user_id', flat=True)
+    user_ids = list(users)
+    if not user_ids:
+        logger.info(f"   No users reserved for slot {hour:02d}:00")
+        run.status = ReporterRun.STATUS_COMPLETED
+        run.finished_at = tz.now()
+        run.save()
+        return {'success': True, 'run_id': run.id, 'user_count': 0}
+
+    for uid in user_ids:
+        ReporterRunUser.objects.create(
+            run=run,
+            user_id=uid,
+            download_compare_status=ReporterRunUser.DC_PENDING
+        )
+        download_compare_task.delay(uid, run.id)
+
+    logger.info(f"   Enqueued {len(user_ids)} download_compare_task for run_id={run.id}")
+    return {'success': True, 'run_id': run.id, 'user_count': len(user_ids)}
+
+
+@shared_task(bind=True, max_retries=5, default_retry_delay=120)
+def download_compare_task(self, user_id, run_id):
+    """
+    Adquiere slot Selenium, ejecuta Download+Compare para el usuario,
+    libera slot, crea rangos en BD y encola report_range_task por cada rango.
+    """
+    from django.utils import timezone as tz
+    from core.models import User, ReporterRun, ReporterRunUser, OrderMovementReport, ReportBatch
+    from core.reporter_bot.unified_reporter import UnifiedReporter
+    from core.reporter_bot.resource_logger import ResourceLogger
+    from core.reporter_bot.docker_config import get_download_dir
+    from core.reporter_bot.selenium_semaphore import acquire, release
+    from core.reporter_range_service import create_ranges_for_user
+
+    logger.info(f"📥 download_compare_task: user_id={user_id} run_id={run_id}")
+    run_user = ReporterRunUser.objects.filter(run_id=run_id, user_id=user_id).first()
+    if not run_user:
+        logger.error(f"ReporterRunUser not found for run={run_id} user={user_id}")
+        return {'success': False, 'error': 'RunUser not found'}
+
+    if not acquire(timeout_seconds=3300):
+        logger.warning("Selenium semaphore acquire timeout, retrying...")
+        raise self.retry(countdown=120)
+
+    try:
+        run_user.download_compare_status = ReporterRunUser.DC_RUNNING
+        run_user.save(update_fields=['download_compare_status', 'updated_at'])
+
+        user = User.objects.filter(id=user_id).first()
+        if not user or not user.dropi_email or not user.dropi_password:
+            run_user.download_compare_status = ReporterRunUser.DC_FAILED
+            run_user.save(update_fields=['download_compare_status', 'updated_at'])
+            return {'success': False, 'error': 'User or credentials missing'}
+
+        download_dir = get_download_dir()
+        reporter_logger = ResourceLogger(logger)
+        unified = UnifiedReporter(
+            user_id=user_id,
+            headless=True,
+            download_dir=str(download_dir),
+            browser='edge',
+            browser_priority=None,
+            logger=reporter_logger,
+        )
+        stats = unified.run_download_compare_only()
+        release()
+
+        total_detected = (stats.get('comparer') or {}).get('total_detected', 0)
+        run_user.download_compare_status = ReporterRunUser.DC_COMPLETED
+        run_user.download_compare_completed_at = tz.now()
+        run_user.total_pending_orders = total_detected
+        run_user.save(update_fields=[
+            'download_compare_status', 'download_compare_completed_at',
+            'total_pending_orders', 'updated_at'
+        ])
+
+        if total_detected <= 0:
+            run_user.total_ranges = 0
+            run_user.save(update_fields=['total_ranges', 'updated_at'])
+            return {'success': True, 'run_id': run_id, 'user_id': user_id, 'total_detected': 0}
+
+        ranges_created = create_ranges_for_user(run_id, user_id, total_detected)
+        run_user.total_ranges = len(ranges_created)
+        run_user.save(update_fields=['total_ranges', 'updated_at'])
+
+        for (rs, re) in ranges_created:
+            report_range_task.delay(run_id, user_id, rs, re)
+
+        logger.info(f"   Enqueued {len(ranges_created)} report_range_task for user_id={user_id}")
+        return {'success': True, 'run_id': run_id, 'user_id': user_id, 'total_detected': total_detected, 'ranges': len(ranges_created)}
+    except Exception as e:
+        release()
+        run_user.download_compare_status = ReporterRunUser.DC_FAILED
+        run_user.save(update_fields=['download_compare_status', 'updated_at'])
+        logger.exception(f"download_compare_task failed: {e}")
+        raise self.retry(exc=e, countdown=120)
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=60)
+def report_range_task(self, run_id, user_id, range_start, range_end):
+    """
+    Adquiere slot Selenium y lock por rango, ejecuta Reporter solo para [range_start, range_end],
+    actualiza ReporterRange y ReporterRunUser.ranges_completed, libera lock y slot.
+    """
+    from django.utils import timezone as tz
+    from django.db import transaction
+    from django.db.models import F
+    from core.models import ReporterRun, ReporterRange, ReporterRunUser, User
+    from core.reporter_bot.unified_reporter import UnifiedReporter
+    from core.reporter_bot.resource_logger import ResourceLogger
+    from core.reporter_bot.docker_config import get_download_dir
+    from core.reporter_bot.selenium_semaphore import (
+        acquire,
+        release,
+        acquire_range_lock,
+        release_range_lock,
+    )
+
+    task_id = self.request.id
+    logger.info(f"📋 report_range_task: run_id={run_id} user_id={user_id} range=[{range_start},{range_end}]")
+
+    if not acquire(timeout_seconds=3300):
+        raise self.retry(countdown=60)
+
+    if not acquire_range_lock(run_id, user_id, range_start, task_id):
+        release()
+        logger.warning(f"Range lock not acquired for run={run_id} user={user_id} range_start={range_start}, skipping")
+        return {'success': False, 'skipped': True, 'reason': 'lock_not_acquired'}
+
+    range_obj = ReporterRange.objects.filter(
+        run_id=run_id, user_id=user_id, range_start=range_start
+    ).first()
+    if not range_obj:
+        release_range_lock(run_id, user_id, range_start)
+        release()
+        return {'success': False, 'error': 'Range not found'}
+
+    try:
+        with transaction.atomic():
+            range_obj.status = ReporterRange.STATUS_LOCKED
+            range_obj.locked_at = tz.now()
+            range_obj.locked_by = task_id
+            range_obj.save(update_fields=['status', 'locked_at', 'locked_by'])
+        range_obj.status = ReporterRange.STATUS_PROCESSING
+        range_obj.save(update_fields=['status'])
+
+        user = User.objects.filter(id=user_id).first()
+        if not user or not user.dropi_email or not user.dropi_password:
+            range_obj.status = ReporterRange.STATUS_FAILED
+            range_obj.save(update_fields=['status'])
+            release_range_lock(run_id, user_id, range_start)
+            release()
+            return {'success': False, 'error': 'User or credentials missing'}
+
+        download_dir = get_download_dir()
+        reporter_logger = ResourceLogger(logger)
+        unified = UnifiedReporter(
+            user_id=user_id,
+            headless=True,
+            download_dir=str(download_dir),
+            browser='edge',
+            browser_priority=None,
+            logger=reporter_logger,
+        )
+        stats = unified.run_report_orders_only(range_start, range_end)
+        release()
+
+        with transaction.atomic():
+            range_obj.status = ReporterRange.STATUS_COMPLETED
+            range_obj.completed_at = tz.now()
+            range_obj.save(update_fields=['status', 'completed_at'])
+            ReporterRunUser.objects.filter(
+                run_id=run_id, user_id=user_id
+            ).update(
+                ranges_completed=F('ranges_completed') + 1,
+                updated_at=tz.now()
+            )
+
+        release_range_lock(run_id, user_id, range_start)
+        procesados = (stats.get('reporter') or {}).get('procesados', 0)
+        logger.info(f"   Range [{range_start},{range_end}] completed: {procesados} reportados")
+        return {'success': True, 'run_id': run_id, 'user_id': user_id, 'range_start': range_start, 'procesados': procesados}
+    except Exception as e:
+        release()
+        release_range_lock(run_id, user_id, range_start)
+        range_obj.status = ReporterRange.STATUS_FAILED
+        range_obj.save(update_fields=['status'])
+        logger.exception(f"report_range_task failed: {e}")
+        raise self.retry(exc=e, countdown=60)

@@ -21,6 +21,10 @@ from .models import (
     WorkflowProgress,
     ReportBatch,
     RawOrderSnapshot,
+    ReporterHourSlot,
+    ReporterReservation,
+    ReporterRun,
+    ReporterRunUser,
 )
 from .permissions import IsAdminRole, MinSubscriptionTier
 from datetime import datetime, timedelta, time as dt_time
@@ -1160,6 +1164,134 @@ class ReporterListView(APIView):
                 {"error": f"Error al obtener lista: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+# -----------------------------------------------------------------------------
+# Reporter slot system: slots, reservations, runs, progress
+# -----------------------------------------------------------------------------
+
+class ReporterSlotsView(APIView):
+    """
+    GET /api/reporter/slots/ — Lista horas con capacidad (max_users, usuarios_actuales, disponible).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        slots = ReporterHourSlot.objects.all().order_by('hour')
+        from .serializers import ReporterSlotSerializer
+        serializer = ReporterSlotSerializer(slots, many=True)
+        return Response(serializer.data)
+
+
+class ReporterReservationsView(APIView):
+    """
+    POST /api/reporter/reservations/ — Crear reserva (slot_id, monthly_orders_estimate).
+    GET /api/reporter/reservations/me — Reserva del usuario actual.
+    DELETE /api/reporter/reservations/me — Cancelar reserva.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+        reservation = ReporterReservation.objects.filter(user=user).select_related('slot').first()
+        if not reservation:
+            return Response({"reservation": None})
+        from .serializers import ReporterReservationSerializer
+        serializer = ReporterReservationSerializer(reservation)
+        return Response(serializer.data)
+
+    def post(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+        slot_id = request.data.get('slot_id')
+        monthly_orders_estimate = request.data.get('monthly_orders_estimate', 0) or 0
+        if slot_id is None:
+            return Response({"error": "slot_id requerido"}, status=status.HTTP_400_BAD_REQUEST)
+        slot = ReporterHourSlot.objects.filter(id=slot_id).first()
+        if not slot:
+            return Response({"error": "Slot no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        current_count = slot.reservations.count()
+        if current_count >= slot.max_users:
+            return Response(
+                {"error": f"La hora {slot.hour:02d}:00 está llena (máx {slot.max_users} usuarios)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        ReporterReservation.objects.filter(user=user).delete()
+        reservation = ReporterReservation.objects.create(
+            user=user,
+            slot=slot,
+            monthly_orders_estimate=int(monthly_orders_estimate)
+        )
+        from .serializers import ReporterReservationSerializer
+        serializer = ReporterReservationSerializer(reservation)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+        deleted, _ = ReporterReservation.objects.filter(user=user).delete()
+        return Response({"deleted": deleted > 0})
+
+
+class ReporterRunsView(APIView):
+    """
+    GET /api/reporter/runs/ — Lista runs recientes (por usuario o por slot).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+        from django.utils import timezone
+        from datetime import timedelta
+        days = int(request.query_params.get('days', 7))
+        since = timezone.now() - timedelta(days=days)
+        runs = ReporterRun.objects.filter(
+            run_users__user=user,
+            scheduled_at__gte=since
+        ).select_related('slot').distinct().order_by('-scheduled_at')[:20]
+        from .serializers import ReporterRunSerializer
+        serializer = ReporterRunSerializer(runs, many=True)
+        return Response(serializer.data)
+
+
+class ReporterRunProgressView(APIView):
+    """
+    GET /api/reporter/runs/<run_id>/progress/ — Progreso detallado de una Run (por usuario).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, run_id):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+        run = ReporterRun.objects.filter(id=run_id).select_related('slot').first()
+        if not run:
+            return Response({"error": "Run no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+        run_users = ReporterRunUser.objects.filter(run=run).select_related('user')
+        users_progress = []
+        for ru in run_users:
+            users_progress.append({
+                "user_id": ru.user_id,
+                "username": ru.user.username if ru.user_id else None,
+                "download_compare_status": ru.download_compare_status,
+                "download_compare_completed_at": ru.download_compare_completed_at.isoformat() if ru.download_compare_completed_at else None,
+                "total_pending_orders": ru.total_pending_orders,
+                "total_ranges": ru.total_ranges,
+                "ranges_completed": ru.ranges_completed,
+            })
+        return Response({
+            "run_id": run.id,
+            "run_status": run.status,
+            "scheduled_at": run.scheduled_at.isoformat(),
+            "slot_hour": run.slot.hour if run.slot_id else None,
+            "users": users_progress,
+        })
 
 
 class ClientDashboardAnalyticsView(APIView):

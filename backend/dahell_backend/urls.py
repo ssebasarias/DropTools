@@ -35,6 +35,10 @@ from core.views import (
     ReporterEnvView,
     ReporterStopView,
     ReporterListView,
+    ReporterSlotsView,
+    ReporterReservationsView,
+    ReporterRunsView,
+    ReporterRunProgressView,
     ClientDashboardAnalyticsView,
     AuthLoginView,
     AuthRegisterView,
@@ -78,6 +82,10 @@ urlpatterns = [
     path('api/reporter/env/', ReporterEnvView.as_view(), name='reporter-env'),
     path('api/reporter/stop/', ReporterStopView.as_view(), name='reporter-stop'),
     path('api/reporter/list/', ReporterListView.as_view(), name='reporter-list'),
+    path('api/reporter/slots/', ReporterSlotsView.as_view(), name='reporter-slots'),
+    path('api/reporter/reservations/', ReporterReservationsView.as_view(), name='reporter-reservations'),
+    path('api/reporter/runs/', ReporterRunsView.as_view(), name='reporter-runs'),
+    path('api/reporter/runs/<int:run_id>/progress/', ReporterRunProgressView.as_view(), name='reporter-run-progress'),
     path('api/user/dashboard/analytics/', ClientDashboardAnalyticsView.as_view(), name='client-dashboard-analytics'),
 
     # Admin (no payments): manage users & subscriptions

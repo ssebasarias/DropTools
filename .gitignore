@@ -170,3 +170,6 @@ coverage.xml
 
 # --- Resultados Celery (si se escriben en disco) ---
 results/
+
+# --- Datos de prueba Reporter (credenciales) ---
+scripts/reporter_test_users.json

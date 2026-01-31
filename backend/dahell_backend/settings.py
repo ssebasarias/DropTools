@@ -165,6 +165,12 @@ CELERY_RESULT_EXPIRES = 3600  # Resultados expiran en 1 hora
 # Reporter: en proceso solo cuando desarrollo Y no Docker (Windows local). En Docker siempre Celery.
 REPORTER_USE_CELERY = (DAHELL_ENV == 'production') or IS_DOCKER
 
+# Reporter slot system: límite Selenium y estimación de carga
+MAX_ACTIVE_SELENIUM = int(os.getenv('MAX_ACTIVE_SELENIUM', '6'))
+REPORTER_ESTIMATED_PENDING_FACTOR = float(os.getenv('REPORTER_ESTIMATED_PENDING_FACTOR', '0.08'))
+REPORTER_RANGE_SIZE = int(os.getenv('REPORTER_RANGE_SIZE', '100'))
+REPORTER_SELENIUM_SEMAPHORE_TTL = int(os.getenv('REPORTER_SELENIUM_SEMAPHORE_TTL', '3300'))  # 55 min
+
 # Etiqueta para UI/logs: development | development_docker | production
 REPORTER_RUN_MODE = 'development_docker' if (IS_DEVELOPMENT and IS_DOCKER) else ('development' if IS_DEVELOPMENT else 'production')
 

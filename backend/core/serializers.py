@@ -167,3 +167,69 @@ class DashboardTacticalOpportunitySerializer(serializers.Serializer):
     competitors = serializers.IntegerField()
     supplier = serializers.CharField()
     badge = serializers.CharField()
+
+
+# -----------------------------------------------------------------------------
+# Reporter slot system
+# -----------------------------------------------------------------------------
+
+from .models import ReporterHourSlot, ReporterReservation, ReporterRun, ReporterRunUser
+
+
+class ReporterSlotSerializer(serializers.ModelSerializer):
+    """Slot horario con capacidad actual y disponible."""
+    current_users = serializers.SerializerMethodField()
+    available = serializers.SerializerMethodField()
+    hour_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReporterHourSlot
+        fields = ['id', 'hour', 'hour_label', 'max_users', 'current_users', 'available']
+
+    def get_current_users(self, obj):
+        return obj.reservations.count()
+
+    def get_available(self, obj):
+        return obj.reservations.count() < obj.max_users
+
+    def get_hour_label(self, obj):
+        return f"{obj.hour:02d}:00"
+
+
+class ReporterReservationSerializer(serializers.ModelSerializer):
+    slot = ReporterSlotSerializer(read_only=True)
+    slot_id = serializers.PrimaryKeyRelatedField(
+        queryset=ReporterHourSlot.objects.all(),
+        source='slot',
+        write_only=True
+    )
+
+    class Meta:
+        model = ReporterReservation
+        fields = [
+            'id', 'slot', 'slot_id', 'monthly_orders_estimate',
+            'estimated_pending_orders', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['estimated_pending_orders', 'created_at', 'updated_at']
+
+
+class ReporterRunSerializer(serializers.ModelSerializer):
+    slot_hour = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReporterRun
+        fields = [
+            'id', 'slot', 'slot_hour', 'scheduled_at', 'started_at', 'finished_at',
+            'status', 'created_at'
+        ]
+
+    def get_slot_hour(self, obj):
+        return obj.slot.hour if obj.slot_id else None
+
+
+class ReporterRunProgressSerializer(serializers.Serializer):
+    """Progreso de una Run por usuario (para GET /api/reporter/runs/<id>/progress/)."""
+    run_id = serializers.IntegerField()
+    run_status = serializers.CharField()
+    scheduled_at = serializers.DateTimeField()
+    users = serializers.ListField(child=serializers.DictField())

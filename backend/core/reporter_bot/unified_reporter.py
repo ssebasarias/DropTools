@@ -350,6 +350,118 @@ class UnifiedReporter:
                 self.driver_manager.close()
                 self.logger.info("   ✅ Navegador cerrado")
 
+    def _ensure_driver_and_login(self):
+        """
+        Inicializa driver y hace login. Devuelve True si OK, False si falló.
+        No cierra el driver (responsabilidad del caller).
+        """
+        from core.reporter_bot.docker_config import get_download_dir
+        download_dir = self.download_dir or str(get_download_dir())
+        self.driver_manager = DriverManager(
+            headless=self.headless,
+            logger=self.logger,
+            download_dir=download_dir,
+            browser=self.browser_priority[0] if self.browser_priority else self.browser
+        )
+        self.driver = self.driver_manager.init_driver(browser_priority=self.browser_priority)
+        if not self.driver:
+            self.logger.error("❌ No se pudo inicializar el driver")
+            return False
+        self.auth_manager = AuthManager(
+            driver=self.driver,
+            user_id=self.user_id,
+            logger=self.logger
+        )
+        self.auth_manager.load_credentials()
+        if not self.auth_manager.login():
+            self.logger.error("🛑 Login fallido.")
+            return False
+        return True
+
+    def run_download_compare_only(self):
+        """
+        Ejecuta solo Download + Compare (sin Reporter). Para uso por download_compare_task.
+        Cierra el driver al finalizar.
+        Returns:
+            dict: stats con 'downloader' y 'comparer'; total_detected en comparer.
+        """
+        self.stats['downloader'] = None
+        self.stats['comparer'] = None
+        self.stats['reporter'] = None
+        self.logger.info("🔄 run_download_compare_only: Iniciando (Download + Compare)")
+        try:
+            if not self._ensure_driver_and_login():
+                return self.stats
+            from core.reporter_bot.docker_config import get_download_dir
+            download_dir = self.download_dir or str(get_download_dir())
+            downloader = DropiDownloader(
+                driver=self.driver,
+                user_id=self.user_id,
+                logger=self.logger,
+                download_dir=download_dir
+            )
+            downloaded_files = downloader.run()
+            downloader_success = bool(downloaded_files)
+            self.stats['downloader'] = {
+                'files_downloaded': len(downloaded_files) if downloaded_files else 0,
+                'success': downloader_success
+            }
+            if not downloader_success:
+                self.stats['comparer'] = {'success': False, 'total_detected': 0}
+                return self.stats
+            comparer = ReportComparer(user_id=self.user_id, logger=self.logger)
+            comparison_success = comparer.run()
+            self.stats['comparer'] = {
+                'success': comparison_success,
+                'total_detected': comparer.stats.get('total_detected', 0)
+            }
+            return self.stats
+        except Exception as e:
+            self.logger.exception(f"Error en run_download_compare_only: {e}")
+            return self.stats
+        finally:
+            if self.driver_manager:
+                self.driver_manager.close()
+                self.logger.info("   ✅ Navegador cerrado (download_compare_only)")
+
+    def run_report_orders_only(self, range_start, range_end):
+        """
+        Ejecuta solo Reporter para el rango [range_start, range_end] (1-based).
+        Asume que Download+Compare ya se ejecutó (hay OrderMovementReport pendientes).
+        Cierra el driver al finalizar.
+        Returns:
+            dict: reporter stats (procesados, total, etc.)
+        """
+        self.stats['downloader'] = None
+        self.stats['comparer'] = None
+        self.stats['reporter'] = {'procesados': 0, 'total': 0}
+        self.logger.info(f"🔄 run_report_orders_only: rango [{range_start}, {range_end}]")
+        try:
+            if not self._ensure_driver_and_login():
+                return self.stats
+            from core.reporter_bot.order_data_loader import OrderDataLoader
+            loader = OrderDataLoader(user_id=self.user_id, logger=self.logger)
+            df_slice = loader.load_pending_orders_slice(range_start, range_end)
+            if df_slice.empty:
+                self.logger.info("   No hay órdenes en este rango.")
+                return self.stats
+            reporter = DropiReporter(
+                driver=self.driver,
+                user_id=self.user_id,
+                logger=self.logger,
+                on_order_processed=None
+            )
+            reporter_stats = reporter.run(orders_df=df_slice)
+            self.stats['reporter'] = reporter_stats
+            return self.stats
+        except Exception as e:
+            self.logger.exception(f"Error en run_report_orders_only: {e}")
+            return self.stats
+        finally:
+            if self.driver_manager:
+                self.driver_manager.close()
+                self.logger.info("   ✅ Navegador cerrado (report_orders_only)")
+
 
 class Command(BaseCommand):
     """

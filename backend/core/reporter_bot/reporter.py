@@ -71,10 +71,10 @@ class DropiReporter:
             'reintentos': 0
         }
     
-    def run(self):
+    def run(self, orders_df=None):
         """
         Ejecuta el proceso completo de reporte.
-        
+        Si orders_df está definido, usa ese DataFrame en lugar de cargar desde BD (para rangos).
         Returns:
             dict: Estadísticas del proceso
         """
@@ -83,9 +83,13 @@ class DropiReporter:
         self.logger.info("="*80)
         
         try:
-            # 1. Cargar datos desde BD
-            self.logger.info("🗄️ Modo: Base de Datos (OrderMovementReport)")
-            df = self.data_loader.load_pending_orders()
+            # 1. Cargar datos desde BD o usar DataFrame proporcionado (slice de rango)
+            if orders_df is not None:
+                self.logger.info("🗄️ Modo: DataFrame proporcionado (rango)")
+                df = orders_df
+            else:
+                self.logger.info("🗄️ Modo: Base de Datos (OrderMovementReport)")
+                df = self.data_loader.load_pending_orders()
             
             if df.empty:
                 self.logger.info("⚠️ No hay datos pendientes para procesar.")

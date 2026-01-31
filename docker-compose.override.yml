@@ -2,6 +2,7 @@
 # Levanta: docker compose up -d
 # Backend y Celery usan DAHELL_ENV=development → Reporter vía Celery pero con config de desarrollo (timeouts, logs).
 # En la UI verás "Modo desarrollo (Docker)". Sirve para probar el flujo igual que en producción antes de subir al servidor.
+# Para testeo del reporter con 6 workers: celery_worker usa --concurrency=6 (y más recursos).
 services:
   backend:
     environment:
@@ -9,6 +10,17 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./raw_data:/app/raw_data
+      - ./scripts:/app/scripts
   celery_worker:
     environment:
       - DAHELL_ENV=development
+    # 6 workers para testeo del reporter por slot (work stealing entre 3 usuarios)
+    command: celery -A dahell_backend worker -l info --concurrency=6
+    deploy:
+      resources:
+        limits:
+          cpus: '6.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G

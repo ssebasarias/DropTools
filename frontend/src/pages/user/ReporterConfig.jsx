@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, XCircle, Play, RefreshCw, FileText, Phone, User, Package, Square } from 'lucide-react';
-import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount, fetchReporterConfig, updateReporterConfig, startReporterWorkflow, stopReporterProcesses, fetchReporterStatus, fetchReporterList, fetchReporterEnv } from '../../services/api';
+import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, XCircle, RefreshCw, FileText, Phone, User, Package, Square, Calendar, BarChart3 } from 'lucide-react';
+import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount, fetchReporterConfig, updateReporterConfig, stopReporterProcesses, fetchReporterStatus, fetchReporterList, fetchReporterEnv, fetchReporterSlots, fetchMyReservation, createReservation, deleteReservation, fetchReporterRuns, fetchReporterRunProgress } from '../../services/api';
 import SubscriptionGate from '../../components/common/SubscriptionGate';
 import { getAuthUser } from '../../services/authService';
 import { hasTier } from '../../utils/subscription';
@@ -22,6 +22,16 @@ const ReporterConfigInner = () => {
     const [reportsLoading, setReportsLoading] = useState(false);
     const [workflowProgress, setWorkflowProgress] = useState(null);
     const [reporterEnv, setReporterEnv] = useState(null); // { dahell_env, reporter_use_celery, message }
+
+    // Slots & reservations (nuevo sistema por hora)
+    const [slots, setSlots] = useState([]);
+    const [slotsLoading, setSlotsLoading] = useState(false);
+    const [myReservation, setMyReservation] = useState(null);
+    const [reservationSaving, setReservationSaving] = useState(false);
+    const [runs, setRuns] = useState([]);
+    const [lastRunProgress, setLastRunProgress] = useState(null);
+    const [selectedSlotId, setSelectedSlotId] = useState(null);
+    const [monthlyOrdersEstimate, setMonthlyOrdersEstimate] = useState(0);
 
     const [form, setForm] = useState({
         label: 'reporter',
@@ -83,39 +93,29 @@ const ReporterConfigInner = () => {
         }
     }, []);
 
-    const handleStartWorkflow = async () => {
+    const handleConfirmReservation = async () => {
         setError('');
-        setStarting(true);
+        setReservationSaving(true);
         try {
-            const data = await startReporterWorkflow();
-            const isDevelopmentInProcess = data.environment === 'development';
-
-            if (isDevelopmentInProcess) {
-                setWorkflowProgress({
-                    status: data.success ? 'completed' : 'failed',
-                    current_message: data.message || (data.success ? 'Completado (desarrollo)' : 'Falló (desarrollo)'),
-                    messages: [data.message || '']
-                });
-                loadStatus(true);
-                loadReportsList(true);
-                setStarting(false);
-            } else {
-                setWorkflowProgress({
-                    status: 'step1_running',
-                    current_message: 'Encolado. Esperando worker...',
-                    messages: ['Solicitud enviada. Esperando respuesta del worker...']
-                });
-                setTimeout(() => {
-                    loadStatus(true);
-                    loadReportsList(true);
-                    setStarting(false);
-                }, 3000);
-            }
+            await createReservation({ slot_id: selectedSlotId, monthly_orders_estimate: monthlyOrdersEstimate });
+            await loadMyReservation();
+            await loadSlots();
         } catch (e) {
-            const msg = e.message || 'Error al iniciar workflow';
-            const extra = e.body?.traceback || e.body?.error;
-            setError(extra ? `${msg}\n${extra}` : msg);
-            setStarting(false);
+            setError(e.message || 'No se pudo crear la reserva');
+        } finally {
+            setReservationSaving(false);
+        }
+    };
+
+    const handleCancelReservation = async () => {
+        setError('');
+        try {
+            await deleteReservation();
+            setMyReservation(null);
+            setSelectedSlotId(null);
+            await loadSlots();
+        } catch (e) {
+            setError(e.message || 'No se pudo cancelar la reserva');
         }
     };
 
@@ -148,12 +148,56 @@ const ReporterConfigInner = () => {
         }
     }, []);
 
+    const loadSlots = useCallback(async () => {
+        setSlotsLoading(true);
+        try {
+            const data = await fetchReporterSlots();
+            setSlots(data);
+        } catch (e) {
+            console.error('Error loading slots:', e);
+        } finally {
+            setSlotsLoading(false);
+        }
+    }, []);
+
+    const loadMyReservation = useCallback(async () => {
+        try {
+            const data = await fetchMyReservation();
+            setMyReservation(data);
+            if (data?.slot_id) setSelectedSlotId(data.slot_id);
+            if (data?.slot?.id) setSelectedSlotId(data.slot.id);
+            if (data?.monthly_orders_estimate != null) setMonthlyOrdersEstimate(data.monthly_orders_estimate);
+        } catch (e) {
+            setMyReservation(null);
+        }
+    }, []);
+
+    const loadRunsAndProgress = useCallback(async () => {
+        try {
+            const runsData = await fetchReporterRuns(7);
+            setRuns(runsData || []);
+            const firstRun = (runsData || [])[0];
+            if (firstRun?.id) {
+                const progress = await fetchReporterRunProgress(firstRun.id);
+                setLastRunProgress(progress);
+            } else {
+                setLastRunProgress(null);
+            }
+        } catch (e) {
+            setRuns([]);
+            setLastRunProgress(null);
+        }
+    }, []);
+
     useEffect(() => {
         load();
         loadStatus();
         loadReportsList();
         loadReporterEnv();
-    }, [load, loadStatus, loadReportsList, loadReporterEnv]);
+        loadSlots();
+        loadMyReservation();
+        loadRunsAndProgress();
+    }, [load, loadStatus, loadReportsList, loadReporterEnv, loadSlots, loadMyReservation, loadRunsAndProgress]);
 
     // Auto-refresh status cuando el workflow está corriendo (contador y panel se actualizan al marcar órdenes)
     useEffect(() => {
@@ -418,70 +462,133 @@ const ReporterConfigInner = () => {
                 </div>
             </div>
 
-            {/* Segunda fila: Botón Iniciar y KPI Contador */}
+            {/* Slots y reserva por hora (nuevo sistema) */}
             <div className="glass-card" style={{ marginBottom: '2rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '2rem', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1, flexWrap: 'wrap' }}>
-                        <button
-                            type="button"
-                            className="btn-primary"
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.5rem',
-                                opacity: starting ? 0.7 : 1,
-                                padding: '1rem 2rem',
-                                fontSize: '1rem'
-                            }}
-                            disabled={starting}
-                            onClick={handleStartWorkflow}
-                        >
-                            {starting ? (
-                                <>
-                                    <RefreshCw size={20} className="spinning" />
-                                    Iniciando...
-                                </>
-                            ) : (
-                                <>
-                                    <Play size={20} />
-                                    Iniciar a Reportar
-                                </>
-                            )}
-                        </button>
-                        {(reporterEnv?.run_mode === 'development' || reporterEnv?.run_mode === 'development_docker') && (
+                <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <Calendar size={22} style={{ color: 'var(--primary)' }} />
+                    Reserva por hora diaria
+                </h3>
+                <p className="text-muted" style={{ fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                    Elige la hora en que se ejecutará tu reporter cada día. Si una hora está llena, no se aceptan más usuarios.
+                </p>
+                {slotsLoading ? (
+                    <p className="text-muted">Cargando horarios...</p>
+                ) : (
+                    <>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                            {slots.map((s) => (
+                                <button
+                                    key={s.id}
+                                    type="button"
+                                    onClick={() => !s.available ? null : setSelectedSlotId(s.id)}
+                                    disabled={!s.available}
+                                    style={{
+                                        padding: '0.6rem',
+                                        borderRadius: '10px',
+                                        border: selectedSlotId === s.id ? '2px solid var(--primary)' : '1px solid var(--glass-border)',
+                                        background: selectedSlotId === s.id ? 'rgba(99,102,241,0.2)' : (s.available ? 'var(--glass-bg)' : 'rgba(239,68,68,0.1)'),
+                                        color: s.available ? 'var(--text-main)' : 'var(--text-muted)',
+                                        cursor: s.available ? 'pointer' : 'not-allowed',
+                                        fontSize: '0.85rem',
+                                        fontWeight: 600
+                                    }}
+                                    title={s.available ? `${s.hour_label} - ${s.current_users}/${s.max_users} usuarios` : `Lleno (${s.max_users} usuarios)`}
+                                >
+                                    {s.hour_label}
+                                    <div style={{ fontSize: '0.7rem', fontWeight: 400, marginTop: '0.2rem', color: 'var(--text-muted)' }}>
+                                        {s.current_users}/{s.max_users}
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                            <div style={{ flex: '1 1 200px' }}>
+                                <label className="form-label" style={{ display: 'block', marginBottom: '0.35rem' }}>Órdenes mensuales aproximadas</label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    className="glass-input"
+                                    value={monthlyOrdersEstimate || ''}
+                                    onChange={(e) => setMonthlyOrdersEstimate(parseInt(e.target.value, 10) || 0)}
+                                    placeholder="Ej. 500"
+                                    style={{ width: '100%', maxWidth: '180px' }}
+                                />
+                            </div>
                             <button
                                 type="button"
-                                className="btn-secondary"
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    opacity: stoppingProcesses ? 0.7 : 1,
-                                    padding: '1rem 1.5rem',
-                                    fontSize: '1rem',
-                                    borderColor: 'var(--danger)',
-                                    color: 'var(--danger)'
-                                }}
-                                disabled={stoppingProcesses || starting}
-                                onClick={handleStopProcesses}
-                                title="Detener todas las tareas del reporter en segundo plano (Celery) y vaciar la cola. Solo en modo desarrollo."
+                                className="btn-primary"
+                                disabled={!selectedSlotId || reservationSaving}
+                                onClick={handleConfirmReservation}
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
                             >
-                                {stoppingProcesses ? (
-                                    <>
-                                        <RefreshCw size={18} className="spinning" />
-                                        Deteniendo...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Square size={18} />
-                                        Detener procesos
-                                    </>
-                                )}
+                                {reservationSaving ? <RefreshCw size={18} className="spinning" /> : <CheckCircle2 size={18} />}
+                                {reservationSaving ? 'Guardando...' : 'Confirmar reserva'}
                             </button>
+                        </div>
+                        {myReservation && (
+                            <div style={{
+                                padding: '1rem',
+                                background: 'rgba(16,185,129,0.08)',
+                                border: '1px solid rgba(16,185,129,0.25)',
+                                borderRadius: '12px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                flexWrap: 'wrap',
+                                gap: '1rem'
+                            }}>
+                                <div>
+                                    <strong style={{ color: 'var(--success)' }}>Tu reserva:</strong>{' '}
+                                    {myReservation.slot?.hour_label ?? `${String(myReservation.slot?.hour ?? '').padStart(2, '0')}:00`} ·{' '}
+                                    ~{myReservation.estimated_pending_orders ?? 0} órdenes pendientes estimadas
+                                </div>
+                                <button type="button" className="btn-secondary" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={handleCancelReservation}>
+                                    Cancelar reserva
+                                </button>
+                            </div>
                         )}
-                    </div>
+                    </>
+                )}
+            </div>
 
-                    {/* KPI Contador de Reportes del Día */}
+            {/* Tu ejecución de hoy / último progreso */}
+            {lastRunProgress && (
+                <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(99,102,241,0.25)' }}>
+                    <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <BarChart3 size={22} style={{ color: 'var(--primary)' }} />
+                        Tu ejecución
+                    </h3>
+                    <p className="text-muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>
+                        Programada: {lastRunProgress.scheduled_at ? new Date(lastRunProgress.scheduled_at).toLocaleString('es-CO') : '—'} · Estado: {lastRunProgress.run_status}
+                    </p>
+                    {lastRunProgress.users && lastRunProgress.users.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            {lastRunProgress.users.map((u, idx) => (
+                                <div key={idx} style={{
+                                    padding: '0.75rem 1rem',
+                                    background: 'rgba(255,255,255,0.03)',
+                                    borderRadius: '10px',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    flexWrap: 'wrap',
+                                    gap: '0.5rem'
+                                }}>
+                                    <span>{u.username ?? `Usuario ${u.user_id}`}</span>
+                                    <span className="text-muted" style={{ fontSize: '0.9rem' }}>
+                                        Descarga: {u.download_compare_status} · Rangos: {u.ranges_completed ?? 0}/{u.total_ranges ?? 0}
+                                        {u.total_pending_orders != null && u.total_pending_orders > 0 && ` (${u.total_pending_orders} órdenes pendientes)`}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* KPI Contador de Reportes del Día */}
+            <div className="glass-card" style={{ marginBottom: '2rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '2rem', flexWrap: 'wrap' }}>
                     <div style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -491,29 +598,20 @@ const ReporterConfigInner = () => {
                         borderRadius: '12px',
                         border: '1px solid rgba(99,102,241,0.2)'
                     }}>
-                        <div style={{
-                            padding: '0.75rem',
-                            background: 'rgba(99,102,241,0.2)',
-                            borderRadius: '10px'
-                        }}>
+                        <div style={{ padding: '0.75rem', background: 'rgba(99,102,241,0.2)', borderRadius: '10px' }}>
                             <FileText size={24} style={{ color: 'var(--primary)' }} />
                         </div>
                         <div>
-                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: 0, marginBottom: '0.25rem' }}>
-                                Reportes Realizados Hoy
-                            </p>
-                            <h2 style={{
-                                fontSize: '2.5rem',
-                                margin: 0,
-                                fontWeight: 'bold',
-                                background: 'linear-gradient(135deg, var(--primary), #4f46e5)',
-                                WebkitBackgroundClip: 'text',
-                                WebkitTextFillColor: 'transparent'
-                            }}>
+                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: 0, marginBottom: '0.25rem' }}>Reportes realizados hoy</p>
+                            <h2 style={{ fontSize: '2.5rem', margin: 0, fontWeight: 'bold', background: 'linear-gradient(135deg, var(--primary), #4f46e5)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                                 {status?.total_reported || 0}
                             </h2>
                         </div>
                     </div>
+                    <button type="button" className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} onClick={() => { loadSlots(); loadMyReservation(); loadRunsAndProgress(); loadStatus(); loadReportsList(); }}>
+                        <RefreshCw size={16} />
+                        Actualizar
+                    </button>
                 </div>
             </div>
 
@@ -639,7 +737,7 @@ const ReporterConfigInner = () => {
                     <EmptyState
                         icon={Package}
                         title="No hay órdenes reportadas aún"
-                        description="Presiona 'Iniciar a Reportar' para comenzar."
+                        description="Los reportes se ejecutan automáticamente según tu reserva por hora."
                     />
                 ) : (
                     <div style={{

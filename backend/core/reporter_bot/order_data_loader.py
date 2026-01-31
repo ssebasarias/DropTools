@@ -119,13 +119,26 @@ class OrderDataLoader:
             
             self.logger.info(f"   ✅ DataFrame construido con {len(df)} registros.")
             return df
-            
+
         except Exception as e:
-            self.logger.error(f"❌ Error al consultar DB: {str(e)}")
-            import traceback
-            self.logger.error(traceback.format_exc())
+            self.logger.error(f"   ❌ Error cargando órdenes: {e}")
             return pd.DataFrame()
-    
+
+    def load_pending_orders_slice(self, range_start, range_end):
+        """
+        Carga las órdenes pendientes y devuelve solo el slice [range_start, range_end] (1-based).
+        Útil para report_range_task: cada worker procesa un rango de índices.
+        Returns:
+            DataFrame con las filas range_start-1 hasta range_end (inclusive), o vacío si no hay datos.
+        """
+        df = self.load_pending_orders()
+        if df.empty:
+            return df
+        # 1-based to 0-based: range_start=1, range_end=100 -> iloc[0:100]
+        start_idx = max(0, range_start - 1)
+        end_idx = min(len(df), range_end)
+        return df.iloc[start_idx:end_idx].copy()
+
     def check_order_can_be_processed(self, phone):
         """
         Verifica si una orden puede ser procesada según tiempos requeridos y estado previo.

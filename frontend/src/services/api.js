@@ -249,6 +249,53 @@ export const fetchReporterList = async (page = 1, pageSize = 50, statusFilter = 
     return data;
 };
 
+// Reporter slots & reservations (nuevo sistema por hora)
+export const fetchReporterSlots = async () => {
+    const response = await authFetch(`${API_URL}/reporter/slots/`);
+    if (!response.ok) throw new Error('No se pudieron cargar los horarios');
+    return await response.json();
+};
+
+export const fetchMyReservation = async () => {
+    const response = await authFetch(`${API_URL}/reporter/reservations/`);
+    if (!response.ok) throw new Error('No se pudo cargar tu reserva');
+    const data = await response.json();
+    if (data && data.reservation !== undefined) return data.reservation;
+    return data && (data.slot_id !== undefined || data.slot) ? data : null;
+};
+
+export const createReservation = async ({ slot_id, monthly_orders_estimate }) => {
+    const response = await authFetch(`${API_URL}/reporter/reservations/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot_id, monthly_orders_estimate: monthly_orders_estimate || 0 }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'No se pudo crear la reserva');
+    return data;
+};
+
+export const deleteReservation = async () => {
+    const response = await authFetch(`${API_URL}/reporter/reservations/`, {
+        method: 'DELETE',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'No se pudo cancelar la reserva');
+    return data;
+};
+
+export const fetchReporterRuns = async (days = 7) => {
+    const response = await authFetch(`${API_URL}/reporter/runs/?days=${days}`);
+    if (!response.ok) throw new Error('No se pudieron cargar las ejecuciones');
+    return await response.json();
+};
+
+export const fetchReporterRunProgress = async (runId) => {
+    const response = await authFetch(`${API_URL}/reporter/runs/${runId}/progress/`);
+    if (!response.ok) throw new Error('No se pudo cargar el progreso');
+    return await response.json();
+};
+
 export const fetchClientDashboardAnalytics = async (period = 'week') => {
     try {
         const params = new URLSearchParams({ period });

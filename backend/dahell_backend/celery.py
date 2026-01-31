@@ -3,6 +3,7 @@ Configuración de Celery para Dahell Intelligence
 """
 import os
 from celery import Celery
+from celery.schedules import crontab
 
 # Configurar Django settings module
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'dahell_backend.settings')
@@ -15,6 +16,14 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Auto-descubrir tareas en todas las apps instaladas
 app.autodiscover_tasks()
+
+# Beat: ejecutar process_slot_task cada hora en punto (timezone America/Bogota)
+app.conf.beat_schedule = {
+    'process-slot-every-hour': {
+        'task': 'core.tasks.process_slot_task',
+        'schedule': crontab(minute=0, hour='*'),
+    },
+}
 
 # Configuración adicional
 app.conf.update(

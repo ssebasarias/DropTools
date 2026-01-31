@@ -557,7 +557,10 @@ class User(AbstractUser):
     # Campos de dropi_accounts (credenciales Dropi - cuenta principal)
     dropi_email = models.EmailField(max_length=255, null=True, blank=True, help_text="Email de la cuenta Dropi principal")
     dropi_password = models.CharField(max_length=255, null=True, blank=True, help_text="Password de la cuenta Dropi (string simple, no encriptado)")
-    
+
+    # Estimación de carga (usado en reservas por hora)
+    monthly_orders_estimate = models.PositiveIntegerField(null=True, blank=True, help_text="Órdenes mensuales aproximadas")
+
     # Timestamps adicionales
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -821,4 +824,238 @@ class OrderMovementReport(models.Model):
 
     def __str__(self):
         return f"Stagnant Order {self.snapshot.dropi_order_id} ({self.days_since_order} days)"
+
+
+# -----------------------------------------------------------------------------
+# REPORTER SLOT SYSTEM (reservas por hora, rangos, scheduler)
+# -----------------------------------------------------------------------------
+
+class ReporterSlotConfig(models.Model):
+    """
+    Configuración global del sistema de reportes por slot.
+    Una sola fila activa (singleton por id=1 o get_or_create).
+    """
+    max_active_selenium = models.PositiveIntegerField(default=6, help_text="Máximo de procesos Selenium simultáneos")
+    estimated_pending_factor = models.DecimalField(
+        max_digits=5, decimal_places=4, default=0.08,
+        help_text="Factor para estimar órdenes pendientes: monthly_orders * factor"
+    )
+    range_size = models.PositiveIntegerField(default=100, help_text="Tamaño de cada rango de órdenes a reportar")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reporter_slot_config'
+        verbose_name = "Configuración Reporter Slots"
+        verbose_name_plural = "Configuraciones Reporter Slots"
+
+    def __str__(self):
+        return f"ReporterSlotConfig(max_selenium={self.max_active_selenium}, range_size={self.range_size})"
+
+
+class ReporterHourSlot(models.Model):
+    """
+    Una hora del día asignable para ejecución diaria del reporter.
+    hour: 0-23 (único).
+    """
+    hour = models.PositiveSmallIntegerField(unique=True, help_text="Hora del día (0-23)")
+    max_users = models.PositiveIntegerField(default=10, help_text="Máximo de usuarios que pueden reservar esta hora")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reporter_hour_slots'
+        verbose_name = "Slot horario Reporter"
+        verbose_name_plural = "Slots horarios Reporter"
+        ordering = ['hour']
+
+    def __str__(self):
+        return f"{self.hour:02d}:00 (máx {self.max_users} usuarios)"
+
+
+class ReporterReservation(models.Model):
+    """
+    Reserva de un usuario en una hora diaria.
+    Un usuario solo puede tener una reserva (una hora).
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='reporter_reservation'
+    )
+    slot = models.ForeignKey(
+        ReporterHourSlot,
+        on_delete=models.CASCADE,
+        related_name='reservations'
+    )
+    monthly_orders_estimate = models.PositiveIntegerField(
+        default=0,
+        help_text="Órdenes mensuales aproximadas del usuario"
+    )
+    estimated_pending_orders = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text="monthly_orders_estimate * factor (calculado al guardar)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reporter_reservations'
+        verbose_name = "Reserva Reporter"
+        verbose_name_plural = "Reservas Reporter"
+        indexes = [
+            models.Index(fields=['slot']),
+            models.Index(fields=['user']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} → {self.slot.hour:02d}:00"
+
+    def save(self, *args, **kwargs):
+        config = ReporterSlotConfig.objects.first()
+        factor = float(config.estimated_pending_factor) if config else 0.08
+        self.estimated_pending_orders = self.monthly_orders_estimate * factor
+        super().save(*args, **kwargs)
+
+
+class ReporterRun(models.Model):
+    """
+    Una ejecución diaria de un slot (una "carrera" del ecosistema de esa hora).
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_RUNNING = 'running'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pendiente'),
+        (STATUS_RUNNING, 'En ejecución'),
+        (STATUS_COMPLETED, 'Completado'),
+        (STATUS_FAILED, 'Fallido'),
+    ]
+
+    slot = models.ForeignKey(
+        ReporterHourSlot,
+        on_delete=models.CASCADE,
+        related_name='runs'
+    )
+    scheduled_at = models.DateTimeField(help_text="Fecha/hora programada (ej. 2025-01-31 10:00:00)")
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'reporter_runs'
+        verbose_name = "Run Reporter"
+        verbose_name_plural = "Runs Reporter"
+        indexes = [
+            models.Index(fields=['slot', 'scheduled_at']),
+            models.Index(fields=['status']),
+        ]
+        ordering = ['-scheduled_at']
+
+    def __str__(self):
+        return f"Run {self.slot.hour:02d}:00 @ {self.scheduled_at} ({self.status})"
+
+
+class ReporterRange(models.Model):
+    """
+    Un rango de órdenes a reportar para un usuario en una Run.
+    range_start/range_end: índices 1-based sobre la lista de OrderMovementReport pendientes.
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_LOCKED = 'locked'
+    STATUS_PROCESSING = 'processing'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pendiente'),
+        (STATUS_LOCKED, 'Bloqueado'),
+        (STATUS_PROCESSING, 'Procesando'),
+        (STATUS_COMPLETED, 'Completado'),
+        (STATUS_FAILED, 'Fallido'),
+    ]
+
+    run = models.ForeignKey(
+        ReporterRun,
+        on_delete=models.CASCADE,
+        related_name='ranges'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='reporter_ranges'
+    )
+    range_start = models.PositiveIntegerField(help_text="Índice inicio (1-based)")
+    range_end = models.PositiveIntegerField(help_text="Índice fin (inclusive)")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    locked_by = models.CharField(max_length=255, null=True, blank=True, help_text="task_id del worker")
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'reporter_ranges'
+        verbose_name = "Rango Reporter"
+        verbose_name_plural = "Rangos Reporter"
+        indexes = [
+            models.Index(fields=['run', 'user', 'range_start']),
+            models.Index(fields=['run', 'status']),
+        ]
+
+    def __str__(self):
+        return f"Range {self.range_start}-{self.range_end} user={self.user_id} ({self.status})"
+
+
+class ReporterRunUser(models.Model):
+    """
+    Estado por usuario dentro de una Run (Download+Compare y progreso por rangos).
+    """
+    DC_PENDING = 'pending'
+    DC_RUNNING = 'running'
+    DC_COMPLETED = 'completed'
+    DC_FAILED = 'failed'
+    DC_STATUS_CHOICES = [
+        (DC_PENDING, 'Pendiente'),
+        (DC_RUNNING, 'Ejecutando'),
+        (DC_COMPLETED, 'Completado'),
+        (DC_FAILED, 'Fallido'),
+    ]
+
+    run = models.ForeignKey(
+        ReporterRun,
+        on_delete=models.CASCADE,
+        related_name='run_users'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='reporter_run_users'
+    )
+    download_compare_status = models.CharField(
+        max_length=20,
+        choices=DC_STATUS_CHOICES,
+        default=DC_PENDING,
+        db_index=True
+    )
+    download_compare_completed_at = models.DateTimeField(null=True, blank=True)
+    total_pending_orders = models.PositiveIntegerField(default=0)
+    total_ranges = models.PositiveIntegerField(default=0)
+    ranges_completed = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reporter_run_users'
+        verbose_name = "Run Usuario Reporter"
+        verbose_name_plural = "Run Usuarios Reporter"
+        unique_together = [('run', 'user')]
+        indexes = [
+            models.Index(fields=['run', 'user']),
+        ]
+
+    def __str__(self):
+        return f"RunUser run={self.run_id} user={self.user_id} dc={self.download_compare_status}"
 
