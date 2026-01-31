@@ -590,6 +590,7 @@ class ContainerStatsView(APIView):
             "market_agent": "dahell_market_agent",
             "amazon_explorer": "dahell_amazon_explorer",
             "ai_trainer": "dahell_ai_trainer",
+            "celery_worker": "dahell_celery_worker",
             "db": "dahell_db"
         }
         
@@ -616,7 +617,8 @@ class ContainerControlView(APIView):
             "clusterizer": ["dahell_clusterizer"],
             "market_agent": ["dahell_market_agent"],
             "amazon_explorer": ["dahell_amazon_explorer"],
-            "ai_trainer": ["dahell_ai_trainer"]
+            "ai_trainer": ["dahell_ai_trainer"],
+            "celery_worker": ["dahell_celery_worker"]
         }
 
         container_names = mapping.get(service)
@@ -785,7 +787,8 @@ class ReporterConfigView(APIView):
 class ReporterStartView(APIView):
     """
     Inicia el workflow de reportes manualmente.
-    MODO LOCAL: Ejecuta directametne el comando unified_reporter con subprocess (Bypass Docker/Celery)
+    - DAHELL_ENV=development: ejecuta el reporter en proceso (Windows/local, Edge, sin Celery).
+    - DAHELL_ENV=production: encola la tarea en Celery (Docker/Linux).
     """
     def post(self, request):
         user = request.user
@@ -793,68 +796,211 @@ class ReporterStartView(APIView):
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
-            # Obtener email Dropi directamente del User (ahora está en la tabla users)
             if not user.dropi_email:
                 return Response(
                     {"error": "No Dropi account configured. Please configure dropi_email in user settings."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            print(f"DEBUG: Starting local workflow for user {user.username} ({user.id})")
-            
-            # Crear registro de progreso del workflow
+            from django.conf import settings
             from core.models import WorkflowProgress
-            from django.utils import timezone
-            import subprocess
-            import sys
-            
+
             # Reset previous running progress
             WorkflowProgress.objects.filter(
-                user=user, 
+                user=user,
                 status__in=['pending', 'step1_running', 'step2_running', 'step3_running']
             ).update(status='failed', current_message='Reiniciado por nueva solicitud')
 
+            from django.utils import timezone
             workflow_progress = WorkflowProgress.objects.create(
                 user=user,
                 status='step1_running',
-                current_message='Iniciando bot localmente...',
-                messages=['Iniciando proceso local...']
+                current_message='Iniciando...',
+                messages=['Iniciando...'],
+                started_at=timezone.now(),
             )
-            print(f"DEBUG: Created WorkflowProgress ID {workflow_progress.id}")
 
-            # Usar Celery para ejecutar el workflow de forma asíncrona
-            # Esto permite que múltiples usuarios ejecuten workflows simultáneamente
-            from core.tasks import execute_workflow_task
+            # Desarrollo: ejecutar reporter en proceso (mismo Python, Edge, sin Celery)
+            if not getattr(settings, 'REPORTER_USE_CELERY', True):
+                return self._run_reporter_in_process(user, workflow_progress)
 
-            try:
-                # Encolar la tarea en Celery
-                task_result = execute_workflow_task.delay(user.id)
-                print(f"DEBUG: Enqueued Celery task {task_result.id}")
+            # Producción: encolar en Celery
+            return self._enqueue_reporter_celery(user, workflow_progress)
 
-                return Response({
-                    "status": "enqueued",
-                    "message": "Workflow encolado para ejecución asíncrona",
-                    "task_id": task_result.id,
-                    "environment": "celery_async",
-                    "workflow_progress_id": workflow_progress.id
-                })
-
-            except Exception as celery_error:
-                # Si falla Celery, intentar método alternativo (aunque no recomendado)
-                import traceback
-                workflow_progress.status = 'failed'
-                workflow_progress.current_message = f'Error al encolar tarea: {str(celery_error)}'
-                workflow_progress.save()
-
-                return Response({
-                    "error": f"No se pudo encolar la tarea: {str(celery_error)}",
-                    "traceback": traceback.format_exc()
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            
         except Exception as e:
             import traceback
             return Response(
                 {"error": f"Error al iniciar workflow: {str(e)}", "traceback": traceback.format_exc()},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _run_reporter_in_process(self, user, workflow_progress):
+        """Ejecuta el reporter en el mismo proceso (desarrollo: Windows, Edge, navegador visible)."""
+        from django.conf import settings
+        from core.reporter_bot.docker_config import get_download_dir
+        from core.reporter_bot.unified_reporter import UnifiedReporter
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[DESARROLLO] Ejecutando reporter en proceso para user_id={user.id} (navegador visible)")
+        workflow_progress.current_message = 'Ejecutando en desarrollo (en proceso)...'
+        workflow_progress.save(update_fields=['current_message'])
+        try:
+            download_dir = get_download_dir()
+            unified = UnifiedReporter(
+                user_id=user.id,
+                headless=False,  # desarrollo: navegador visible
+                download_dir=str(download_dir),
+                browser_priority=None,  # usa get_reporter_browser_order() -> Edge primero en local
+            )
+            stats = unified.run()
+            success = stats.get('downloader', {}).get('success', False) if stats else False
+            if success:
+                workflow_progress.status = 'completed'
+                workflow_progress.current_message = 'Completado (desarrollo)'
+            else:
+                workflow_progress.status = 'failed'
+                workflow_progress.current_message = 'Falló descarga o comparación (desarrollo)'
+            workflow_progress.save(update_fields=['status', 'current_message'])
+            return Response({
+                "status": "completed" if success else "completed_with_errors",
+                "message": "Workflow ejecutado en desarrollo (en proceso)",
+                "environment": "development",
+                "workflow_progress_id": workflow_progress.id,
+                "success": success,
+                "stats": stats,
+            })
+        except Exception as e:
+            import traceback
+            workflow_progress.status = 'failed'
+            workflow_progress.current_message = str(e)[:200]
+            workflow_progress.save(update_fields=['status', 'current_message'])
+            logger.exception("[DESARROLLO] Error en reporter en proceso")
+            return Response({
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+                "environment": "development",
+                "workflow_progress_id": workflow_progress.id,
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _enqueue_reporter_celery(self, user, workflow_progress):
+        """Encola el reporter en Celery (producción o desarrollo Docker)."""
+        from django.conf import settings
+        from core.tasks import execute_workflow_task
+        run_mode = getattr(settings, 'REPORTER_RUN_MODE', 'production')
+        workflow_progress.current_message = 'Encolando en Celery...'
+        workflow_progress.save(update_fields=['current_message'])
+        try:
+            task_result = execute_workflow_task.delay(user.id)
+            return Response({
+                "status": "enqueued",
+                "message": "Workflow encolado para ejecución asíncrona",
+                "task_id": task_result.id,
+                "environment": "production" if run_mode == "production" else "development_docker",
+                "run_mode": run_mode,
+                "workflow_progress_id": workflow_progress.id
+            })
+        except Exception as celery_error:
+            import traceback
+            workflow_progress.status = 'failed'
+            workflow_progress.current_message = f'Error al encolar: {str(celery_error)}'
+            workflow_progress.save(update_fields=['status', 'current_message'])
+            return Response({
+                "error": f"No se pudo encolar la tarea: {str(celery_error)}",
+                "traceback": traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ReporterEnvView(APIView):
+    """
+    Devuelve el modo activo para que el frontend muestre certeza.
+    run_mode: development | development_docker | production
+    """
+    permission_classes = []
+    authentication_classes = []
+
+    def get(self, request):
+        from django.conf import settings
+        env_name = getattr(settings, 'DAHELL_ENV', 'production')
+        use_celery = getattr(settings, 'REPORTER_USE_CELERY', True)
+        run_mode = getattr(settings, 'REPORTER_RUN_MODE', 'production')
+        if run_mode == 'development_docker':
+            message = "desarrollo (Docker/Celery)"
+        elif run_mode == 'development':
+            message = "desarrollo (reporter en proceso)"
+        else:
+            message = "producción (Celery)"
+        return Response({
+            "dahell_env": env_name,
+            "reporter_use_celery": use_celery,
+            "run_mode": run_mode,
+            "message": message,
+        })
+
+
+class ReporterStopView(APIView):
+    """
+    Detiene todos los procesos del reporter en segundo plano (tareas Celery activas y cola).
+    Solo disponible en modo desarrollo (development o development_docker) para evitar zombies
+    y colisiones al volver a pulsar "Iniciar a Reportar".
+    """
+    def post(self, request):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        from django.conf import settings
+        run_mode = getattr(settings, 'REPORTER_RUN_MODE', 'production')
+        if run_mode not in ('development', 'development_docker'):
+            return Response(
+                {"error": "Detener procesos solo está disponible en modo desarrollo."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        revoked_ids = []
+        purged = False
+        try:
+            from dahell_backend.celery import app
+            # Tareas del reporter que queremos revocar
+            reporter_task_names = (
+                'core.tasks.execute_workflow_task',
+                'core.tasks.execute_workflow_task_test',
+            )
+            inspect = app.control.inspect()
+            active = inspect.active() or {}
+            for _worker, tasks in active.items():
+                for t in tasks:
+                    name = t.get('name') or t.get('task')
+                    if name in reporter_task_names:
+                        tid = t.get('id')
+                        if tid:
+                            app.control.revoke(tid, terminate=True)
+                            revoked_ids.append(tid)
+            # Purgar la cola para quitar tareas pendientes (evitar que se ejecuten después)
+            try:
+                app.control.purge()
+                purged = True
+            except Exception:
+                pass
+            # Marcar progreso del usuario como detenido para que el panel muestre "Detenido"
+            from core.models import WorkflowProgress
+            WorkflowProgress.objects.filter(
+                user=user,
+                status__in=['pending', 'step1_running', 'step2_running', 'step3_running']
+            ).update(
+                status='failed',
+                current_message='Procesos detenidos por el usuario. No hay tareas en ejecución.'
+            )
+            msg = f"Procesos detenidos: {len(revoked_ids)} tarea(s) revocada(s). Cola purgada: {purged}."
+            return Response({
+                "stopped": len(revoked_ids),
+                "revoked_ids": revoked_ids,
+                "purged": purged,
+                "message": msg,
+            })
+        except Exception as e:
+            import traceback
+            return Response(
+                {"error": str(e), "traceback": traceback.format_exc(), "revoked_ids": revoked_ids, "purged": purged},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

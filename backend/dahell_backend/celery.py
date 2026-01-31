@@ -42,9 +42,9 @@ app.conf.update(
     # Resultados
     result_expires=3600,  # Resultados expiran en 1 hora
     
-    # Logging
+    # Logging: formato corto (sin task_name/task_id); los recursos CPU/RAM se añaden por mensaje en el reporter
     worker_log_format='[%(asctime)s: %(levelname)s/%(processName)s] %(message)s',
-    worker_task_log_format='[%(asctime)s: %(levelname)s/%(processName)s][%(task_name)s(%(task_id)s)] %(message)s',
+    worker_task_log_format='[%(asctime)s: %(levelname)s/%(processName)s] %(message)s',
 )
 
 @app.task(bind=True, ignore_result=True)

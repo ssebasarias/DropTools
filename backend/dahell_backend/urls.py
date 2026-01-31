@@ -32,6 +32,8 @@ from core.views import (
     ReporterConfigView,
     ReporterStartView,
     ReporterStatusView,
+    ReporterEnvView,
+    ReporterStopView,
     ReporterListView,
     ClientDashboardAnalyticsView,
     AuthLoginView,
@@ -73,6 +75,8 @@ urlpatterns = [
     path('api/reporter/config/', ReporterConfigView.as_view(), name='reporter-config'),
     path('api/reporter/start/', ReporterStartView.as_view(), name='reporter-start'),
     path('api/reporter/status/', ReporterStatusView.as_view(), name='reporter-status'),
+    path('api/reporter/env/', ReporterEnvView.as_view(), name='reporter-env'),
+    path('api/reporter/stop/', ReporterStopView.as_view(), name='reporter-stop'),
     path('api/reporter/list/', ReporterListView.as_view(), name='reporter-list'),
     path('api/user/dashboard/analytics/', ClientDashboardAnalyticsView.as_view(), name='client-dashboard-analytics'),
 

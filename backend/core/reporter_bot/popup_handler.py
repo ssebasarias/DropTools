@@ -198,18 +198,28 @@ class PopupHandler:
     
     def check_wait_time_alert(self):
         """
-        Verifica si aparece el alert que indica que se debe esperar un día sin movimiento
-        
+        Verifica si aparece el alert que indica que se debe esperar un día sin movimiento.
+        Soporta texto en español e inglés (Dropi puede mostrar cualquiera).
+
         Returns:
             True si el alert está presente, False en caso contrario
         """
-        try:
-            alert = self.driver.find_element(
-                By.XPATH,
-                "//app-alert//p[contains(text(), 'Debes esperar al menos un día sin movimiento para iniciar una conversación sobre la orden')]"
-            )
-            return alert.is_displayed()
-        except NoSuchElementException:
-            return False
-        except Exception:
-            return False
+        # Textos exactos o parciales del mensaje de espera (ES/EN)
+        xpath_spanish = (
+            "//app-alert//p[contains(@class, 'alert-message') and "
+            "contains(., 'Debes esperar al menos un día sin movimiento')]"
+        )
+        xpath_english = (
+            "//app-alert//p[contains(@class, 'alert-message') and "
+            "contains(., 'one day without any movement')]"
+        )
+        for xpath in (xpath_spanish, xpath_english):
+            try:
+                alert = self.driver.find_element(By.XPATH, xpath)
+                if alert.is_displayed():
+                    return True
+            except NoSuchElementException:
+                continue
+            except Exception:
+                continue
+        return False

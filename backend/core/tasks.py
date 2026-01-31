@@ -12,6 +12,7 @@ import os
 # Importar al nivel del módulo para evitar problemas en workers
 # El PYTHONPATH ya está configurado en docker-compose.yml
 from core.reporter_bot.unified_reporter import UnifiedReporter
+from core.reporter_bot.resource_logger import ResourceLogger
 
 logger = get_task_logger(__name__)
 
@@ -54,14 +55,19 @@ def execute_workflow_task(self, user_id):
         
         logger.info(f"   📂 Directorio de descargas configurado: {download_dir}")
         
-        # Crear orquestador con credenciales
-        # Crear reporter unificado
-        # Configuramos 'edge' como navegador por defecto para descargas robustas (o chrome en docker)
+        # Config reporter: una sola fuente en docker_config (Docker=chrome,firefox / local=edge,chrome,firefox)
+        from core.reporter_bot.docker_config import get_reporter_browser_order
+        logger.info(f"   🌐 Orden de navegadores: {get_reporter_browser_order()}")
+        
+        # Pasar logger con recursos (CPU/RAM) en cada mensaje para ver picos de consumo
+        reporter_logger = ResourceLogger(logger)
         unified_reporter = UnifiedReporter(
             user_id=user_id,
-            headless=True,  # Siempre headless en workers
-            browser='edge', # Ahora usamos EDGE también en Docker
-            download_dir=str(download_dir) # PASAR DIRECTORIO EXPLÍCITAMENTE
+            headless=True,
+            browser='edge',
+            download_dir=str(download_dir),
+            browser_priority=None,  # UnifiedReporter usa get_reporter_browser_order() según entorno
+            logger=reporter_logger,
         )
         
         # Ejecutar workflow
@@ -148,12 +154,12 @@ def execute_workflow_task_test(self, user_id):
         if not user.dropi_email or not user.dropi_password:
             raise ValueError(f"Usuario {user_id} no tiene credenciales Dropi configuradas")
         
-        # Crear orquestador con credenciales y modo de prueba
-        # Crear reporter unificado en modo headless
+        # Crear orquestador con credenciales y modo de prueba (logger para ver mensajes en celery_worker)
         unified_reporter = UnifiedReporter(
             user_id=user_id,
             headless=True,
-            browser='chrome'
+            browser='chrome',
+            logger=logger,
         )
         
         # Ejecutar workflow

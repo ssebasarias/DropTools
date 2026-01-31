@@ -108,6 +108,119 @@ docker exec dahell_db pg_dump -U dahell_admin dahell_db > backup_$(date +%Y%m%d)
 docker exec -i dahell_db psql -U dahell_admin dahell_db < backup_20251214.sql
 ```
 
+#### Borrar todos los datos excepto usuarios
+Deja la base de datos en cero (reportes, órdenes, productos, clusters, sesiones, etc.) y **conserva solo la tabla de usuarios** (`users`: login, rol, suscripción, credenciales Dropi).
+
+```bash
+# Desde el host (con backend en Docker)
+docker compose exec backend python backend/manage.py clear_data_keep_users
+
+# Opcional: no borrar sesiones (los usuarios no tendrán que volver a iniciar sesión)
+docker compose exec backend python backend/manage.py clear_data_keep_users --no-sessions
+
+# Solo ver qué se borraría, sin ejecutar
+docker compose exec backend python backend/manage.py clear_data_keep_users --dry-run
+```
+
+Desde entorno local (venv activado):
+
+```bash
+python backend/manage.py clear_data_keep_users
+python backend/manage.py clear_data_keep_users --no-sessions
+python backend/manage.py clear_data_keep_users --dry-run
+```
+
+#### Verificar que no queden registros (SELECT / conteos)
+Después de `clear_data_keep_users` puedes comprobar que las tablas quedaron vacías (excepto `users`) con SQL o con el comando Django que sigue.
+
+**Conteos por tabla (psql):**
+
+```bash
+# Conectar a la DB y ejecutar SELECTs
+docker exec -it dahell_db psql -U dahell_admin -d dahell_db -c "
+SELECT 'raw_order_snapshots' AS tabla, COUNT(*) AS registros FROM raw_order_snapshots
+UNION ALL SELECT 'report_batches', COUNT(*) FROM report_batches
+UNION ALL SELECT 'order_reports', COUNT(*) FROM order_reports
+UNION ALL SELECT 'workflow_progress', COUNT(*) FROM workflow_progress
+UNION ALL SELECT 'order_movement_reports', COUNT(*) FROM order_movement_reports
+UNION ALL SELECT 'users', COUNT(*) FROM users
+ORDER BY tabla;
+"
+```
+
+**Estimado de filas en todas las tablas (estadísticas de PostgreSQL):**
+
+```bash
+docker exec dahell_db psql -U dahell_admin -d dahell_db -c "
+SELECT relname AS tabla, n_live_tup AS registros_aprox
+FROM pg_stat_user_tables
+WHERE schemaname = 'public'
+ORDER BY n_live_tup DESC;
+"
+```
+
+**Solo una tabla (ej. snapshots):**
+
+```bash
+docker exec dahell_db psql -U dahell_admin -d dahell_db -c "SELECT COUNT(*) FROM raw_order_snapshots;"
+```
+
+**Con Django (conteos de las tablas que vacía `clear_data_keep_users`):**
+
+```bash
+docker compose exec backend python backend/manage.py show_table_counts
+```
+
+#### Reset completo de la base de datos (empezar de cero)
+Útil para dejar la DB vacía y aplicar todas las migraciones desde el principio (incluidas las de Reporter: `ReportBatch`, `RawOrderSnapshot`, `OrderReport`, etc.).
+
+```bash
+# 1. Bajar todos los servicios y eliminar volúmenes (borra datos de PostgreSQL)
+docker compose down -v
+
+# 2. Levantar de nuevo (DB se crea vacía y se ejecuta init.sql si existe)
+docker compose up -d
+
+# 3. Esperar unos segundos a que la DB acepte conexiones, luego aplicar migraciones
+docker compose exec backend python backend/manage.py migrate
+
+# Si init.sql ya creó tablas y migrate falla por "table already exists", marcar migraciones iniciales como aplicadas y aplicar el resto:
+# docker compose exec backend python backend/manage.py migrate --fake-initial
+
+# 4. Verificar migraciones de la app core
+docker compose exec backend python backend/manage.py showmigrations core
+```
+
+**Si migrate falla con "relation already exists" o "column does not exist" (contenttypes, etc.):**  
+La base de datos fue creada por `init.sql` con un esquema que no coincide con el historial de migraciones de Django (p. ej. `django_content_type` sin columna `name`). En ese caso **la migración core 0006 no llega a ejecutarse** y en `raw_order_snapshots` puede faltar la columna `customer_email`.
+
+**Solución rápida (añadir columnas a mano en `raw_order_snapshots`):**
+
+```bash
+# Linux / macOS (bash)
+docker exec -i dahell_db psql -U dahell_admin -d dahell_db < scripts/add_raw_order_snapshot_columns.sql
+```
+
+```powershell
+# Windows PowerShell (el operador < no redirige; usar tubería)
+Get-Content scripts/add_raw_order_snapshot_columns.sql -Raw | docker exec -i dahell_db psql -U dahell_admin -d dahell_db
+```
+
+Así el downloader de reportes puede guardar snapshots sin depender de que las migraciones de contenttypes/auth pasen.
+
+**Si quieres intentar que migrate pase:** puedes marcar como aplicadas las migraciones que fallen (fake) una a una, hasta que Django llegue a core. Por ejemplo, tras `migrate --fake-initial`, si falla en `contenttypes.0002`, ejecuta `migrate contenttypes 0002 --fake` y luego `migrate` de nuevo; repite para cada error. Es frágil si init.sql y Django no coinciden.
+
+#### Reconstruir contenedores tras cambios de código
+Después de modificar código Python (backend, Celery, reporter_bot, etc.) hay que reconstruir y reiniciar los contenedores afectados para que carguen los cambios:
+
+```bash
+# Reconstruir y levantar backend y celery_worker (monitoreo CPU/RAM en logs, reporter, downloader, comparer)
+docker compose up -d --build backend celery_worker
+
+# Solo reiniciar sin reconstruir imagen (si no cambiaste Dockerfile ni dependencias)
+docker compose restart backend celery_worker
+```
+
 ---
 
 ### 🐳 Gestión de Docker
@@ -130,8 +243,11 @@ docker-compose up -d
 docker-compose down
 
 # Reiniciar un servicio específico
-docker-compose restart db
-docker-compose restart pgadmin
+docker compose restart db
+docker compose restart pgadmin
+
+# Reconstruir contenedores que sufrieron cambios de código (ver sección "Reset completo" arriba)
+docker compose up -d --build backend celery_worker
 ```
 
 #### Ver logs
@@ -144,6 +260,9 @@ docker-compose logs -f pgadmin
 
 # Logs de todos los servicios
 docker-compose logs -f
+
+# logs de celery
+docker compose logs -f celery_worker
 ```
 
 #### Acceder a pgAdmin

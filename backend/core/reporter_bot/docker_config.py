@@ -1,15 +1,31 @@
 """
-Configuración específica para la ejecución en Docker/Celery/Redis.
-Este archivo centraliza las rutas y configuraciones necesarias para que el bot
-funcione correctamente dentro del contenedor, replicando el comportamiento local.
+Configuración específica para la ejecución en Docker/Celery/Redis vs local.
+
+Separa explícitamente:
+- LOCAL (Windows): manage.py unified_reporter, Edge/Chrome/Firefox, timeouts normales.
+- DOCKER (Linux): Celery worker, solo Chromium y Firefox, timeouts mayores en headless.
+
+No hay superposición: el entorno (IS_DOCKER) y las variables de entorno (BROWSER_ORDER)
+definen qué config se usa. La misma base de código se ejecuta en ambos.
 """
 
 import os
 from pathlib import Path
 from django.conf import settings
 
-# Detectar si estamos en Docker (usualmente se verifica por archivo .dockerenv o variable de entorno)
+# Detectar si estamos en Docker (usualmente .dockerenv o variable de entorno)
 IS_DOCKER = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
+
+# --- Navegadores por entorno (una sola fuente de verdad) ---
+# Docker/Linux: solo Chromium y Firefox (estables; Edge no instalado en la imagen)
+BROWSER_ORDER_DOCKER = ['chrome', 'firefox']
+# Local/Windows: Edge primero, luego Chrome, Firefox
+BROWSER_ORDER_LOCAL = ['edge', 'chrome', 'firefox']
+
+# --- Timeouts (segundos) ---
+# En headless/Docker la página puede tardar más en renderizar; el dropdown "Acciones" necesita más margen
+DOWNLOADER_ELEMENT_WAIT_TIMEOUT_DOCKER = 120
+DOWNLOADER_ELEMENT_WAIT_TIMEOUT_LOCAL = 30
 
 # Directorio base dentro del contenedor (mapeado a ./backend en host)
 # En docker-compose.yml: ./backend:/app/backend
@@ -61,6 +77,22 @@ def get_download_dir(user_id=None):
         return user_dir
         
     return base
+
+def get_reporter_browser_order():
+    """
+    Orden de navegadores para el reporter según entorno.
+    Puede sobreescribirse con env BROWSER_ORDER (lista separada por comas).
+    """
+    order_env = os.environ.get('BROWSER_ORDER', '').strip()
+    if order_env:
+        return [b.strip().lower() for b in order_env.split(',') if b.strip()]
+    return BROWSER_ORDER_DOCKER if IS_DOCKER else BROWSER_ORDER_LOCAL
+
+
+def get_downloader_wait_timeout():
+    """Timeout en segundos para esperar elementos en el downloader (dropdown, etc.)."""
+    return DOWNLOADER_ELEMENT_WAIT_TIMEOUT_DOCKER if IS_DOCKER else DOWNLOADER_ELEMENT_WAIT_TIMEOUT_LOCAL
+
 
 def get_chrome_options_args():
     """

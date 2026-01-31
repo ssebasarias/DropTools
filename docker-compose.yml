@@ -1,6 +1,5 @@
 # Contenedores para Dahell Intelligence (Scraper + DB + GUI)
-version: '3.8'
-
+# (version ya no es necesario en Docker Compose v2+)
 services:
   # 1. Base de Datos PostgreSQL con pgvector
   db:
@@ -269,6 +268,8 @@ services:
     env_file:
       - .env.docker
     environment:
+      # Modo: development (con override) o production. Si no usas override, pon aquí DAHELL_ENV=production
+      - DAHELL_ENV=development
       # Hot-reload y desarrollo
       - PYTHONUNBUFFERED=1
       - PYTHONIOENCODING=utf-8
@@ -318,14 +319,19 @@ services:
     env_file:
       - .env.docker
     environment:
+      - DAHELL_ENV=development
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - PYTHONPATH=/app/backend
+      # Solo navegadores estables en Linux: Chromium y Firefox (sin Edge)
+      - BROWSER_ORDER=chrome,firefox
+      - CHROME_BIN=/usr/bin/chromium
+      - CHROMEDRIVER=/usr/bin/chromedriver
     volumes:
       - ./backend:/app/backend
       - ./logs:/app/logs
-      - ./results:/app/results
+      - ./results:/app/backend/results
     working_dir: /app/backend
     command: celery -A dahell_backend worker -l info --concurrency=3
     depends_on:
@@ -380,7 +386,7 @@ services:
       - "5173:5173"
     environment:
       - CHOKIDAR_USEPOLLING=true # Necesario para hot-reload en Windows/Docker
-    command: sh -c "npm install && npm run dev -- --host"
+    command: sh -c "npm install --legacy-peer-deps && npm run dev -- --host"
     networks:
       - dahell_net
 

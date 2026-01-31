@@ -35,19 +35,21 @@ class DropiReporter:
     
     ORDERS_URL = "https://app.dropi.co/dashboard/orders"
     
-    def __init__(self, driver, user_id, logger):
+    def __init__(self, driver, user_id, logger, on_order_processed=None):
         """
         Inicializa el reporter
-        
+
         Args:
             driver: WebDriver compartido (ya logueado)
             user_id: ID del usuario Django
             logger: Logger configurado
+            on_order_processed: callback opcional (current_index, total, processed_count) para actualizar progreso en frontend
         """
         self.driver = driver
         self.user_id = user_id
         self.logger = logger
-        
+        self.on_order_processed = on_order_processed
+
         # Módulos
         self.data_loader = OrderDataLoader(user_id, logger)
         self.searcher = OrderSearcher(driver, logger)
@@ -175,7 +177,14 @@ class DropiReporter:
                 }
                 result['order_info'] = order_info
                 self.result_manager.save_result(result, row)
-                
+
+                # Notificar progreso para que el frontend actualice contador y panel
+                if callable(self.on_order_processed):
+                    try:
+                        self.on_order_processed(idx + 1, len(df), self.stats['procesados'])
+                    except Exception:
+                        pass
+
                 # Si hubo timeout y sesión expirada, salir
                 if result['status'] == 'session_expired':
                     self.logger.warning("⚠️ Sesión expirada durante procesamiento")

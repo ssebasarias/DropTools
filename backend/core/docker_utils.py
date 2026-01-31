@@ -22,6 +22,7 @@ CONTAINERS_TO_MONITOR = [
     "dahell_classifier",
     "dahell_clusterizer", 
     "dahell_ai_trainer",
+    "dahell_celery_worker",
     "dahell_db"
 ]
 

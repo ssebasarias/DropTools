@@ -64,16 +64,24 @@ class ReportResultManager:
             if not phone:
                 return
             
-            # Extraer información adicional
+            # Extraer información adicional (datos de valor para análisis e historial)
             order_info = result.get('order_info', {}) or {}
             customer_name = order_info.get('customer_name') or result.get('customer_name')
             product_name = order_info.get('product_name') or result.get('product_name')
             order_id = order_info.get('order_id') or result.get('order_id', '')
-            
+            order_state = result.get('order_state')
+            days_since_order = result.get('days_since_order')
+
             if row_data is not None:
                 customer_name = customer_name or row_data.get('Cliente')
                 product_name = product_name or row_data.get('Producto')
                 order_id = order_id or row_data.get('ID Orden', '')
+                order_state = order_state if order_state is not None else row_data.get('Estado Actual')
+                if days_since_order is None and row_data.get('Días desde Orden') is not None:
+                    try:
+                        days_since_order = int(row_data.get('Días desde Orden'))
+                    except (TypeError, ValueError):
+                        pass
             
             # Convertir next_attempt_time si existe
             next_attempt_time = None
@@ -87,7 +95,7 @@ class ReportResultManager:
                 except Exception:
                     pass
             
-            # Obtener o crear el reporte
+            # Obtener o crear el reporte (guarda datos de valor: estado, días, producto, cliente)
             OrderReport.objects.update_or_create(
                 user=user,
                 order_phone=phone,
@@ -97,7 +105,8 @@ class ReportResultManager:
                     'report_generated': result.get('report_generated', False),
                     'customer_name': customer_name,
                     'product_name': product_name,
-                    'order_state': result.get('order_state'),
+                    'order_state': order_state,
+                    'days_since_order': days_since_order,
                     'next_attempt_time': next_attempt_time,
                 }
             )

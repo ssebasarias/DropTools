@@ -87,25 +87,8 @@ class DriverManager:
             elif level == 'success':
                 self.logger.info(f"   ✅ {message}")
     
-    def init_driver(self):
-        """
-        Inicializa el driver de Selenium con configuración robusta y optimizada.
-        
-        Returns:
-            webdriver: Instancia del driver configurado
-        """
-        # Si ya existe un driver, retornarlo
-        if self._driver is not None:
-            if self.logger:
-                self.logger.info("♻️ Reutilizando driver existente (Singleton)")
-            return self._driver
-        
-        if self.logger:
-            self.logger.info("="*60)
-            self.logger.info(f"🚀 INICIALIZANDO NAVEGADOR {self.browser.upper()} (Driver Manager)")
-            self.logger.info("="*60)
-        
-        # Seleccionar método de inicialización según navegador
+    def _init_one_browser(self):
+        """Inicializa un solo navegador (self.browser). Usado por init_driver."""
         if self.browser == 'edge':
             self._driver = self._init_edge()
         elif self.browser == 'chrome':
@@ -115,22 +98,68 @@ class DriverManager:
         elif self.browser == 'firefox':
             self._driver = self._init_firefox()
         else:
-            # Fallback a Edge
             self._log_step(f"Navegador '{self.browser}' no reconocido, usando Edge", 'warning')
             self._driver = self._init_edge()
+
+    def init_driver(self, browser_priority=None):
+        """
+        Inicializa el driver de Selenium. Si se pasa browser_priority (lista),
+        intenta cada navegador en orden hasta que uno funcione (fallback).
         
-        if not self._driver:
-            raise RuntimeError(f"No se pudo inicializar el navegador {self.browser}")
+        Args:
+            browser_priority: Lista opcional, ej. ['chrome', 'firefox', 'edge'].
+                             Si es None, se usa solo self.browser.
         
-        # Configuración común post-inicialización
-        self._configure_downloads()
-        self._apply_anti_detection()
-        
-        if self.logger:
-            self.logger.info("   🌐 Navegador listo")
-            self.logger.info("="*60)
-        
-        return self._driver
+        Returns:
+            webdriver: Instancia del driver configurado
+        """
+        # Si ya existe un driver, retornarlo
+        if self._driver is not None:
+            if self.logger:
+                self.logger.info("♻️ Reutilizando driver existente (Singleton)")
+            return self._driver
+
+        # Normalizar lista de fallback (chromium -> chrome)
+        if browser_priority:
+            browser_priority = [
+                (b.strip().lower() if b.strip().lower() != 'chromium' else 'chrome')
+                for b in browser_priority if b and str(b).strip()
+            ]
+            browser_priority = [b for b in browser_priority if b in self.SUPPORTED_BROWSERS]
+
+        last_error = None
+        tried = []
+
+        for one_browser in (browser_priority or [self.browser]):
+            self.browser = one_browser
+            DriverManager._driver = None
+            self._driver = None
+            if self.logger:
+                self.logger.info("="*60)
+                self.logger.info(f"🚀 Intentando navegador: {self.browser.upper()}")
+                self.logger.info("="*60)
+            try:
+                self._init_one_browser()
+                if self._driver:
+                    tried.append(self.browser)
+                    self._configure_downloads()
+                    self._apply_anti_detection()
+                    if self.logger:
+                        self.logger.info(f"   🌐 Navegador listo: {self.browser}")
+                        self.logger.info("="*60)
+                    return self._driver
+            except Exception as e:
+                last_error = e
+                tried.append(self.browser)
+                if self.logger:
+                    self.logger.warning(f"   ⚠️ Falló {self.browser}: {e}")
+                continue
+
+        if self.logger and tried:
+            self.logger.error(f"   ❌ Ningún navegador funcionó (probados: {', '.join(tried)})")
+        raise RuntimeError(
+            f"No se pudo inicializar ningún navegador (probados: {tried or [self.browser]}). Último error: {last_error}"
+        )
     
     def _init_edge(self):
         """Inicializa Microsoft Edge (recomendado para descargas)"""
@@ -168,30 +197,37 @@ class DriverManager:
                 raise
     
     def _init_chrome(self):
-        """Inicializa Google Chrome"""
-        self._log_step("Inicializando Google Chrome...", 'info')
+        """Inicializa Google Chrome / Chromium"""
+        self._log_step("Inicializando Chrome/Chromium...", 'info')
         
         options = ChromeOptions()
         self._apply_common_options(options)
         
+        # En Docker: usar binario Chromium instalado por apt (evita Edge/msedgedriver)
+        chrome_bin = os.environ.get('CHROME_BIN')
+        if chrome_bin and os.path.exists(chrome_bin):
+            options.binary_location = chrome_bin
+            self._log_step(f"Binario: {chrome_bin}", 'info')
+        
         try:
             # Intentar driver del sistema (Docker/Linux)
-            chromedriver_path = None
-            possible_paths = [
-                '/usr/bin/chromedriver',
-                '/usr/local/bin/chromedriver',
-                '/usr/lib/chromium/chromedriver'
-            ]
-            
-            for path in possible_paths:
-                if os.path.exists(path):
-                    chromedriver_path = path
-                    break
+            chromedriver_path = os.environ.get('CHROMEDRIVER')
+            if not chromedriver_path or not os.path.exists(chromedriver_path):
+                chromedriver_path = None
+                possible_paths = [
+                    '/usr/bin/chromedriver',
+                    '/usr/local/bin/chromedriver',
+                    '/usr/lib/chromium/chromedriver'
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        chromedriver_path = path
+                        break
             
             if chromedriver_path:
                 service = ChromeService(chromedriver_path)
                 self._driver = webdriver.Chrome(service=service, options=options)
-                self._log_step(f"Chrome iniciado con driver sistema: {chromedriver_path}", 'success')
+                self._log_step(f"Chrome/Chromium iniciado con driver: {chromedriver_path}", 'success')
                 return self._driver
             else:
                 # Fallback webdriver-manager
@@ -245,24 +281,30 @@ class DriverManager:
             raise
     
     def _init_firefox(self):
-        """Inicializa Mozilla Firefox"""
+        """Inicializa Mozilla Firefox (incl. Firefox ESR en Linux/Docker)"""
         self._log_step("Inicializando Mozilla Firefox...", 'info')
         
         options = FirefoxOptions()
+        # En Docker/Linux: binario firefox-esr si existe
+        firefox_bin = os.environ.get('FIREFOX_BIN')
+        if not firefox_bin and os.path.exists('/usr/bin/firefox-esr'):
+            firefox_bin = '/usr/bin/firefox-esr'
+        if firefox_bin:
+            options.binary_location = firefox_bin
+            self._log_step(f"Binario: {firefox_bin}", 'info')
         self._apply_common_options_firefox(options)
         
         try:
-            # Intentar GeckoDriver del sistema
-            geckodriver_path = None
-            possible_paths = [
-                '/usr/bin/geckodriver',
-                '/usr/local/bin/geckodriver',
-            ]
-            
-            for path in possible_paths:
-                if os.path.exists(path):
-                    geckodriver_path = path
-                    break
+            # Intentar GeckoDriver del sistema (Selenium 4 también lo descarga si falta)
+            geckodriver_path = os.environ.get('GECKODRIVER')
+            if not geckodriver_path or not os.path.exists(geckodriver_path):
+                geckodriver_path = None
+            possible_paths = ['/usr/bin/geckodriver', '/usr/local/bin/geckodriver']
+            if not geckodriver_path:
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        geckodriver_path = path
+                        break
             
             if geckodriver_path:
                 service = FirefoxService(geckodriver_path)
@@ -290,11 +332,19 @@ class DriverManager:
         # --- CONFIGURACIÓN BASE ---
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-setuid-sandbox')
         options.add_argument('--disable-infobars')
         options.add_argument('--start-maximized')
         options.add_argument('--disable-notifications')
         options.add_argument('--ignore-certificate-errors')
         options.add_argument('--disable-popup-blocking')
+        # Estabilidad en Docker/headless (evita crashes al hacer click)
+        if os.path.exists('/.dockerenv'):
+            options.add_argument('--no-first-run')
+            options.add_argument('--no-zygote')
+            options.add_argument('--disable-backgrounding-occluded-windows')
+            options.add_argument('--disable-renderer-backgrounding')
+            options.add_argument('--window-size=1920,1080')
         
         # --- OPTIMIZACIONES DE RENDIMIENTO (CPU/RAM) ---
         options.add_argument('--disable-gpu')

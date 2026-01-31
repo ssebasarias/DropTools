@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, XCircle, Play, RefreshCw, FileText, Phone, User, Package } from 'lucide-react';
-import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount, fetchReporterConfig, updateReporterConfig, startReporterWorkflow, fetchReporterStatus, fetchReporterList } from '../../services/api';
+import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, XCircle, Play, RefreshCw, FileText, Phone, User, Package, Square } from 'lucide-react';
+import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount, fetchReporterConfig, updateReporterConfig, startReporterWorkflow, stopReporterProcesses, fetchReporterStatus, fetchReporterList, fetchReporterEnv } from '../../services/api';
 import SubscriptionGate from '../../components/common/SubscriptionGate';
 import { getAuthUser } from '../../services/authService';
 import { hasTier } from '../../utils/subscription';
@@ -15,11 +15,13 @@ const ReporterConfigInner = () => {
 
     // Reporter status & control
     const [starting, setStarting] = useState(false);
+    const [stoppingProcesses, setStoppingProcesses] = useState(false);
     const [status, setStatus] = useState(null);
     const [statusLoading, setStatusLoading] = useState(false);
     const [reportsList, setReportsList] = useState([]);
     const [reportsLoading, setReportsLoading] = useState(false);
     const [workflowProgress, setWorkflowProgress] = useState(null);
+    const [reporterEnv, setReporterEnv] = useState(null); // { dahell_env, reporter_use_celery, message }
 
     const [form, setForm] = useState({
         label: 'reporter',
@@ -53,15 +55,13 @@ const ReporterConfigInner = () => {
             setStatus(statusData);
             if (statusData?.workflow_progress) {
                 setWorkflowProgress(statusData.workflow_progress);
+            } else {
+                setWorkflowProgress((prev) => prev ?? null);
             }
-            // Clear error on success
             if (!silent) setError('');
         } catch (e) {
             console.error('Error cargando estado:', e);
-            // Always surface errors to user
-            if (!silent) {
-                setError(e.message || 'Error al cargar el estado del reporter');
-            }
+            if (!silent) setError(e.message || 'Error al cargar el estado del reporter');
         } finally {
             if (!silent) setStatusLoading(false);
         }
@@ -87,58 +87,89 @@ const ReporterConfigInner = () => {
         setError('');
         setStarting(true);
         try {
-            await startReporterWorkflow();
+            const data = await startReporterWorkflow();
+            const isDevelopmentInProcess = data.environment === 'development';
 
-            // ACTUALIZACIÓN OPTIMISTA: Evitar parpadeo
-            setWorkflowProgress({
-                status: 'step1_running',
-                current_message: 'Iniciando servicio...',
-                messages: ['Solicitud enviada. Esperando respuesta del worker...']
-            });
-
-            // Dar tiempo al worker para arrancar antes de liberar el botón
-            setTimeout(() => {
-                loadStatus(true); // Recargar estado real
+            if (isDevelopmentInProcess) {
+                setWorkflowProgress({
+                    status: data.success ? 'completed' : 'failed',
+                    current_message: data.message || (data.success ? 'Completado (desarrollo)' : 'Falló (desarrollo)'),
+                    messages: [data.message || '']
+                });
+                loadStatus(true);
                 loadReportsList(true);
                 setStarting(false);
-            }, 3000);
-
+            } else {
+                setWorkflowProgress({
+                    status: 'step1_running',
+                    current_message: 'Encolado. Esperando worker...',
+                    messages: ['Solicitud enviada. Esperando respuesta del worker...']
+                });
+                setTimeout(() => {
+                    loadStatus(true);
+                    loadReportsList(true);
+                    setStarting(false);
+                }, 3000);
+            }
         } catch (e) {
-            setError(e.message || 'Error al iniciar workflow');
+            const msg = e.message || 'Error al iniciar workflow';
+            const extra = e.body?.traceback || e.body?.error;
+            setError(extra ? `${msg}\n${extra}` : msg);
             setStarting(false);
         }
     };
+
+    const handleStopProcesses = async () => {
+        setError('');
+        setStoppingProcesses(true);
+        try {
+            const data = await stopReporterProcesses();
+            setError('');
+            const msg = data.message || `Detenidos: ${data.stopped ?? 0} tarea(s). Cola purgada: ${data.purged ? 'sí' : 'no'}.`;
+            setWorkflowProgress(prev => prev
+                ? { ...prev, status: 'stopped', current_message: `Detenido. ${msg}`, messages: [...(prev.messages || []), `[Detenido] ${msg}`] }
+                : { status: 'stopped', current_message: `Detenido. ${msg}`, messages: [`[Detenido] ${msg}`] }
+            );
+            loadStatus(true);
+            loadReportsList(true);
+        } catch (e) {
+            setError(e.message || 'Error al detener procesos');
+        } finally {
+            setStoppingProcesses(false);
+        }
+    };
+
+    const loadReporterEnv = useCallback(async () => {
+        try {
+            const envData = await fetchReporterEnv();
+            setReporterEnv(envData);
+        } catch {
+            setReporterEnv({ dahell_env: 'production', reporter_use_celery: true });
+        }
+    }, []);
 
     useEffect(() => {
         load();
         loadStatus();
         loadReportsList();
-    }, [load, loadStatus, loadReportsList]);
+        loadReporterEnv();
+    }, [load, loadStatus, loadReportsList, loadReporterEnv]);
 
-    // Auto-refresh status every 3 seconds when workflow is running
+    // Auto-refresh status cuando el workflow está corriendo (contador y panel se actualizan al marcar órdenes)
     useEffect(() => {
         const isWorkflowRunning = workflowProgress &&
             ['step1_running', 'step2_running', 'step3_running', 'step1_completed', 'step2_completed'].includes(workflowProgress.status);
+        const isStep3 = workflowProgress?.status === 'step3_running';
 
         let interval;
+        const ms = isStep3 ? 2000 : (isWorkflowRunning ? 3000 : 10000);
 
-        if (isWorkflowRunning) {
-            interval = setInterval(() => {
-                loadStatus(true);
-                loadReportsList(true); // También actualizar lista de reportes cuando el workflow está corriendo
-            }, 3000); // Polling más frecuente cuando está corriendo
-        } else {
-            // Polling normal cuando no está corriendo
-            interval = setInterval(() => {
-                loadStatus(true);
-            }, 10000);
-        }
+        interval = setInterval(() => {
+            loadStatus(true);
+            if (isWorkflowRunning) loadReportsList(true);
+        }, ms);
 
-        return () => {
-            if (interval) {
-                clearInterval(interval);
-            }
-        };
+        return () => clearInterval(interval);
     }, [workflowProgress?.status, loadStatus, loadReportsList]);
 
     // Auto-refresh reports list when status updates
@@ -163,7 +194,25 @@ const ReporterConfigInner = () => {
                 }
             `}</style>
             <div style={{ marginBottom: '2rem' }}>
-                <h1 className="text-gradient" style={{ fontSize: '2.5rem', margin: 0 }}>Reporter Configuration</h1>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                    <h1 className="text-gradient" style={{ fontSize: '2.5rem', margin: 0 }}>Reporter Configuration</h1>
+                    {reporterEnv && (
+                        <span
+                            title={reporterEnv.message || (reporterEnv.run_mode === 'development_docker' ? 'Reporter vía Celery en Docker (pruebas)' : reporterEnv.dahell_env === 'development' ? 'Reporter en proceso (navegador visible)' : 'Reporter vía Celery (producción)')}
+                            style={{
+                                padding: '0.35rem 0.75rem',
+                                borderRadius: '9999px',
+                                fontSize: '0.8rem',
+                                fontWeight: 600,
+                                backgroundColor: reporterEnv.run_mode === 'development_docker' ? 'rgba(245, 158, 11, 0.2)' : reporterEnv.dahell_env === 'development' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(99, 102, 241, 0.2)',
+                                color: reporterEnv.run_mode === 'development_docker' ? 'var(--warning)' : reporterEnv.dahell_env === 'development' ? 'var(--success)' : 'var(--primary)',
+                                border: `1px solid ${reporterEnv.run_mode === 'development_docker' ? 'var(--warning)' : reporterEnv.dahell_env === 'development' ? 'var(--success)' : 'var(--primary)'}`,
+                            }}
+                        >
+                            {reporterEnv.run_mode === 'development_docker' ? 'Modo desarrollo (Docker)' : reporterEnv.dahell_env === 'development' ? 'Modo desarrollo' : 'Modo producción'}
+                        </span>
+                    )}
+                </div>
                 <p className="text-muted" style={{ marginTop: '0.5rem' }}>Gestiona la generación de reportes de órdenes sin movimiento.</p>
             </div>
 
@@ -223,7 +272,10 @@ const ReporterConfigInner = () => {
                             border: '1px solid rgba(239,68,68,0.3)',
                             borderRadius: '8px',
                             color: '#ef4444',
-                            fontSize: '0.9rem'
+                            fontSize: '0.9rem',
+                            whiteSpace: 'pre-wrap',
+                            maxHeight: '200px',
+                            overflow: 'auto'
                         }}>
                             {error}
                         </div>
@@ -369,7 +421,7 @@ const ReporterConfigInner = () => {
             {/* Segunda fila: Botón Iniciar y KPI Contador */}
             <div className="glass-card" style={{ marginBottom: '2rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '2rem', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1, flexWrap: 'wrap' }}>
                         <button
                             type="button"
                             className="btn-primary"
@@ -396,6 +448,37 @@ const ReporterConfigInner = () => {
                                 </>
                             )}
                         </button>
+                        {(reporterEnv?.run_mode === 'development' || reporterEnv?.run_mode === 'development_docker') && (
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    opacity: stoppingProcesses ? 0.7 : 1,
+                                    padding: '1rem 1.5rem',
+                                    fontSize: '1rem',
+                                    borderColor: 'var(--danger)',
+                                    color: 'var(--danger)'
+                                }}
+                                disabled={stoppingProcesses || starting}
+                                onClick={handleStopProcesses}
+                                title="Detener todas las tareas del reporter en segundo plano (Celery) y vaciar la cola. Solo en modo desarrollo."
+                            >
+                                {stoppingProcesses ? (
+                                    <>
+                                        <RefreshCw size={18} className="spinning" />
+                                        Deteniendo...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Square size={18} />
+                                        Detener procesos
+                                    </>
+                                )}
+                            </button>
+                        )}
                     </div>
 
                     {/* KPI Contador de Reportes del Día */}
@@ -437,28 +520,65 @@ const ReporterConfigInner = () => {
             {/* Panel de Progreso del Workflow */}
             {workflowProgress && (
                 <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(99,102,241,0.3)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
-                        <div style={{
-                            padding: '0.75rem',
-                            background: workflowProgress.status === 'completed' ? 'rgba(16,185,129,0.2)' :
-                                workflowProgress.status === 'failed' ? 'rgba(239,68,68,0.2)' :
-                                    'rgba(99,102,241,0.2)',
-                            borderRadius: '12px'
-                        }}>
-                            {workflowProgress.status === 'completed' ? (
-                                <CheckCircle2 size={24} style={{ color: 'var(--success)' }} />
-                            ) : workflowProgress.status === 'failed' ? (
-                                <XCircle size={24} style={{ color: 'var(--danger)' }} />
-                            ) : (
-                                <RefreshCw size={24} className="spinning" style={{ color: 'var(--primary)' }} />
-                            )}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1, minWidth: 0 }}>
+                            <div style={{
+                                padding: '0.75rem',
+                                background: workflowProgress.status === 'completed' ? 'rgba(16,185,129,0.2)' :
+                                    workflowProgress.status === 'stopped' || (workflowProgress.status === 'failed' && workflowProgress.current_message && workflowProgress.current_message.includes('detenido')) ? 'rgba(245,158,11,0.2)' :
+                                        workflowProgress.status === 'failed' ? 'rgba(239,68,68,0.2)' :
+                                            'rgba(99,102,241,0.2)',
+                                borderRadius: '12px'
+                            }}>
+                                {workflowProgress.status === 'completed' ? (
+                                    <CheckCircle2 size={24} style={{ color: 'var(--success)' }} />
+                                ) : workflowProgress.status === 'stopped' || (workflowProgress.status === 'failed' && workflowProgress.current_message && workflowProgress.current_message.includes('detenido')) ? (
+                                    <Square size={24} style={{ color: 'var(--warning)' }} />
+                                ) : workflowProgress.status === 'failed' ? (
+                                    <XCircle size={24} style={{ color: 'var(--danger)' }} />
+                                ) : (
+                                    <RefreshCw size={24} className="spinning" style={{ color: 'var(--primary)' }} />
+                                )}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Progreso del Workflow</h3>
+                                <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0 0 0' }}>
+                                    {(workflowProgress.status === 'stopped' || (workflowProgress.status === 'failed' && workflowProgress.current_message && workflowProgress.current_message.includes('detenido')))
+                                        ? 'Detenido. No hay procesos en ejecución.'
+                                        : (workflowProgress.current_message || 'Iniciando...')}
+                                </p>
+                            </div>
                         </div>
-                        <div style={{ flex: 1 }}>
-                            <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Progreso del Workflow</h3>
-                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0 0 0' }}>
-                                {workflowProgress.current_message || 'Iniciando...'}
-                            </p>
-                        </div>
+                        {(reporterEnv?.run_mode === 'development' || reporterEnv?.run_mode === 'development_docker') && (
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    opacity: stoppingProcesses ? 0.7 : 1,
+                                    borderColor: 'var(--danger)',
+                                    color: 'var(--danger)',
+                                    flexShrink: 0
+                                }}
+                                disabled={stoppingProcesses || starting}
+                                onClick={handleStopProcesses}
+                                title="Detener todas las tareas del reporter y vaciar la cola. Verifica que no quede nada ejecutándose."
+                            >
+                                {stoppingProcesses ? (
+                                    <>
+                                        <RefreshCw size={16} className="spinning" />
+                                        Deteniendo...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Square size={16} />
+                                        Detener procesos
+                                    </>
+                                )}
+                            </button>
+                        )}
                     </div>
 
                     {/* Lista de mensajes de progreso */}

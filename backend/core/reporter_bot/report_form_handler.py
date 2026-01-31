@@ -57,7 +57,14 @@ class ReportFormHandler:
         self.driver = driver
         self.logger = logger
         self.wait = WebDriverWait(driver, 15)
+        # En Docker/headless la página puede tardar más; tiempo mayor para Siguiente
+        try:
+            from core.reporter_bot.docker_config import IS_DOCKER, get_downloader_wait_timeout
+            self.long_wait_sec = get_downloader_wait_timeout() if IS_DOCKER else 25
+        except Exception:
+            self.long_wait_sec = 25
         self.short_wait = WebDriverWait(driver, 5)
+        self.long_wait = WebDriverWait(driver, self.long_wait_sec)
     
     def click_new_consultation(self, order_row=None):
         """
@@ -241,37 +248,99 @@ class ReportFormHandler:
             self.logger.error(f"❌ Error al seleccionar motivo: {str(e)}")
             return False
     
+    def _save_screenshot_on_failure(self, prefix="fail_siguiente"):
+        """Guarda captura en results/screenshots para diagnóstico."""
+        try:
+            from django.conf import settings
+            screenshots_dir = Path(settings.BASE_DIR) / "results" / "screenshots"
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+            from datetime import datetime
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = screenshots_dir / f"{prefix}_{ts}.png"
+            self.driver.save_screenshot(str(path))
+            if self.logger:
+                self.logger.warning(f"   📷 Screenshot guardado: {path}")
+        except Exception:
+            pass
+
+    def _is_wait_time_alert_visible(self):
+        """
+        Comprueba si está visible el alert de espera (un día sin movimiento).
+        Si está visible, no debe intentarse buscar ni hacer click en Next.
+        Soporta texto en español e inglés.
+        """
+        for xpath in (
+            "//app-alert//p[contains(@class, 'alert-message') and contains(., 'un día sin movimiento')]",
+            "//app-alert//p[contains(@class, 'alert-message') and contains(., 'one day without any movement')]",
+        ):
+            try:
+                el = self.driver.find_element(By.XPATH, xpath)
+                if el.is_displayed():
+                    return True
+            except NoSuchElementException:
+                continue
+            except Exception:
+                continue
+        return False
+
     def click_next_button(self):
         """
-        Click en el botón Siguiente (con fallback a Cancelar si falla)
-        
+        Click en el botón Siguiente/Next (selectores por clase + texto ES/EN).
+        Si está visible el alert de "esperar un día sin movimiento", no intenta buscar el botón.
+
         Returns:
             True si fue exitoso, False en caso contrario
         """
+        if self._is_wait_time_alert_visible():
+            self.logger.warning("⚠️ Alert de espera visible: no se busca botón Siguiente/Next")
+            return False
+
         self.logger.info("Haciendo click en 'Siguiente'...")
-        
+        # Selectores: botón "btn primary default normal" con texto Next/Siguiente (Dropi); luego genéricos
+        next_selectors = [
+            (By.XPATH, "//button[contains(@class, 'btn') and contains(@class, 'primary') and contains(@class, 'normal') and (.//span[contains(text(), 'Next')] or .//span[contains(text(), 'Siguiente')])]"),
+            (By.XPATH, "//button[.//span[@class='text' and (contains(text(), 'Next') or contains(text(), 'Siguiente'))]]"),
+            (By.XPATH, "//button[contains(@class, 'btn') and (contains(., 'Siguiente') or contains(., 'Next'))]"),
+            (By.XPATH, "//button[contains(@class, 'p-button') and (contains(., 'Siguiente') or contains(., 'Next'))]"),
+            (By.XPATH, "//button[.//span[contains(text(), 'Siguiente') or contains(text(), 'Next')]]"),
+            (By.XPATH, "//button[.//*[contains(text(), 'Siguiente') or contains(text(), 'Next')]]"),
+        ]
+        next_button = None
         try:
-            next_xpath = "//button[contains(@class, 'btn') and (descendant::span[contains(text(), 'Siguiente')] or descendant::span[contains(text(), 'Next')])]"
-            
-            next_button = self.short_wait.until(EC.element_to_be_clickable((By.XPATH, next_xpath)))
-            
+            for by, selector in next_selectors:
+                try:
+                    next_button = self.long_wait.until(EC.presence_of_element_located((by, selector)))
+                    if not next_button.is_displayed():
+                        next_button = None
+                        continue
+                    if next_button.get_attribute("disabled") is not None or "disabled" in (next_button.get_attribute("class") or "").split():
+                        self.logger.warning("⚠️ Botón Siguiente/Next está bloqueado (p. ej. alert de espera)")
+                        return False
+                    break
+                except TimeoutException:
+                    next_button = None
+                    continue
+            if next_button is None:
+                self._save_screenshot_on_failure("fail_siguiente")
+                self.logger.warning("⚠️ Timeout al buscar botón 'Siguiente' - Probablemente bloqueado")
+                self._close_modal()
+                return False
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", next_button)
             time.sleep(0.5)
-            
             try:
                 next_button.click()
             except Exception:
                 self.driver.execute_script("arguments[0].click();", next_button)
             time.sleep(1)
-            
             self.logger.info("✅ Click en 'Siguiente' exitoso")
             return True
-            
         except TimeoutException:
+            self._save_screenshot_on_failure("fail_siguiente")
             self.logger.warning("⚠️ Timeout al buscar botón 'Siguiente' - Probablemente bloqueado")
             self._close_modal()
             return False
         except Exception as e:
+            self._save_screenshot_on_failure("fail_siguiente")
             self.logger.error(f"❌ Error al hacer click en 'Siguiente': {str(e)}")
             self._close_modal()
             return False

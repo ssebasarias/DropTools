@@ -1,4 +1,4 @@
-﻿
+
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.auth.models import AbstractUser
@@ -751,21 +751,33 @@ class RawOrderSnapshot(models.Model):
     # Cliente
     customer_name = models.CharField(max_length=255, null=True, blank=True, help_text="Columna: NOMBRE CLIENTE")
     customer_phone = models.CharField(max_length=50, db_index=True, null=True, blank=True, help_text="Columna: TELÃ‰FONO")
+    customer_email = models.CharField(max_length=255, null=True, blank=True, help_text="Columna: EMAIL")
     address = models.TextField(null=True, blank=True, help_text="Columna: DIRECCION")
     city = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: CIUDAD DESTINO")
     department = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: DEPARTAMENTO DESTINO")
-    
+
     # Producto
     product_name = models.TextField(null=True, blank=True, help_text="Columna: PRODUCTO")
+    product_id = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: PRODUCTO ID")
+    sku = models.CharField(max_length=100, null=True, blank=True, db_index=True, help_text="Columna: SKU")
+    variation = models.CharField(max_length=255, null=True, blank=True, help_text="Columna: VARIACION")
     quantity = models.IntegerField(default=1, help_text="Columna: CANTIDAD")
-    
+
     # Finanzas
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Columna: TOTAL DE LA ORDEN")
-    
+    profit = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Calculado: TOTAL DE LA ORDEN - PRECIO FLETE - PRECIO PROVEEDOR")
+    shipping_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Columna: PRECIO FLETE")
+    supplier_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Columna: PRECIO PROVEEDOR")
+
+    # Canal / tienda (útiles para análisis por tienda y canal)
+    store_type = models.CharField(max_length=50, null=True, blank=True, help_text="Columna: TIPO DE TIENDA")
+    store_name = models.CharField(max_length=100, null=True, blank=True, help_text="Columna: TIENDA")
+
     # Tiempos
     order_date = models.DateField(null=True, blank=True, help_text="Columna: FECHA (convertida a Date)")
-    
-    
+    order_time = models.CharField(max_length=20, null=True, blank=True, help_text="Columna: HORA")
+    report_date = models.DateField(null=True, blank=True, help_text="Columna: FECHA DE REPORTE")
+
     class Meta:
         db_table = 'raw_order_snapshots'
         indexes = [

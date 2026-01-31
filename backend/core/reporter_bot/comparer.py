@@ -71,43 +71,28 @@ class ReportComparer:
             self.logger.error("No user found.")
             return None, None
 
-        # 1. Get Actual (Latest SUCCESS batch)
-        actual_batch = ReportBatch.objects.filter(
-            user=self.user,
-            status='SUCCESS'
-        ).order_by('-created_at').first()
-
-        if not actual_batch:
-            self.logger.error("No SUCCESS batches found for this user.")
-            return None, None
-        
-        self.logger.info(f"   📅 Batch ACTUAL encontrado: ID {actual_batch.id} ({actual_batch.created_at.date()})")
-
-        # 2. Get Base (Previous day or any previous batch)
-        base_batch = ReportBatch.objects.filter(
-            user=self.user,
-            status='SUCCESS',
-            created_at__date__lt=actual_batch.created_at.date()
-        ).order_by('-created_at').first()
-
-        if base_batch:
-            self.logger.info(f"   ✅ Batch BASE encontrado: ID {base_batch.id} ({base_batch.created_at.date()})")
-        else:
-            self.logger.warning(f"   ⚠️ No se encontraron batches anteriores a hoy ({actual_batch.created_at.date()})")
-            
-            # Fallback: Get any previous successful batch
-            base_batch = ReportBatch.objects.filter(
-                user=self.user,
-                status='SUCCESS',
-                id__lt=actual_batch.id
-            ).order_by('-created_at').first()
-
-            if base_batch:
-                self.logger.info(f"   ✅ Batch BASE alternativo encontrado: ID {base_batch.id} ({base_batch.created_at.date()})")
-            else:
-                self.logger.error("   ❌ No hay batches históricos disponibles para comparar.")
+        # 1. Actual = batch más reciente SUCCESS; Base = el anterior (segundo más reciente).
+        # Así no dependemos de fecha calendario/timezone: cuando descargas Ayer y Hoy en la misma
+        # ejecución, comparamos Hoy (actual) vs Ayer (base) sin buscar "día anterior".
+        batches = list(
+            ReportBatch.objects.filter(user=self.user, status='SUCCESS')
+            .order_by('-created_at')[:2]
+        )
+        if len(batches) < 2:
+            if not batches:
+                self.logger.error("No SUCCESS batches found for this user.")
                 return None, None
-        
+            self.logger.error("   ❌ No hay al menos 2 batches SUCCESS para comparar (necesitas Ayer + Hoy).")
+            return None, None
+
+        actual_batch = batches[0]
+        base_batch = batches[1]
+        self.logger.info(
+            f"   📅 Batch ACTUAL: ID {actual_batch.id} (creado {actual_batch.created_at.strftime('%Y-%m-%d %H:%M')})"
+        )
+        self.logger.info(
+            f"   📅 Batch BASE (anterior): ID {base_batch.id} (creado {base_batch.created_at.strftime('%Y-%m-%d %H:%M')})"
+        )
         days_diff = (actual_batch.created_at - base_batch.created_at).days
         self.logger.info(f"      Diferencia temporal: {days_diff} días")
 
@@ -133,11 +118,13 @@ class ReportComparer:
 
         self.logger.info("   📥 Cargando snapshots en memoria para comparación rápida...")
         
-        # Load Base: {dropi_id: status}
+        # Load Base: {dropi_order_id: status} — solo IDs reales (no NO-ID-*)
         base_map = {}
         base_qs = RawOrderSnapshot.objects.filter(
             batch=base,
             current_status__in=self.ESTADOS_INTERES
+        ).exclude(
+            dropi_order_id__startswith='NO-ID-'
         ).values('dropi_order_id', 'current_status')
 
         for item in base_qs:
@@ -147,10 +134,12 @@ class ReportComparer:
         if len(base_map) == 0:
             self.logger.warning("      ⚠️ No hay snapshots relevantes en el batch base!")
 
-        # Load Actual and Compare
+        # Load Actual and Compare — solo IDs reales; mismo ID + mismo estado = sin movimiento
         actual_qs = RawOrderSnapshot.objects.filter(
             batch=actual,
             current_status__in=self.ESTADOS_INTERES
+        ).exclude(
+            dropi_order_id__startswith='NO-ID-'
         )
 
         self.logger.info(f"      Snapshots Actual relevantes: {actual_qs.count()}")

@@ -20,6 +20,16 @@ except Exception as e:
 # SECURITY: Do not keep a production SECRET_KEY in source control.
 # Require `SECRET_KEY` via env in non-debug environments.
 DEBUG = env.bool('DEBUG', default=False)
+
+# --- Entorno: desarrollo vs producción (una sola fuente de verdad) ---
+# development = config de desarrollo (timeouts, logs). production = config de producción.
+# Si estás en Docker (WSL/PC): siempre se usa Celery (para probar igual que en servidor).
+# Si estás en local sin Docker: con development el reporter se ejecuta en proceso (Edge visible).
+DAHELL_ENV = env('DAHELL_ENV', default='production').lower().strip()
+if DAHELL_ENV not in ('development', 'production'):
+    DAHELL_ENV = 'production'
+IS_DEVELOPMENT = DAHELL_ENV == 'development'
+IS_DOCKER = os.path.exists('/.dockerenv') or env.bool('DOCKER_CONTAINER', default=False)
 if DEBUG:
     # In debug mode allow a local insecure default to make development easier.
     SECRET_KEY = env('SECRET_KEY', default='django-insecure-dev-placeholder')
@@ -151,3 +161,20 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # Tomar 1 tarea a la vez
 CELERY_TASK_TIME_LIMIT = 3600  # 1 hora máximo por tarea
 CELERY_TASK_SOFT_TIME_LIMIT = 3300  # Advertencia a los 55 minutos
 CELERY_RESULT_EXPIRES = 3600  # Resultados expiran en 1 hora
+
+# Reporter: en proceso solo cuando desarrollo Y no Docker (Windows local). En Docker siempre Celery.
+REPORTER_USE_CELERY = (DAHELL_ENV == 'production') or IS_DOCKER
+
+# Etiqueta para UI/logs: development | development_docker | production
+REPORTER_RUN_MODE = 'development_docker' if (IS_DEVELOPMENT and IS_DOCKER) else ('development' if IS_DEVELOPMENT else 'production')
+
+# Confirmación en consola al cargar settings (para certeza de modo activo)
+def _log_dahell_env():
+    if IS_DEVELOPMENT and IS_DOCKER:
+        rep = "Celery (desarrollo Docker)"
+    elif REPORTER_USE_CELERY:
+        rep = "Celery (producción)"
+    else:
+        rep = "en proceso (desarrollo local)"
+    print(f"[DAHELL] DAHELL_ENV={DAHELL_ENV} | Reporter: {rep}")
+_log_dahell_env()

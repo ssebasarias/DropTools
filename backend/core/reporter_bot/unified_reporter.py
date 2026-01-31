@@ -40,7 +40,7 @@ class UnifiedReporter:
     - Gestión centralizada de errores
     """
     
-    def __init__(self, user_id, headless=False, logger=None, download_dir=None, browser='edge'):
+    def __init__(self, user_id, headless=False, logger=None, download_dir=None, browser='edge', browser_priority=None):
         """
         Inicializa el orquestador
         
@@ -49,13 +49,24 @@ class UnifiedReporter:
             headless: Si True, ejecuta en modo headless
             logger: Logger configurado (opcional)
             download_dir: Directorio para descargas (opcional)
-            browser: Navegador a usar ('chrome', 'edge', 'brave', 'firefox')
+            browser: Navegador por defecto si no se usa fallback
+            browser_priority: Lista de navegadores a intentar en orden, ej. ['chrome','firefox','edge'].
+                              Si es None, se usa env BROWSER_ORDER o valor por defecto según entorno.
         """
+        import os
         self.user_id = user_id
         self.headless = headless
         self.logger = logger or setup_logger('UnifiedReporter')
         self.download_dir = download_dir
         self.browser = browser
+        # Fallback: orden de navegadores según entorno (una sola fuente: docker_config)
+        from core.reporter_bot.docker_config import get_reporter_browser_order
+        if browser_priority is not None:
+            self.browser_priority = browser_priority if isinstance(browser_priority, list) else [
+                b.strip() for b in str(browser_priority).split(',') if b.strip()
+            ]
+        else:
+            self.browser_priority = get_reporter_browser_order()
         
         # Validar usuario
         try:
@@ -93,21 +104,28 @@ class UnifiedReporter:
         
     def _init_progress(self):
         """Initialize or retrieve WorkflowProgress for user."""
+        from django.utils import timezone
         try:
             user = User.objects.get(id=self.user_id)
             # Find running or recent pending progress
             wp = WorkflowProgress.objects.filter(
-                user=user, 
+                user=user,
                 status__in=['pending', 'step1_running', 'step2_running', 'step3_running']
             ).order_by('-started_at').first()
-            
+
             if not wp:
                 wp = WorkflowProgress.objects.create(
-                    user=user, 
+                    user=user,
                     status='step1_running',
                     current_message='Iniciando flujo de trabajo unificado...',
-                    messages=['Iniciando orquestador...']
+                    messages=['Iniciando orquestador...'],
+                    started_at=timezone.now(),
                 )
+            else:
+                # Si la BD devuelve started_at naive (p. ej. columna sin time zone), convertir a aware para evitar RuntimeWarning al guardar
+                if wp.started_at and timezone.is_naive(wp.started_at):
+                    wp.started_at = timezone.make_aware(wp.started_at, timezone.get_current_timezone())
+                    wp.save(update_fields=['started_at'])
             self.workflow_progress = wp
         except Exception as e:
             self.logger.error(f"Error initializing workflow progress: {e}")
@@ -164,9 +182,9 @@ class UnifiedReporter:
                 headless=self.headless,
                 logger=self.logger,
                 download_dir=self.download_dir,
-                browser=self.browser
+                browser=self.browser_priority[0] if self.browser_priority else self.browser
             )
-            self.driver = self.driver_manager.init_driver()
+            self.driver = self.driver_manager.init_driver(browser_priority=self.browser_priority)
             
             if not self.driver:
                 self.logger.error("❌ No se pudo inicializar el driver")
@@ -200,6 +218,8 @@ class UnifiedReporter:
             self.logger.info("="*60)
             self.logger.info("📥 PASO 3: DESCARGA DE REPORTES")
             self.logger.info("="*60)
+            # Siempre visible en docker compose logs (Celery suele mostrar WARNING)
+            self.logger.warning("📥 PASO 3: DESCARGA - Iniciando (Mis Pedidos → Acciones → Orders with Products)...")
             
             downloader = DropiDownloader(
                 driver=self.driver,
@@ -220,6 +240,7 @@ class UnifiedReporter:
             # Si no hay descargas exitosas, no se puede ejecutar la comparación
             if not downloader_success:
                 self.logger.error("❌ No se descargaron archivos. El proceso de comparación no puede ejecutarse.")
+                self.logger.warning("🛑 PASO 3: DESCARGA FALLIDA - Abortando. No se ejecutan Comparer ni Reporter.")
                 self.stats['comparer'] = {
                     'success': False,
                     'total_detected': 0
@@ -232,6 +253,7 @@ class UnifiedReporter:
                 return self.stats
                 
             self._update_progress('step1_completed', f'Descarga completada: {len(downloaded_files)} archivos.')
+            self.logger.warning(f"✅ PASO 3: DESCARGA OK - {len(downloaded_files)} archivo(s). Iniciando comparación.")
             
             # ========================================================================
             # PASO 4: COMPARER (Lógica BD pura - No requiere browser)
@@ -241,6 +263,7 @@ class UnifiedReporter:
             self.logger.info("="*60)
             self.logger.info("🕵️ PASO 4: COMPARACIÓN DE REPORTES (BD)")
             self.logger.info("="*60)
+            self.logger.warning("🕵️ PASO 4: COMPARACIÓN - Iniciando (solo BD, sin navegador)...")
             
             comparer = ReportComparer(
                 user_id=self.user_id,
@@ -266,15 +289,20 @@ class UnifiedReporter:
             self.logger.info("="*60)
             self.logger.info("🤖 PASO 5: REPORTE DE ÓRDENES (Sesión Persistente)")
             self.logger.info("="*60)
+            self.logger.warning("🤖 PASO 5: REPORTER - Iniciando (formulario Siguiente + reportes en Dropi)...")
             
             self._update_progress('step3_running', 'Generando reportes en Dropi...')
-            
+
+            def on_order_processed(current, total, processed_count):
+                self._update_progress('step3_running', f'Procesando orden {current}/{total} ({processed_count} reportadas)...')
+
             reporter = DropiReporter(
                 driver=self.driver,
                 user_id=self.user_id,
-                logger=self.logger
+                logger=self.logger,
+                on_order_processed=on_order_processed
             )
-            
+
             reporter_stats = reporter.run()
             
             self.stats['reporter'] = reporter_stats

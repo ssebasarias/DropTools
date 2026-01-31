@@ -182,13 +182,50 @@ export const updateReporterConfig = async ({ executionTime }) => {
 // Reporter Control & Status
 // -----------------------------
 
+/** Timeout para POST reporter/start: en desarrollo puede tardar 1-2 min (ejecución en proceso) */
+const REPORTER_START_TIMEOUT_MS = 120000;
+
 export const startReporterWorkflow = async () => {
-    const response = await authFetch(`${API_URL}/reporter/start/`, {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REPORTER_START_TIMEOUT_MS);
+    try {
+        const response = await authFetch(`${API_URL}/reporter/start/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const err = new Error(data.error || 'No se pudo iniciar el workflow');
+            err.body = data;
+            throw err;
+        }
+        return data;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+};
+
+/** Modo activo (desarrollo vs producción). Público, no requiere auth. */
+export const fetchReporterEnv = async () => {
+    const response = await fetch(`${API_URL}/reporter/env/`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return { dahell_env: 'production', reporter_use_celery: true };
+    return data;
+};
+
+/** Detener todos los procesos del reporter (Celery activos + cola). Solo en modo desarrollo. */
+export const stopReporterProcesses = async () => {
+    const response = await authFetch(`${API_URL}/reporter/stop/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'No se pudo iniciar el workflow');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const err = new Error(data.error || 'No se pudieron detener los procesos');
+        err.body = data;
+        throw err;
+    }
     return data;
 };
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Server, Database, Activity, Cpu, CircuitBoard, Layers, ShoppingBag, Brain } from 'lucide-react';
+import { Server, Database, Activity, Cpu, CircuitBoard, Layers, ShoppingBag, Brain, Zap } from 'lucide-react';
 import { useSystemStatus } from '../hooks/useSystemStatus';
 import UnifiedWorkerCard from '../components/domain/system/UnifiedWorkerCard';
 import './Dashboard.css';
@@ -53,6 +53,10 @@ const SystemStatus = () => {
         { id: 'ai_trainer', name: 'AI Trainer (Cerebro)', icon: Brain, actions: ['restart'], color: '#f59e0b' }, // Amber
     ];
 
+    const workerServices = [
+        { id: 'celery_worker', name: 'Celery Worker (Reporter)', icon: Zap, actions: ['restart'], color: '#06b6d4' }, // Cyan
+    ];
+
     if (loading && Object.keys(stats).length === 0) {
         return (
             <div style={{ padding: '2rem', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
@@ -86,6 +90,7 @@ const SystemStatus = () => {
             {/* SECTIONS */}
             <Section title="Recolección" services={collectionServices} logs={logs} stats={stats} />
             <Section title="Análisis" services={analysisServices} logs={logs} stats={stats} />
+            <Section title="Workers" services={workerServices} logs={logs} stats={stats} />
 
         </div>
     );

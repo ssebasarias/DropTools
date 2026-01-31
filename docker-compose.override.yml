@@ -1,5 +1,14 @@
+# Override para desarrollo con Docker (Windows + WSL).
+# Levanta: docker compose up -d
+# Backend y Celery usan DAHELL_ENV=development → Reporter vía Celery pero con config de desarrollo (timeouts, logs).
+# En la UI verás "Modo desarrollo (Docker)". Sirve para probar el flujo igual que en producción antes de subir al servidor.
 services:
   backend:
+    environment:
+      - DAHELL_ENV=development
     volumes:
       - ./backend:/app/backend
       - ./raw_data:/app/raw_data
+  celery_worker:
+    environment:
+      - DAHELL_ENV=development
