@@ -105,38 +105,31 @@ class ClusterMembershipSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductClusterMembership
         fields = [
-            'id',
             'product',
             'cluster',
-            'similarity_score',
-            'joined_at'
+            'match_confidence',
+            'match_method'
         ]
 
 
 class ProductEmbeddingSerializer(serializers.ModelSerializer):
     """
     Serializer para embeddings de productos
-    Solo metadatos, no el vector completo (muy pesado)
+    Solo metadatos, no el vector completo (muy pesado).
+    El modelo solo tiene embedding_visual y processed_at.
     """
+    has_visual_embedding = serializers.SerializerMethodField()
+    
     class Meta:
         model = ProductEmbedding
         fields = [
             'product_id',
             'has_visual_embedding',
-            'has_text_embedding',
-            'embedding_model',
-            'created_at'
+            'processed_at'
         ]
-    
-    # Campos calculados para indicar presencia de embeddings
-    has_visual_embedding = serializers.SerializerMethodField()
-    has_text_embedding = serializers.SerializerMethodField()
     
     def get_has_visual_embedding(self, obj):
         return obj.embedding_visual is not None
-    
-    def get_has_text_embedding(self, obj):
-        return obj.embedding_text is not None
 
 
 # Serializers especializados para diferentes views
@@ -177,20 +170,22 @@ from .models import ReporterHourSlot, ReporterReservation, ReporterRun, Reporter
 
 
 class ReporterSlotSerializer(serializers.ModelSerializer):
-    """Slot horario con capacidad actual y disponible."""
-    current_users = serializers.SerializerMethodField()
+    """Slot horario con capacidad por peso (used_points, capacity_points, available)."""
+    used_points = serializers.SerializerMethodField()
     available = serializers.SerializerMethodField()
     hour_label = serializers.SerializerMethodField()
 
     class Meta:
         model = ReporterHourSlot
-        fields = ['id', 'hour', 'hour_label', 'max_users', 'current_users', 'available']
+        fields = ['id', 'hour', 'hour_label', 'capacity_points', 'used_points', 'available']
 
-    def get_current_users(self, obj):
-        return obj.reservations.count()
+    def get_used_points(self, obj):
+        return getattr(obj, 'used_points', None) or 0
 
     def get_available(self, obj):
-        return obj.reservations.count() < obj.max_users
+        used = getattr(obj, 'used_points', None) or 0
+        cap = getattr(obj, 'capacity_points', None) or 6
+        return used < cap
 
     def get_hour_label(self, obj):
         return f"{obj.hour:02d}:00"
@@ -207,10 +202,10 @@ class ReporterReservationSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReporterReservation
         fields = [
-            'id', 'slot', 'slot_id', 'monthly_orders_estimate',
+            'id', 'slot', 'slot_id', 'monthly_orders_estimate', 'calculated_weight',
             'estimated_pending_orders', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['estimated_pending_orders', 'created_at', 'updated_at']
+        read_only_fields = ['calculated_weight', 'estimated_pending_orders', 'created_at', 'updated_at']
 
 
 class ReporterRunSerializer(serializers.ModelSerializer):

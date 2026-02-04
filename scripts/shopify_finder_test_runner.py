@@ -10,15 +10,15 @@ Qué hace:
    tipo de página detectado, fuente JSON, etc.
 4) Opcional: te muestra un tail del log file `logs/shopify_finder.log`.
 
-Uso (PowerShell / CMD):
-    python backend/shopify_finder_test_runner.py "faja reductora"
-    python backend/shopify_finder_test_runner.py "corrector de postura" --max 80 --max_hits 15
-    python backend/shopify_finder_test_runner.py "faja reductora" --country co-co --timelimit y
-    python backend/shopify_finder_test_runner.py "faja reductora" --headless
+Uso (desde la raíz del proyecto):
+    python scripts/shopify_finder_test_runner.py "faja reductora"
+    python scripts/shopify_finder_test_runner.py "corrector de postura" --max 80 --max_hits 15
+    python scripts/shopify_finder_test_runner.py "faja reductora" --country co-co --timelimit y
+    python scripts/shopify_finder_test_runner.py "faja reductora" --headless
 
 Notas:
 - Este runner NO cambia tu Finder. Solo lo ejecuta y te resume resultados.
-- Si tu proyecto no tiene `manage.py` en el root, usa --manage "ruta/al/manage.py"
+- manage.py se busca en backend/ respecto a la raíz del proyecto. Si no lo encuentra, usa --manage "ruta/al/manage.py"
 """
 
 import argparse
@@ -43,7 +43,12 @@ def _force_utf8_stdout():
 def find_manage_py(start: Path) -> Path | None:
     """
     Busca manage.py subiendo carpetas desde 'start'.
+    También comprueba start/backend/manage.py (estructura típica con scripts/ en raíz).
     """
+    # Estructura típica: proyecto/scripts/este_script.py, proyecto/backend/manage.py
+    backend_manage = start / "backend" / "manage.py"
+    if backend_manage.exists():
+        return backend_manage
     cur = start.resolve()
     for _ in range(8):
         candidate = cur / "manage.py"
@@ -160,7 +165,7 @@ def main():
 
     ap = argparse.ArgumentParser(description="Verbose test runner for Django shopify_finder command.")
     ap.add_argument("query", help="Keyword o URL (ej: 'faja reductora' o https://tienda.com/products/x )")
-    ap.add_argument("--manage", default=None, help="Ruta a manage.py (si no está en el root).")
+    ap.add_argument("--manage", default=None, help="Ruta a manage.py (si no está en backend/).")
     ap.add_argument("--max", type=int, default=60, help="--max para shopify_finder (default 60)")
     ap.add_argument("--max_hits", type=int, default=25, help="--max_hits para shopify_finder (default 25)")
     ap.add_argument("--country", default="co-co", help="--country para shopify_finder (default co-co)")
@@ -173,9 +178,9 @@ def main():
     args = ap.parse_args()
 
     script_dir = Path(__file__).resolve().parent
-    project_root_guess = script_dir.parent  # si está en backend/, sube a root
+    project_root = script_dir.parent  # raíz del proyecto (scripts/ está en raíz)
 
-    manage_py = Path(args.manage).resolve() if args.manage else find_manage_py(project_root_guess)
+    manage_py = Path(args.manage).resolve() if args.manage else find_manage_py(project_root)
     if not manage_py:
         print("❌ No encontré manage.py automáticamente.")
         print("   Solución: pásalo explícito: --manage C:\\ruta\\a\\manage.py")

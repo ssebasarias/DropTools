@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, XCircle, RefreshCw, FileText, Phone, User, Package, Square, Calendar, BarChart3 } from 'lucide-react';
+import { Save, Info, Clock, Mail, Key, Plus, CheckCircle2, XCircle, RefreshCw, FileText, Phone, User, Package, Square, Calendar, BarChart3, Lock } from 'lucide-react';
 import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount, fetchReporterConfig, updateReporterConfig, stopReporterProcesses, fetchReporterStatus, fetchReporterList, fetchReporterEnv, fetchReporterSlots, fetchMyReservation, createReservation, deleteReservation, fetchReporterRuns, fetchReporterRunProgress } from '../../services/api';
 import SubscriptionGate from '../../components/common/SubscriptionGate';
 import { getAuthUser } from '../../services/authService';
@@ -40,6 +40,7 @@ const ReporterConfigInner = () => {
         is_default: false,
         executionTime: '08:00'
     });
+    const [proxyAssigned, setProxyAssigned] = useState(null); // Solo lectura: IP asignada (host:port o null)
 
     const load = useCallback(async () => {
         setError('');
@@ -51,6 +52,7 @@ const ReporterConfigInner = () => {
             if (cfg?.executionTime) {
                 setForm((prev) => ({ ...prev, executionTime: cfg.executionTime }));
             }
+            setProxyAssigned(cfg?.proxy_assigned ?? null);
         } catch (e) {
             setError(e.message || 'Error cargando cuentas');
         } finally {
@@ -189,14 +191,15 @@ const ReporterConfigInner = () => {
         }
     }, []);
 
+    // Carga inicial: cada llamada es independiente para que un error (ej. lista reportes) no bloquee slots ni reserva
     useEffect(() => {
-        load();
-        loadStatus();
-        loadReportsList();
-        loadReporterEnv();
-        loadSlots();
-        loadMyReservation();
-        loadRunsAndProgress();
+        load().catch(() => {});
+        loadStatus().catch(() => {});
+        loadReportsList().catch(() => {});
+        loadReporterEnv().catch(() => {});
+        loadSlots().catch(() => {});
+        loadMyReservation().catch(() => {});
+        loadRunsAndProgress().catch(() => {});
     }, [load, loadStatus, loadReportsList, loadReporterEnv, loadSlots, loadMyReservation, loadRunsAndProgress]);
 
     // Auto-refresh status cuando el workflow está corriendo (contador y panel se actualizan al marcar órdenes)
@@ -258,9 +261,50 @@ const ReporterConfigInner = () => {
                     )}
                 </div>
                 <p className="text-muted" style={{ marginTop: '0.5rem' }}>Gestiona la generación de reportes de órdenes sin movimiento.</p>
+                {proxyAssigned && (
+                    <p className="text-muted" style={{ marginTop: '0.25rem', fontSize: '0.9rem' }}>IP asignada: {proxyAssigned} (solo lectura)</p>
+                )}
             </div>
 
-            {/* Primera fila: Instrucciones y Formulario de cuenta */}
+            {/* Pantalla con reserva: Panel 1 — Información de cuenta */}
+            {myReservation && (
+                <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(16,185,129,0.25)' }}>
+                    <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Mail size={22} style={{ color: 'var(--primary)' }} />
+                        Información de cuenta
+                    </h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                        <div>
+                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0 0 0.25rem 0' }}>Email Dropi</p>
+                            <p style={{ margin: 0, fontWeight: 600 }}>{accounts.length > 0 ? (accounts.find(a => a.is_default)?.email || accounts[0]?.email) || 'Cuenta vinculada' : 'Cuenta vinculada'}</p>
+                        </div>
+                        <div>
+                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0 0 0.25rem 0' }}>Hora asignada</p>
+                            <p style={{ margin: 0, fontWeight: 600 }}>{myReservation.slot?.hour_label ?? `${String(myReservation.slot?.hour ?? '').padStart(2, '0')}:00`}</p>
+                        </div>
+                        <div>
+                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0 0 0.25rem 0' }}>Estado de suscripción</p>
+                            <p style={{ margin: 0, fontWeight: 600 }}>{getAuthUser() ? (hasTier(getAuthUser(), 'BRONZE') ? 'Activa' : 'Revisar') : '—'}</p>
+                        </div>
+                        <div>
+                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0 0 0.25rem 0' }}>IP asignada</p>
+                            <p style={{ margin: 0, fontWeight: 600 }}>{proxyAssigned || 'Sin proxy asignado'}</p>
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginTop: '1rem' }}>
+                        <p style={{ margin: 0, fontSize: '1rem', color: 'var(--success)', fontWeight: 600 }}>
+                            Tu reporte se ejecuta diariamente a las {myReservation.slot?.hour_label ?? `${String(myReservation.slot?.hour ?? '').padStart(2, '0')}:00`}.
+                        </p>
+                        <button type="button" className="btn-secondary" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={handleCancelReservation}>
+                            Cancelar reserva
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Pantalla inicial (solo sin reserva): Instrucciones y Formulario de cuenta */}
+            {!myReservation && (
+            <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem' }}>
                 {/* Cuadrado de Instrucciones */}
                 <div className="glass-card" style={{
@@ -469,7 +513,7 @@ const ReporterConfigInner = () => {
                     Reserva por hora diaria
                 </h3>
                 <p className="text-muted" style={{ fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                    Elige la hora en que se ejecutará tu reporter cada día. Si una hora está llena, no se aceptan más usuarios.
+                    Elige la hora en que se ejecutará tu reporter cada día. La capacidad se calcula por volumen de órdenes. Si una hora está llena, se muestra con candado.
                 </p>
                 {slotsLoading ? (
                     <p className="text-muted">Cargando horarios...</p>
@@ -492,12 +536,24 @@ const ReporterConfigInner = () => {
                                         fontSize: '0.85rem',
                                         fontWeight: 600
                                     }}
-                                    title={s.available ? `${s.hour_label} - ${s.current_users}/${s.max_users} usuarios` : `Lleno (${s.max_users} usuarios)`}
+                                    title={s.available ? `${s.hour_label} — ${s.used_points ?? 0}/${s.capacity_points ?? 6} puntos` : 'Hora llena por alta demanda'}
                                 >
-                                    {s.hour_label}
-                                    <div style={{ fontSize: '0.7rem', fontWeight: 400, marginTop: '0.2rem', color: 'var(--text-muted)' }}>
-                                        {s.current_users}/{s.max_users}
-                                    </div>
+                                    {s.available ? (
+                                        <>
+                                            {s.hour_label}
+                                            <div style={{ fontSize: '0.7rem', fontWeight: 400, marginTop: '0.2rem', color: 'var(--text-muted)' }}>
+                                                {(s.used_points ?? 0)}/{(s.capacity_points ?? 6)}
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Lock size={18} style={{ marginBottom: '0.2rem' }} />
+                                            {s.hour_label}
+                                            <div style={{ fontSize: '0.7rem', fontWeight: 400, marginTop: '0.2rem', color: 'var(--text-muted)' }}>
+                                                Hora llena
+                                            </div>
+                                        </>
+                                    )}
                                 </button>
                             ))}
                         </div>
@@ -525,32 +581,15 @@ const ReporterConfigInner = () => {
                                 {reservationSaving ? 'Guardando...' : 'Confirmar reserva'}
                             </button>
                         </div>
-                        {myReservation && (
-                            <div style={{
-                                padding: '1rem',
-                                background: 'rgba(16,185,129,0.08)',
-                                border: '1px solid rgba(16,185,129,0.25)',
-                                borderRadius: '12px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                flexWrap: 'wrap',
-                                gap: '1rem'
-                            }}>
-                                <div>
-                                    <strong style={{ color: 'var(--success)' }}>Tu reserva:</strong>{' '}
-                                    {myReservation.slot?.hour_label ?? `${String(myReservation.slot?.hour ?? '').padStart(2, '0')}:00`} ·{' '}
-                                    ~{myReservation.estimated_pending_orders ?? 0} órdenes pendientes estimadas
-                                </div>
-                                <button type="button" className="btn-secondary" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={handleCancelReservation}>
-                                    Cancelar reserva
-                                </button>
-                            </div>
-                        )}
                     </>
                 )}
             </div>
+            </>
+            )}
 
+            {/* Panel 2 — KPIs (solo con reserva) */}
+            {myReservation && (
+            <>
             {/* Tu ejecución de hoy / último progreso */}
             {lastRunProgress && (
                 <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(99,102,241,0.25)' }}>
@@ -586,8 +625,9 @@ const ReporterConfigInner = () => {
                 </div>
             )}
 
-            {/* KPI Contador de Reportes del Día */}
+            {/* Panel 2 — KPIs */}
             <div className="glass-card" style={{ marginBottom: '2rem' }}>
+                <h3 style={{ marginBottom: '1rem', fontSize: '1.1rem', color: 'var(--text-muted)' }}>Panel 2 — KPIs</h3>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '2rem', flexWrap: 'wrap' }}>
                     <div style={{
                         display: 'flex',
@@ -615,9 +655,10 @@ const ReporterConfigInner = () => {
                 </div>
             </div>
 
-            {/* Panel de Progreso del Workflow */}
+            {/* Panel 3 — Progreso dinámico */}
             {workflowProgress && (
                 <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(99,102,241,0.3)' }}>
+                    <h3 style={{ marginBottom: '1rem', fontSize: '1.1rem', color: 'var(--text-muted)' }}>Panel 3 — Progreso dinámico</h3>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1, minWidth: 0 }}>
                             <div style={{
@@ -705,13 +746,13 @@ const ReporterConfigInner = () => {
                 </div>
             )}
 
-            {/* Tercera fila: Panel de Control con Lista de Órdenes */}
+            {/* Panel 4 — Tabla final */}
             <div className="glass-card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <div>
-                        <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Panel de Control</h3>
+                        <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Panel 4 — Tabla final</h3>
                         <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0 0 0' }}>
-                            Vista en tiempo real de las órdenes reportadas exitosamente
+                            Órdenes reportadas: número de guía, teléfono, cliente, producto
                         </p>
                     </div>
                     <button
@@ -809,7 +850,7 @@ const ReporterConfigInner = () => {
                                         }}>
                                             <User size={16} style={{ color: 'var(--success)' }} />
                                         </div>
-                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Cliente</strong>
+                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Nombre cliente</strong>
                                     </div>
                                     <div style={{ marginLeft: '2.5rem', fontSize: '0.95rem', color: 'var(--text-main)' }}>
                                         {report.customer_name || 'N/A'}
@@ -823,7 +864,23 @@ const ReporterConfigInner = () => {
                                             background: 'rgba(245,158,11,0.2)',
                                             borderRadius: '8px'
                                         }}>
-                                            <Clock size={16} style={{ color: 'var(--warning)' }} />
+                                            <Package size={16} style={{ color: 'var(--warning)' }} />
+                                        </div>
+                                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Producto</strong>
+                                    </div>
+                                    <div style={{ marginLeft: '2.5rem', fontSize: '0.95rem', color: 'var(--text-main)' }}>
+                                        {report.product_name || 'N/A'}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                                        <div style={{
+                                            padding: '0.5rem',
+                                            background: 'rgba(156,163,175,0.2)',
+                                            borderRadius: '8px'
+                                        }}>
+                                            <Clock size={16} style={{ color: 'var(--text-muted)' }} />
                                         </div>
                                         <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Días sin Movimiento</strong>
                                     </div>
@@ -865,6 +922,8 @@ const ReporterConfigInner = () => {
                     </div>
                 )}
             </div>
+            </>
+            )}
         </div>
     );
 };

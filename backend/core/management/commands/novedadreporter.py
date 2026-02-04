@@ -1,13 +1,22 @@
 """
-Bot de Novedades Automático para Dropi
+Bot de Novedades Automático para Dropi (archivo independiente).
+
 Este bot automatiza la solución de novedades específicas en Dropi:
 - "No hay quien reciba"
 - "Déficit de Capacidad"
+- "El cliente se niega a recibir"
+- "Reprogramar entrega"
+- "No contesta Cliente"
 
-Para ambas, la respuesta es: "Volver a pasar"
+Cada tipo de novedad tiene mensajes precargados específicos que se seleccionan
+aleatoriamente al procesar la novedad.
+
+Dependencias externas: solo core.models.User para consultar credenciales Dropi.
+Todo lo demás (login, driver, navegación, lógica) es autocontenido en este archivo.
 """
 
 import os
+import sys
 import time
 import logging
 import tempfile
@@ -20,23 +29,33 @@ from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import (
-    TimeoutException, 
+    TimeoutException,
     NoSuchElementException,
-    ElementClickInterceptedException
+    ElementClickInterceptedException,
 )
 from django.core.management.base import BaseCommand
-from django.conf import settings
 from core.models import User
-# Las credenciales Dropi están en la tabla unificada users (campos dropi_email y dropi_password)
-from core.utils.stdio import configure_utf8_stdio
+from core.reporter_bot.driver_manager import DriverManager
+from core.services.proxy_dev_loader import get_dev_proxy_config
+
+
+def _configure_utf8_stdio():
+    """Configura stdout/stderr a UTF-8 para evitar fallos con emojis en Windows. Autocontenido."""
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONUTF8", "1")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 class NovedadReporterBot:
     """Bot para automatizar solución de novedades en Dropi"""
     
-    # Credenciales (NO hardcodeadas; se cargan desde BD o ENV)
-    DROPI_EMAIL = None
-    DROPI_PASSWORD = None
+    # Credenciales hardcodeadas para uso local
+    DROPI_EMAIL = "dahellonline@gmail.com"
+    DROPI_PASSWORD = "Bigotes2001@"
     DROPI_URL = "https://app.dropi.co/login"
     NOVELTIES_URL = "https://app.dropi.co/dashboard/novelties"
     
@@ -44,13 +63,34 @@ class NovedadReporterBot:
     TARGET_NOVEDADES = [
         "No hay quien reciba",
         "Déficit de Capacidad",
-        "Reprogramar entrega"
+        "El cliente se niega a recibir",
+        "Reprogramar entrega",
+        "No contesta Cliente"
     ]
     
-    # Respuesta estándar para estas novedades
-    SOLUTION_TEXT = "Volver a pasar"
+    # Mensajes precargados para cada tipo de novedad
+    SOLUTION_MESSAGES = {
+        "No hay quien reciba": [
+            "volver a pasar"
+        ],
+        "Déficit de Capacidad": [
+            "volver a pasar"
+        ],
+        "El cliente se niega a recibir": [
+            "el cliente informa que aun no pasar y sigue esperando entrega",
+            "cliente indica que aun no pasar a domicilio volver a pasar"
+        ],
+        "Reprogramar entrega": [
+            "pasar nuevamente cliente puede recibir",
+            "pasar para el dia de mañana"
+        ],
+        "No contesta Cliente": [
+            "necesita que se comuniquen por llamada en la entrega, volver a pasar",
+            "no se han comunicado con el cliente, sigue esperando entrega"
+        ]
+    }
     
-    def __init__(self, headless=False, user_id=None, dropi_label="reporter", email=None, password=None):
+    def __init__(self, headless=False, user_id=None, dropi_label="reporter", email=None, password=None, browser="edge", use_proxy=True):
         """
         Inicializa el bot
         
@@ -60,15 +100,20 @@ class NovedadReporterBot:
             dropi_label: (deprecated) Ya no se usa, las credenciales están en la tabla users directamente
             email: Email de Dropi a usar directamente (sobrescribe user_id)
             password: Password de Dropi a usar directamente (sobrescribe user_id)
+            browser: Navegador a usar: edge, chrome, brave, firefox (default edge)
+            use_proxy: Si True, usa proxy para evitar bloqueos (default True)
         """
         self.headless = headless
-        self.user_id = user_id
+        self.user_id = user_id or 2  # Default user_id 2 para proxy
+        self.browser = (browser or "edge").lower()
         self.dropi_label = dropi_label
         self.dropi_email_direct = email
         self.dropi_password_direct = password
+        self.use_proxy = use_proxy
         self.driver = None
         self.wait = None
         self.logger = self._setup_logger()
+        self.proxy_config = None
         self.stats = {
             'total_encontradas': 0,
             'procesadas': 0,
@@ -76,8 +121,25 @@ class NovedadReporterBot:
             'saltadas': 0
         }
         
-        # Cargar credenciales antes de iniciar
-        self._load_dropi_credentials()
+        # Las credenciales ya están hardcodeadas en la clase
+        # No es necesario cargarlas desde BD
+        self.logger.info(f"✅ Usando credenciales hardcodeadas: {self.DROPI_EMAIL}")
+        
+        # Cargar configuración de proxy si está habilitado
+        if self.use_proxy:
+            self.logger.info(f"🔄 Cargando configuración de proxy para user_id={self.user_id}...")
+            self.proxy_config = get_dev_proxy_config(self.user_id)
+            if self.proxy_config:
+                self.logger.info(f"✅ Proxy configurado: {self.proxy_config['host']}:{self.proxy_config['port']}")
+            else:
+                self.logger.warning("⚠️ No se pudo cargar configuración de proxy, continuando sin proxy")
+                self.use_proxy = False
+    
+    def _get_solution_message(self, novedad_type):
+        """Obtiene un mensaje de solución aleatorio para el tipo de novedad dado"""
+        import random
+        messages = self.SOLUTION_MESSAGES.get(novedad_type, ["volver a pasar"])
+        return random.choice(messages)
         
     def _setup_logger(self):
         """Configura el logger para el bot"""
@@ -113,142 +175,174 @@ class NovedadReporterBot:
 
     def _load_dropi_credentials(self):
         """
-        Prioridad de carga de credenciales desde la tabla unificada users:
-        1) Si vienen email/password directamente (desde argumentos): usarlos
-        2) Si viene user_id: buscar credenciales Dropi en la tabla users (campos dropi_email y dropi_password)
-        3) Si no hay user_id o no hay credenciales: fallback a ENV (DROPI_EMAIL/DROPI_PASSWORD)
+        MODO LOCAL: Las credenciales están hardcodeadas en la clase.
+        Este método se mantiene por compatibilidad pero no hace nada.
         """
-        # Prioridad 1: Credenciales directas
-        if self.dropi_email_direct and self.dropi_password_direct:
-            self.DROPI_EMAIL = self.dropi_email_direct
-            self.DROPI_PASSWORD = self.dropi_password_direct
-            self.logger.info("✅ Dropi creds desde argumentos directos (--email/--password)")
-            return
-
-        # Prioridad 2: Intentar desde BD (tabla unificada users)
-        if self.user_id:
-            try:
-                user = User.objects.filter(id=self.user_id).first()
-                if not user:
-                    raise ValueError(f"user_id={self.user_id} no existe en la tabla users")
-
-                # Usar credenciales Dropi directamente del User (tabla unificada users)
-                if user.dropi_email and user.dropi_password:
-                    self.DROPI_EMAIL = user.dropi_email
-                    self.DROPI_PASSWORD = user.get_dropi_password_plain()
-                    self.logger.info(f"✅ Dropi creds desde BD (user_id={self.user_id}, email={user.dropi_email})")
-                    return
-                else:
-                    self.logger.warning(f"⚠️ Usuario {self.user_id} no tiene credenciales Dropi configuradas (dropi_email o dropi_password vacíos)")
-            except Exception as e:
-                self.logger.error(f"❌ Error al obtener credenciales del usuario {self.user_id}: {str(e)}")
-                raise
-
-        # Prioridad 3: Fallback ENV
-        self.DROPI_EMAIL = os.getenv("DROPI_EMAIL")
-        self.DROPI_PASSWORD = os.getenv("DROPI_PASSWORD")
-        if self.DROPI_EMAIL and self.DROPI_PASSWORD:
-            self.logger.info("✅ Dropi creds desde ENV (DROPI_EMAIL/DROPI_PASSWORD)")
-            return
-
-        raise ValueError(
-            "No hay credenciales Dropi. Proporciona --email/--password, configura dropi_email y dropi_password "
-            "en la tabla users para ese usuario, o define DROPI_EMAIL/DROPI_PASSWORD en el entorno."
-        )
+        pass
     
     def _init_driver(self):
-        """Inicializa el driver de Selenium"""
+        """Inicializa el driver de Selenium usando DriverManager con soporte de proxy."""
         self.logger.info("="*60)
-        self.logger.info("🚀 INICIALIZANDO NAVEGADOR CHROME")
+        self.logger.info(f"🚀 INICIALIZANDO NAVEGADOR {self.browser.upper()}")
+        if self.use_proxy and self.proxy_config:
+            self.logger.info("   🕵️ CON PROXY ACTIVADO")
         self.logger.info("="*60)
         
-        options = webdriver.ChromeOptions()
-        
+        try:
+            # Resetear singleton para asegurar nueva instancia
+            DriverManager.reset_singleton()
+            
+            dm = DriverManager(
+                headless=self.headless,
+                logger=self.logger,
+                download_dir=None,
+                browser=self.browser,
+                proxy_config=self.proxy_config if self.use_proxy else None,
+            )
+            
+            # Intentar inicializar con el navegador especificado
+            browser_priority = [self.browser]
+            if self.browser != 'chrome':
+                browser_priority.append('chrome')
+            if self.browser != 'firefox':
+                browser_priority.append('firefox')
+            
+            self.driver = dm.init_driver(browser_priority=browser_priority)
+            
+            if not self.driver:
+                raise Exception("No se pudo inicializar el driver")
+            
+            # Esperar a que la extensión del proxy se cargue si está habilitado
+            if self.use_proxy and self.proxy_config:
+                self.logger.info("   ⏳ Esperando 3 segundos para que la extensión del proxy se cargue...")
+                time.sleep(3)
+            
+            self.wait = WebDriverWait(self.driver, 15)
+            self.logger.info("   ✅ Navegador inicializado correctamente")
+            self.logger.info("="*60)
+            
+        except Exception as e:
+            self.logger.error(f"   ❌ Error al inicializar navegador: {e}")
+            raise
+
+    def _create_driver(self, browser_name):
+        """Crea el driver para un navegador concreto (edge, chrome, brave, firefox)."""
+        use_firefox = browser_name == "firefox"
+        if use_firefox:
+            options = webdriver.FirefoxOptions()
+            if self.headless:
+                self.logger.info("🔇 Modo HEADLESS activado")
+                options.add_argument("--headless")
+            else:
+                self.logger.info("👀 Modo VISIBLE activado")
+            
+            # Modo incógnito/privado
+            self.logger.info("🕵️ Modo INCÓGNITO activado")
+            options.add_argument("-private")
+            
+            # Preferencias adicionales
+            options.set_preference("dom.webnotifications.enabled", False)
+            options.set_preference("geo.enabled", False)
+            options.set_preference("browser.privatebrowsing.autostart", True)
+            
+            self.logger.info("   📦 Creando instancia de Firefox...")
+            self.driver = webdriver.Firefox(options=options)
+            return
+        # Chromium-based: Edge, Chrome, Brave
+        temp_dir = tempfile.mkdtemp(prefix=f"{browser_name}_selenium_")
+        self.logger.info(f"   📍 Perfil temporal: {temp_dir}")
+        if browser_name == "edge":
+            options = webdriver.EdgeOptions()
+        else:
+            options = webdriver.ChromeOptions()
+            if browser_name == "brave":
+                brave_path = os.getenv(
+                    "BRAVE_PATH",
+                    "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+                )
+                if os.path.isfile(brave_path):
+                    options.binary_location = brave_path
         if self.headless:
             self.logger.info("🔇 Modo HEADLESS activado")
-            options.add_argument('--headless=new')
+            options.add_argument("--headless=new")
         else:
             self.logger.info("👀 Modo VISIBLE activado")
         
-        # Optimizaciones para Windows local
-        options.add_argument('--start-maximized')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--disable-infobars')
+        # Modo incógnito
+        self.logger.info("🕵️ Modo INCÓGNITO activado")
+        options.add_argument("--incognito")
         
-        # Modo incógnito simple (más confiable en Windows local)
-        options.add_argument('--incognito')
-        self.logger.info("   🔒 Modo incógnito activado")
-        
+        options.add_argument(f"--user-data-dir={temp_dir}")
+        options.add_argument("--start-maximized")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
-        
+        options.add_experimental_option("useAutomationExtension", False)
         prefs = {
             "profile.default_content_setting_values.notifications": 2,
-            "profile.default_content_setting_values.geolocation": 2,  # Bloquear geolocalización
+            "profile.default_content_setting_values.geolocation": 2,
             "credentials_enable_service": False,
-            "profile.password_manager_enabled": False
+            "profile.password_manager_enabled": False,
         }
         options.add_experimental_option("prefs", prefs)
-        
-        self.logger.info("   📦 Creando instancia de Chrome...")
-        
+        self.logger.info(f"   📦 Creando instancia de {browser_name.upper()}...")
         try:
-            self.driver = webdriver.Chrome(options=options)
-            self.wait = WebDriverWait(self.driver, 15)
-            self.logger.info("   ✅ Navegador inicializado correctamente")
-        except Exception as e:
-            self.logger.error(f"   ❌ Error al inicializar navegador: {str(e)}")
-            raise
-        
-        self.logger.info("="*60)
+            from selenium.webdriver.edge.service import Service as EdgeService
+            from selenium.webdriver.chrome.service import Service as ChromeService
+            from webdriver_manager.microsoft import EdgeChromiumDriverManager
+            from webdriver_manager.chrome import ChromeDriverManager
+        except ImportError:
+            EdgeService = ChromeService = EdgeChromiumDriverManager = ChromeDriverManager = None
+        if browser_name == "edge":
+            try:
+                if EdgeService is not None and EdgeChromiumDriverManager is not None:
+                    service = EdgeService(EdgeChromiumDriverManager().install())
+                    self.driver = webdriver.Edge(service=service, options=options)
+                else:
+                    self.driver = webdriver.Edge(options=options)
+            except Exception:
+                self.driver = webdriver.Edge(options=options)
+        else:
+            try:
+                if ChromeService is not None and ChromeDriverManager is not None:
+                    service = ChromeService(ChromeDriverManager().install())
+                    self.driver = webdriver.Chrome(service=service, options=options)
+                else:
+                    self.driver = webdriver.Chrome(options=options)
+            except Exception:
+                self.driver = webdriver.Chrome(options=options)
     
     def _login(self):
-        """Inicia sesión en Dropi"""
+        """Inicia sesión en Dropi usando AuthManager"""
         try:
             self.logger.info("="*60)
-            self.logger.info("🔐 INICIANDO PROCESO DE LOGIN")
+            self.logger.info("🔐 INICIANDO PROCESO DE LOGIN CON AUTHMANAGER")
             self.logger.info("="*60)
             
-            self.logger.info("1) Abriendo página de login...")
-            self.driver.get(self.DROPI_URL)
-            self.logger.info(f"   URL cargada: {self.driver.current_url}")
-            time.sleep(3)
+            # Importar AuthManager
+            from core.reporter_bot.auth_manager import AuthManager
             
-            self.logger.info("2) Buscando campo de email...")
-            email_input = self.wait.until(
-                EC.visibility_of_element_located((By.NAME, "email"))
+            # Crear instancia de AuthManager
+            auth_manager = AuthManager(
+                driver=self.driver,
+                user_id=self.user_id,
+                logger=self.logger
             )
-            self.logger.info("   Campo email encontrado")
             
-            self.logger.info(f"   Escribiendo email: {self.DROPI_EMAIL}")
-            email_input.clear()
-            email_input.send_keys(self.DROPI_EMAIL)
-            time.sleep(1)
-            self.logger.info("   Email ingresado")
-            
-            self.logger.info("   Buscando campo de password...")
-            password_input = self.driver.find_element(By.NAME, "password")
-            self.logger.info("   Campo password encontrado")
-            
-            self.logger.info("   Escribiendo password...")
-            password_input.clear()
-            password_input.send_keys(self.DROPI_PASSWORD)
-            time.sleep(1)
-            self.logger.info("   Password ingresado")
-            
-            self.logger.info("   Presionando ENTER para enviar...")
-            password_input.send_keys(Keys.RETURN)
-            self.logger.info("   Formulario enviado")
-            
-            self.logger.info("3) Esperando validación (token o redirección)...")
-            self.wait.until(
-                lambda d: d.execute_script("return !!localStorage.getItem('DROPI_token')") or "/dashboard" in d.current_url
+            # Cargar credenciales (usará las hardcodeadas del usuario)
+            auth_manager.load_credentials(
+                direct_email=self.DROPI_EMAIL,
+                direct_password=self.DROPI_PASSWORD
             )
-            self.logger.info(f"   Validación exitosa - URL actual: {self.driver.current_url}")
             
-            time.sleep(5)
-            self.logger.info("✅ Login exitoso")
-            return True
+            # Intentar login
+            if auth_manager.login():
+                self.logger.info("✅ Login exitoso con AuthManager")
+                return True
+            else:
+                self.logger.error("❌ Login fallido con AuthManager")
+                return False
             
         except Exception as e:
             self.logger.error(f"❌ Error en login: {str(e)}")
@@ -257,67 +351,79 @@ class NovedadReporterBot:
             return False
     
     def _navigate_to_novelties(self):
-        """Navega a la página de Novedades"""
+        """Navega a la página de Novedades. Primero intenta URL directa, luego menú."""
         try:
             self.logger.info("="*60)
             self.logger.info("📍 NAVEGANDO A NOVEDADES")
             self.logger.info("="*60)
-            
-            # Verificar si ya estamos en la página
-            current_url = self.driver.current_url
-            if '/dashboard/novelties' in current_url:
+            try:
+                current_url = self.driver.current_url or ""
+            except Exception:
+                current_url = ""
+            if "/dashboard/novelties" in current_url:
                 self.logger.info("   ✅ Ya estamos en Novedades")
                 return True
-            
-            # Intentar navegación por menú primero
-            try:
-                self.logger.info("   1) Buscando menú 'Mis Pedidos'...")
-                mis_pedidos_menu = self.wait.until(
-                    EC.element_to_be_clickable((
-                        By.XPATH, 
-                        "//a[contains(@class, 'is-parent') and contains(., 'Mis Pedidos')]"
-                    ))
-                )
-                self.logger.info("   ✅ Menú encontrado")
-                
-                self.logger.info("   2) Haciendo click en el menú...")
-                mis_pedidos_menu.click()
+            # 1) Navegación directa
+            self.logger.info("   1) Navegación directa a Novedades...")
+            self.driver.get(self.NOVELTIES_URL)
+            time.sleep(2)
+            # Esperar hasta 20s en pasos de 2s (por si la SPA tarda o la URL no cambia de inmediato)
+            for _ in range(10):
+                try:
+                    url_now = self.driver.current_url or ""
+                    if "/dashboard/novelties" in url_now:
+                        self.logger.info(f"   ✅ URL correcta: {url_now}")
+                        time.sleep(2)
+                        self.logger.info("✅ Navegación exitosa a Novedades (directa)")
+                        return True
+                except Exception:
+                    break
+                try:
+                    self.driver.find_element(By.TAG_NAME, "tbody")
+                    self.logger.info("   ✅ Página con tabla cargada (Novedades)")
+                    time.sleep(2)
+                    self.logger.info("✅ Navegación exitosa a Novedades (tabla visible)")
+                    return True
+                except Exception:
+                    pass
                 time.sleep(2)
-                self.logger.info("   ✅ Click exitoso")
-                
-                self.logger.info("   3) Buscando enlace 'Novedades'...")
-                novedades_link = self.wait.until(
-                    EC.element_to_be_clickable((
-                        By.XPATH,
-                        "//a[@href='/dashboard/novelties' and contains(., 'Novedades')]"
-                    ))
-                )
-                self.logger.info("   ✅ Enlace encontrado")
-                
-                self.logger.info("   4) Haciendo click en 'Novedades'...")
-                novedades_link.click()
-                time.sleep(3)
-                self.logger.info("   ✅ Click exitoso")
-                
-                # Verificar que estamos en la página correcta
-                self.wait.until(EC.url_contains("/dashboard/novelties"))
-                self.logger.info(f"   ✅ URL correcta: {self.driver.current_url}")
-                time.sleep(3)
-                
-                self.logger.info("✅ Navegación exitosa a Novedades (método tradicional)")
-                return True
-                
+            self.logger.info("   🔄 Intentando por menú...")
+            # 2) Fallback: menú
+            wait_long = WebDriverWait(self.driver, 15)
+            try:
+                for xpath_menu in [
+                    "//a[contains(@class, 'is-parent') and contains(., 'Mis Pedidos')]",
+                    "//a[contains(., 'Mis Pedidos')]",
+                ]:
+                    try:
+                        el = wait_long.until(EC.element_to_be_clickable((By.XPATH, xpath_menu)))
+                        el.click()
+                        time.sleep(2)
+                        break
+                    except TimeoutException:
+                        continue
+                for xpath_nov in [
+                    "//a[@href='/dashboard/novelties' and contains(., 'Novedades')]",
+                    "//a[contains(@href, 'novelties')]",
+                ]:
+                    try:
+                        el = wait_long.until(EC.element_to_be_clickable((By.XPATH, xpath_nov)))
+                        el.click()
+                        time.sleep(3)
+                        if "/dashboard/novelties" in (self.driver.current_url or ""):
+                            self.logger.info("✅ Navegación exitosa a Novedades (menú)")
+                            return True
+                    except (TimeoutException, Exception):
+                        continue
             except Exception as menu_error:
-                self.logger.warning(f"⚠️ Navegación por menú falló: {str(menu_error)}")
-                self.logger.info("   🔄 Intentando navegación directa...")
-                
-                # Fallback: navegación directa
-                self.driver.get(self.NOVELTIES_URL)
-                self.wait.until(EC.url_contains("/dashboard/novelties"))
-                time.sleep(5)
-                self.logger.info("✅ Navegación exitosa a Novedades (método directo)")
-                return True
-                
+                self.logger.warning(f"   Menú falló: {menu_error}")
+            try:
+                if "/dashboard/novelties" in (self.driver.current_url or ""):
+                    return True
+            except Exception:
+                pass
+            self.logger.error("   No se detectó URL /dashboard/novelties ni tabla de novedades")
+            return False
         except Exception as e:
             self.logger.error(f"❌ Error al navegar a Novedades: {str(e)}")
             import traceback
@@ -845,7 +951,10 @@ class NovedadReporterBot:
                 self._close_modal_if_open()
                 return "error"
             
-            # PASO 1: Escribir "Volver a pasar" en el campo "Solución"
+            # PASO 1: Escribir el mensaje de solución correspondiente en el campo "Solución"
+            # Obtener el mensaje de solución para este tipo de novedad
+            solution_text = self._get_solution_message(novedad_text)
+            
             self.logger.info("   📝 PASO 1: Buscando campo 'Solución'...")
             try:
                 # Esperar a que aparezcan los inputs
@@ -881,19 +990,19 @@ class NovedadReporterBot:
                 
                 self.logger.info("   ✅ Campo 'Solución' encontrado")
                 
-                # Escribir "Volver a pasar" en el campo Solución
-                self.logger.info(f"   ✍️ Escribiendo '{self.SOLUTION_TEXT}' en el campo 'Solución'...")
+                # Escribir el mensaje de solución en el campo Solución
+                self.logger.info(f"   ✍️ Escribiendo '{solution_text}' en el campo 'Solución'...")
                 solucion_input.clear()
-                solucion_input.send_keys(self.SOLUTION_TEXT)
+                solucion_input.send_keys(solution_text)
                 time.sleep(1)
                 
                 # Verificar que se escribió correctamente
                 written_text = solucion_input.get_attribute('value')
-                if written_text != self.SOLUTION_TEXT:
-                    self.logger.warning(f"   ⚠️ Texto escrito no coincide. Esperado: '{self.SOLUTION_TEXT}', Obtenido: '{written_text}'")
+                if written_text != solution_text:
+                    self.logger.warning(f"   ⚠️ Texto escrito no coincide. Esperado: '{solution_text}', Obtenido: '{written_text}'")
                     # Intentar de nuevo
                     solucion_input.clear()
-                    solucion_input.send_keys(self.SOLUTION_TEXT)
+                    solucion_input.send_keys(solution_text)
                     time.sleep(1)
                     written_text = solucion_input.get_attribute('value')
                 
@@ -1154,13 +1263,15 @@ class NovedadReporterBot:
     def run(self):
         """Ejecuta el bot principal"""
         try:
-            configure_utf8_stdio()
+            _configure_utf8_stdio()
             
             self.logger.info("="*80)
             self.logger.info("🤖 INICIANDO BOT DE NOVEDADES")
             self.logger.info("="*80)
             self.logger.info(f"   Novedades objetivo: {', '.join(self.TARGET_NOVEDADES)}")
-            self.logger.info(f"   Respuesta: {self.SOLUTION_TEXT}")
+            self.logger.info("   Mensajes de solución configurados:")
+            for novedad_type, messages in self.SOLUTION_MESSAGES.items():
+                self.logger.info(f"     - {novedad_type}: {len(messages)} mensaje(s)")
             self.logger.info("="*80)
             
             # Inicializar navegador
@@ -1300,24 +1411,26 @@ class Command(BaseCommand):
             type=str,
             help='Password de Dropi (sobrescribe user_id)',
         )
+        parser.add_argument(
+            '--browser',
+            type=str,
+            default='edge',
+            choices=['edge', 'chrome', 'brave', 'firefox'],
+            help='Navegador a usar (default: edge)',
+        )
     
     def handle(self, *args, **options):
-        configure_utf8_stdio()
+        _configure_utf8_stdio()
         
         headless = options.get('headless', False)
         user_id = options.get('user_id')
         dropi_label = options.get('dropi_label', 'reporter')
         email = options.get('email')
         password = options.get('password')
+        browser = options.get('browser', 'edge')
         
-        # Validar que tenemos credenciales
-        if not user_id and not email:
-            self.stdout.write(
-                self.style.ERROR(
-                    'Debes proporcionar --user-id o --email/--password'
-                )
-            )
-            return
+        # En modo local, las credenciales están hardcodeadas
+        # No es necesario validar argumentos
         
         # Crear y ejecutar bot
         bot = NovedadReporterBot(
@@ -1325,7 +1438,8 @@ class Command(BaseCommand):
             user_id=user_id,
             dropi_label=dropi_label,
             email=email,
-            password=password
+            password=password,
+            browser=browser
         )
         
         try:

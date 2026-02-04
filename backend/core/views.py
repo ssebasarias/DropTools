@@ -6,6 +6,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
 from core.models import User
+from django.db import transaction
 from django.db.models import Avg, Count, Q, Sum
 from .models import (
     Product,
@@ -21,10 +22,12 @@ from .models import (
     WorkflowProgress,
     ReportBatch,
     RawOrderSnapshot,
+    ReporterSlotConfig,
     ReporterHourSlot,
     ReporterReservation,
     ReporterRun,
     ReporterRunUser,
+    reporter_reservation_weight_from_orders,
 )
 from .permissions import IsAdminRole, MinSubscriptionTier
 from datetime import datetime, timedelta, time as dt_time
@@ -731,6 +734,15 @@ class ReporterConfigView(APIView):
 
         # Usar User directamente (ahora todo está en la tabla users)
         exec_time = user.execution_time
+        # Proxy asignado (solo lectura; no se expone contraseña)
+        proxy_display = None
+        try:
+            from core.models import UserProxyAssignment
+            assignment = UserProxyAssignment.objects.select_related('proxy').filter(user=user).first()
+            if assignment and assignment.proxy:
+                proxy_display = f"{assignment.proxy.ip}:{assignment.proxy.port}"
+        except Exception:
+            pass
         return Response(
             {
                 # Usar credenciales Dropi directamente del User
@@ -739,6 +751,8 @@ class ReporterConfigView(APIView):
                 "password": "",
                 # Persisted schedule time (HH:MM). Default 08:00 if not set.
                 "executionTime": exec_time.strftime("%H:%M") if exec_time else "08:00",
+                # Proxy asignado (solo lectura; el usuario no puede cambiarlo)
+                "proxy_assigned": proxy_display,
             }
         )
 
@@ -1125,11 +1139,15 @@ class ReporterListView(APIView):
                     return text
             
             results = []
+            now = timezone.now()
             for report in reports:
                 # Calcular días sin movimiento basado en created_at (cuando se detectó la orden)
                 days_without_movement = None
                 if report.created_at:
-                    delta = timezone.now() - report.created_at
+                    created_at = report.created_at
+                    if timezone.is_naive(created_at):
+                        created_at = timezone.make_aware(created_at, timezone.get_current_timezone())
+                    delta = now - created_at
                     days_without_movement = delta.days
                 
                 results.append({
@@ -1172,12 +1190,19 @@ class ReporterListView(APIView):
 
 class ReporterSlotsView(APIView):
     """
-    GET /api/reporter/slots/ — Lista horas con capacidad (max_users, usuarios_actuales, disponible).
+    GET /api/reporter/slots/ — Lista horas reservables (ventana reporter) con capacidad por peso (used_points, capacity_points, available).
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        slots = ReporterHourSlot.objects.all().order_by('hour')
+        config = ReporterSlotConfig.objects.first()
+        hour_start = getattr(config, 'reporter_hour_start', 0) if config else 0
+        hour_end = getattr(config, 'reporter_hour_end', 24) if config else 24
+        slots = (
+            ReporterHourSlot.objects.filter(hour__gte=hour_start, hour__lt=hour_end)
+            .annotate(used_points=Sum('reservations__calculated_weight'))
+            .order_by('hour')
+        )
         from .serializers import ReporterSlotSerializer
         serializer = ReporterSlotSerializer(slots, many=True)
         return Response(serializer.data)
@@ -1207,24 +1232,35 @@ class ReporterReservationsView(APIView):
         if not user or not user.is_authenticated:
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
         slot_id = request.data.get('slot_id')
-        monthly_orders_estimate = request.data.get('monthly_orders_estimate', 0) or 0
+        monthly_orders_estimate = int(request.data.get('monthly_orders_estimate', 0) or 0)
         if slot_id is None:
             return Response({"error": "slot_id requerido"}, status=status.HTTP_400_BAD_REQUEST)
-        slot = ReporterHourSlot.objects.filter(id=slot_id).first()
-        if not slot:
-            return Response({"error": "Slot no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-        current_count = slot.reservations.count()
-        if current_count >= slot.max_users:
-            return Response(
-                {"error": f"La hora {slot.hour:02d}:00 está llena (máx {slot.max_users} usuarios)"},
-                status=status.HTTP_400_BAD_REQUEST
+        new_weight = reporter_reservation_weight_from_orders(monthly_orders_estimate)
+        with transaction.atomic():
+            slot = ReporterHourSlot.objects.select_for_update().filter(id=slot_id).first()
+            if not slot:
+                return Response({"error": "Slot no encontrado"}, status=status.HTTP_404_NOT_FOUND)
+            capacity = getattr(slot, 'capacity_points', 6) or 6
+            used_result = ReporterReservation.objects.filter(slot=slot).aggregate(
+                used=Sum('calculated_weight')
             )
-        ReporterReservation.objects.filter(user=user).delete()
-        reservation = ReporterReservation.objects.create(
-            user=user,
-            slot=slot,
-            monthly_orders_estimate=int(monthly_orders_estimate)
-        )
+            used = (used_result.get('used') or 0) or 0
+            old_reservation = ReporterReservation.objects.filter(user=user).select_related('slot').first()
+            if old_reservation and old_reservation.slot_id == slot.id:
+                used_after = used - old_reservation.calculated_weight + new_weight
+            else:
+                used_after = used + new_weight
+            if used_after > capacity:
+                return Response(
+                    {"error": f"La hora {slot.hour:02d}:00 está llena por capacidad (máx {capacity} puntos). Hora llena por alta demanda."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            ReporterReservation.objects.filter(user=user).delete()
+            reservation = ReporterReservation.objects.create(
+                user=user,
+                slot=slot,
+                monthly_orders_estimate=monthly_orders_estimate
+            )
         from .serializers import ReporterReservationSerializer
         serializer = ReporterReservationSerializer(reservation)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1534,6 +1570,13 @@ class AuthRegisterView(APIView):
         user.subscription_tier = User.TIER_BRONZE
         user.subscription_active = False
         user.save()
+
+        # Asignar proxy disponible al nuevo usuario (si hay proxies configurados)
+        try:
+            from core.services.proxy_allocator_service import assign_proxy_to_user
+            assign_proxy_to_user(user.id)
+        except Exception:
+            pass  # Registro exitoso aunque no haya proxy disponible
 
         token, _ = Token.objects.get_or_create(user=user)
         return Response(

@@ -830,6 +830,22 @@ class OrderMovementReport(models.Model):
 # REPORTER SLOT SYSTEM (reservas por hora, rangos, scheduler)
 # -----------------------------------------------------------------------------
 
+def reporter_reservation_weight_from_orders(monthly_orders_estimate):
+    """
+    Peso según volumen de órdenes mensuales:
+    Pequeño 0-2000 → 1, Mediano 2001-5000 → 2, Grande 5001-10000 → 3.
+    Valores fuera de rango se acotan (>=10001 → 3, negativo → 1).
+    """
+    if monthly_orders_estimate is None or monthly_orders_estimate < 0:
+        return 1
+    n = min(int(monthly_orders_estimate), 10000)
+    if n <= 2000:
+        return 1
+    if n <= 5000:
+        return 2
+    return 3
+
+
 class ReporterSlotConfig(models.Model):
     """
     Configuración global del sistema de reportes por slot.
@@ -841,6 +857,18 @@ class ReporterSlotConfig(models.Model):
         help_text="Factor para estimar órdenes pendientes: monthly_orders * factor"
     )
     range_size = models.PositiveIntegerField(default=100, help_text="Tamaño de cada rango de órdenes a reportar")
+    slot_capacity = models.PositiveSmallIntegerField(
+        default=6,
+        help_text="Puntos de capacidad máximos por hora (suma de pesos de reservas)"
+    )
+    reporter_hour_start = models.PositiveSmallIntegerField(
+        default=6,
+        help_text="Hora inicio ventana reporter (0-23). Ej: 6 = 6:00"
+    )
+    reporter_hour_end = models.PositiveSmallIntegerField(
+        default=18,
+        help_text="Hora fin ventana reporter (0-23). Ej: 18 = horas 6-17 reservables"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -856,10 +884,14 @@ class ReporterSlotConfig(models.Model):
 class ReporterHourSlot(models.Model):
     """
     Una hora del día asignable para ejecución diaria del reporter.
-    hour: 0-23 (único).
+    hour: 0-23 (único). Capacidad por puntos (suma de pesos), no por número de usuarios.
     """
     hour = models.PositiveSmallIntegerField(unique=True, help_text="Hora del día (0-23)")
-    max_users = models.PositiveIntegerField(default=10, help_text="Máximo de usuarios que pueden reservar esta hora")
+    max_users = models.PositiveIntegerField(default=10, help_text="(Legacy) Ya no se usa; disponibilidad por capacity_points")
+    capacity_points = models.PositiveSmallIntegerField(
+        default=6,
+        help_text="Puntos de capacidad máximos en esta hora (suma de calculated_weight)"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -870,13 +902,14 @@ class ReporterHourSlot(models.Model):
         ordering = ['hour']
 
     def __str__(self):
-        return f"{self.hour:02d}:00 (máx {self.max_users} usuarios)"
+        return f"{self.hour:02d}:00 (cap {self.capacity_points} pts)"
 
 
 class ReporterReservation(models.Model):
     """
     Reserva de un usuario en una hora diaria.
     Un usuario solo puede tener una reserva (una hora).
+    Peso por volumen: pequeño 0-2000→1, mediano 2001-5000→2, grande 5001-10000→3.
     """
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -891,6 +924,10 @@ class ReporterReservation(models.Model):
     monthly_orders_estimate = models.PositiveIntegerField(
         default=0,
         help_text="Órdenes mensuales aproximadas del usuario"
+    )
+    calculated_weight = models.PositiveSmallIntegerField(
+        default=1,
+        help_text="Peso por volumen: 1 pequeño, 2 mediano, 3 grande (calculado al guardar)"
     )
     estimated_pending_orders = models.DecimalField(
         max_digits=12,
@@ -911,12 +948,13 @@ class ReporterReservation(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.user.username} → {self.slot.hour:02d}:00"
+        return f"{self.user.username} → {self.slot.hour:02d}:00 (peso {self.calculated_weight})"
 
     def save(self, *args, **kwargs):
         config = ReporterSlotConfig.objects.first()
         factor = float(config.estimated_pending_factor) if config else 0.08
         self.estimated_pending_orders = self.monthly_orders_estimate * factor
+        self.calculated_weight = reporter_reservation_weight_from_orders(self.monthly_orders_estimate)
         super().save(*args, **kwargs)
 
 
@@ -1058,4 +1096,71 @@ class ReporterRunUser(models.Model):
 
     def __str__(self):
         return f"RunUser run={self.run_id} user={self.user_id} dc={self.download_compare_status}"
+
+
+# -----------------------------------------------------------------------------
+# PROXY / IP ASSIGNMENT (for Selenium reporter)
+# -----------------------------------------------------------------------------
+
+class ProxyIP(models.Model):
+    """
+    Proxy o IP estática para uso con Selenium (cuentas Dropi).
+    Limita cantidad de usuarios por IP (max_accounts).
+    """
+    STATUS_ACTIVE = 'active'
+    STATUS_INACTIVE = 'inactive'
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, 'Activo'),
+        (STATUS_INACTIVE, 'Inactivo'),
+    ]
+
+    ip = models.CharField(max_length=255, db_index=True, help_text="Host o IP del proxy")
+    port = models.PositiveIntegerField(default=8080, help_text="Puerto del proxy")
+    username = models.CharField(max_length=255, null=True, blank=True)
+    password_encrypted = models.CharField(max_length=512, null=True, blank=True, help_text="Contraseña (encriptada si DROPIPASS_ENCRYPTION_KEY está configurado)")
+    max_accounts = models.PositiveSmallIntegerField(default=5, help_text="Máximo de cuentas (usuarios) por este proxy")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'proxy_ips'
+        verbose_name = "Proxy IP"
+        verbose_name_plural = "Proxy IPs"
+        indexes = [
+            models.Index(fields=['status']),
+        ]
+
+    def __str__(self):
+        return f"{self.ip}:{self.port} (max={self.max_accounts})"
+
+
+class UserProxyAssignment(models.Model):
+    """
+    Asignación de un proxy a un usuario (un usuario, un proxy).
+    Usado por el reporter para inyectar proxy en Selenium.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='proxy_assignment'
+    )
+    proxy = models.ForeignKey(
+        ProxyIP,
+        on_delete=models.CASCADE,
+        related_name='user_assignments'
+    )
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'user_proxy_assignments'
+        verbose_name = "Asignación Usuario Proxy"
+        verbose_name_plural = "Asignaciones Usuario Proxy"
+        indexes = [
+            models.Index(fields=['proxy']),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id} -> {self.proxy_id}"
 

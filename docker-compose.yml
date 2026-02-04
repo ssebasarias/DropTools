@@ -324,6 +324,9 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - PYTHONPATH=/app/backend
+      # Salta Google y landing; va directo a app.dropi.co/auth/login (útil si el proxy recibe página en blanco de Google)
+      - DROPI_LOGIN_DIRECT=1
+      # DROPI_NO_PROXY=1 para probar sin proxy; quitado para usar proxy de proxy_dev_config.json
       # Solo navegadores estables en Linux: Chromium y Firefox (sin Edge)
       - BROWSER_ORDER=chrome,firefox
       - CHROME_BIN=/usr/bin/chromium

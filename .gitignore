@@ -173,3 +173,6 @@ results/
 
 # --- Datos de prueba Reporter (credenciales) ---
 scripts/reporter_test_users.json
+
+# --- Proxy DEV (no subir credenciales) ---
+backend/proxy_dev_config.json

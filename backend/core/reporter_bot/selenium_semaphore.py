@@ -81,6 +81,22 @@ def reset_for_testing():
     return 0
 
 
+def reset_semaphore():
+    """
+    Resetea el semáforo a 0. Usar cuando workers murieron sin llamar release()
+    (contador desincronizado). Llamar desde management command o cron cuando
+    no haya tareas reporter activas (ej. celery inspect active).
+    Returns:
+        int: valor del contador antes del reset.
+    """
+    r = _get_redis()
+    prev = int(r.get(SEMAPHORE_KEY) or 0)
+    r.set(SEMAPHORE_KEY, 0)
+    if prev > 0:
+        logger.warning(f"Selenium semaphore reset (previous count={prev})")
+    return prev
+
+
 # -----------------------------------------------------------------------------
 # Lock por rango (evitar doble procesamiento)
 # -----------------------------------------------------------------------------

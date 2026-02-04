@@ -666,6 +666,18 @@ tail -f logs/clusterizer.log
 
 ---
 
+### Scripts de testing (desde raíz del proyecto)
+
+#### Shopify Finder – test runner
+Ejecuta el comando `shopify_finder` y muestra un resumen de resultados (desde la raíz del proyecto):
+```bash
+python scripts/shopify_finder_test_runner.py "faja reductora"
+python scripts/shopify_finder_test_runner.py "corrector de postura" --max 80 --max_hits 15
+python scripts/shopify_finder_test_runner.py "faja reductora" --headless
+```
+
+---
+
 ## 📞 AYUDA Y SOPORTE
 
 ### Recursos

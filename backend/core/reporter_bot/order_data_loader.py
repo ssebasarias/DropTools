@@ -119,7 +119,6 @@ class OrderDataLoader:
             
             self.logger.info(f"   ✅ DataFrame construido con {len(df)} registros.")
             return df
-
         except Exception as e:
             self.logger.error(f"   ❌ Error cargando órdenes: {e}")
             return pd.DataFrame()

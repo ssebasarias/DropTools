@@ -1,0 +1,14 @@
+{
+    "proxy": {
+        "host": "gw.dataimpulse.com",
+        "port": 823,
+        "username": "YOUR_USERNAME_HERE",
+        "password": "YOUR_PASSWORD_HERE"
+    },
+    "user_ids": [
+        2,
+        3,
+        4
+    ],
+    "_comment": "Este archivo es un ejemplo. Copia este archivo como proxy_dev_config.json y configura tus credenciales de proxy. Los user_ids son los IDs de usuarios de Django que usarán este proxy en desarrollo."
+}

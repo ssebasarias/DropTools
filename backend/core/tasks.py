@@ -301,6 +301,146 @@ def process_slot_task(self, slot_time_iso=None):
     return {'success': True, 'run_id': run.id, 'user_count': len(user_ids)}
 
 
+def _run_capacity_aware_key(run_id):
+    return f"reporter:run:capacity_aware:{run_id}"
+
+
+def _is_run_capacity_aware(run_id):
+    """Solo DEV: run creado por process_slot_task_dev."""
+    try:
+        from core.reporter_bot.selenium_semaphore import _get_redis
+        r = _get_redis()
+        return bool(r.get(_run_capacity_aware_key(run_id)))
+    except Exception:
+        return False
+
+
+@shared_task(bind=True)
+def process_slot_task_dev(self, slot_time_iso=None):
+    """
+    DEV: Igual que process_slot_task pero respeta capacidad por peso.
+    Solo encola usuarios que caben (suma de calculated_weight <= slot.capacity_points).
+    Los que no caben quedan DC_PENDING; enqueue_next_pending_for_run los encola al liberarse peso.
+    """
+    from django.utils import timezone as tz
+    from datetime import datetime
+    from core.models import ReporterHourSlot, ReporterReservation, ReporterRun, ReporterRunUser
+    from core.reporter_bot.selenium_semaphore import _get_redis
+
+    if slot_time_iso is None:
+        now = tz.now()
+        slot_dt = now.replace(minute=0, second=0, microsecond=0)
+        slot_time_iso = slot_dt.isoformat()
+    else:
+        try:
+            if isinstance(slot_time_iso, str):
+                slot_dt = datetime.fromisoformat(slot_time_iso.replace('Z', '+00:00'))
+                if slot_dt.tzinfo is None:
+                    slot_dt = tz.make_aware(slot_dt, tz.get_current_timezone())
+            else:
+                slot_dt = slot_time_iso
+        except Exception as e:
+            logger.error(f"Invalid slot_time_iso: {slot_time_iso}: {e}")
+            return {'success': False, 'error': str(e)}
+    hour = slot_dt.hour
+    logger.info(f"⏰ process_slot_task_dev: slot_time={slot_time_iso} hour={hour} (capacity-aware)")
+
+    slot = ReporterHourSlot.objects.filter(hour=hour).first()
+    if not slot:
+        logger.warning(f"No ReporterHourSlot for hour={hour}")
+        return {'success': False, 'error': f'No slot for hour {hour}'}
+
+    capacity = getattr(slot, 'capacity_points', 6) or 6
+    reservations = list(
+        ReporterReservation.objects.filter(slot=slot).select_related('user').order_by('id')
+    )
+    if not reservations:
+        run = ReporterRun.objects.create(
+            slot=slot,
+            scheduled_at=slot_dt,
+            status=ReporterRun.STATUS_COMPLETED,
+            started_at=tz.now(),
+            finished_at=tz.now()
+        )
+        return {'success': True, 'run_id': run.id, 'user_count': 0, 'enqueued': 0, 'pending_by_capacity': 0}
+
+    used = 0
+    to_enqueue = []
+    for res in reservations:
+        w = res.calculated_weight
+        if used + w <= capacity:
+            to_enqueue.append(res.user_id)
+            used += w
+        else:
+            logger.info(f"   User {res.user_id} (weight={w}) no cabe: used={used} cap={capacity}")
+
+    run = ReporterRun.objects.create(
+        slot=slot,
+        scheduled_at=slot_dt,
+        status=ReporterRun.STATUS_RUNNING,
+        started_at=tz.now()
+    )
+    r = _get_redis()
+    r.set(_run_capacity_aware_key(run.id), '1', ex=86400)
+
+    all_user_ids = [res.user_id for res in reservations]
+    for uid in all_user_ids:
+        ReporterRunUser.objects.create(
+            run=run,
+            user_id=uid,
+            download_compare_status=ReporterRunUser.DC_PENDING
+        )
+    for uid in to_enqueue:
+        download_compare_task.delay(uid, run.id)
+
+    pending_count = len(all_user_ids) - len(to_enqueue)
+    logger.info(f"   Enqueued {len(to_enqueue)} download_compare_task, {pending_count} pendientes por capacidad")
+    return {
+        'success': True,
+        'run_id': run.id,
+        'user_count': len(all_user_ids),
+        'enqueued': len(to_enqueue),
+        'pending_by_capacity': pending_count,
+    }
+
+
+@shared_task
+def enqueue_next_pending_for_run(run_id):
+    """
+    DEV: Tras liberar peso (DC completado o todos los rangos de un usuario),
+    encola el siguiente DC_PENDING que quepa en capacidad.
+    """
+    from core.models import ReporterRun, ReporterRunUser, ReporterReservation
+
+    if not _is_run_capacity_aware(run_id):
+        return
+    run = ReporterRun.objects.filter(id=run_id).select_related('slot').first()
+    if not run or not run.slot:
+        return
+    capacity = getattr(run.slot, 'capacity_points', 6) or 6
+    run_users = list(ReporterRunUser.objects.filter(run_id=run_id))
+    if not run_users:
+        return
+    weights = dict(
+        ReporterReservation.objects.filter(slot=run.slot, user_id__in=[ru.user_id for ru in run_users]).values_list('user_id', 'calculated_weight')
+    )
+    used = 0
+    for ru in run_users:
+        w = weights.get(ru.user_id, 1)
+        if ru.download_compare_status == ReporterRunUser.DC_RUNNING:
+            used += w
+        elif ru.download_compare_status == ReporterRunUser.DC_COMPLETED and ru.ranges_completed < ru.total_ranges:
+            used += w
+    pending = [ru for ru in run_users if ru.download_compare_status == ReporterRunUser.DC_PENDING]
+    pending.sort(key=lambda x: x.id)
+    for ru in pending:
+        w = weights.get(ru.user_id, 1)
+        if used + w <= capacity:
+            download_compare_task.delay(ru.user_id, run_id)
+            logger.info(f"   Encolado siguiente por capacidad: user_id={ru.user_id} run_id={run_id}")
+            break
+
+
 @shared_task(bind=True, max_retries=5, default_retry_delay=120)
 def download_compare_task(self, user_id, run_id):
     """
@@ -370,6 +510,8 @@ def download_compare_task(self, user_id, run_id):
             report_range_task.delay(run_id, user_id, rs, re)
 
         logger.info(f"   Enqueued {len(ranges_created)} report_range_task for user_id={user_id}")
+        if _is_run_capacity_aware(run_id):
+            enqueue_next_pending_for_run.delay(run_id)
         return {'success': True, 'run_id': run_id, 'user_id': user_id, 'total_detected': total_detected, 'ranges': len(ranges_created)}
     except Exception as e:
         release()
@@ -462,6 +604,11 @@ def report_range_task(self, run_id, user_id, range_start, range_end):
         release_range_lock(run_id, user_id, range_start)
         procesados = (stats.get('reporter') or {}).get('procesados', 0)
         logger.info(f"   Range [{range_start},{range_end}] completed: {procesados} reportados")
+        run_user_after = ReporterRunUser.objects.filter(run_id=run_id, user_id=user_id).first()
+        if run_user_after and run_user_after.total_ranges and run_user_after.ranges_completed >= run_user_after.total_ranges:
+            from core.tasks import _is_run_capacity_aware, enqueue_next_pending_for_run
+            if _is_run_capacity_aware(run_id):
+                enqueue_next_pending_for_run.delay(run_id)
         return {'success': True, 'run_id': run_id, 'user_id': user_id, 'range_start': range_start, 'procesados': procesados}
     except Exception as e:
         release()

@@ -101,6 +101,34 @@ class UnifiedReporter:
         
         # Progress Tracking
         self.workflow_progress = None
+    
+    def _get_proxy_config(self):
+        """Obtiene config de proxy para el usuario (para Selenium). Misma lógica que novedadreporter."""
+        import os
+        from core.services.proxy_dev_loader import get_dev_proxy_config
+
+        # DROPI_NO_PROXY=1: sin proxy (útil cuando la IP del proxy recibe página en blanco de Google/Dropi)
+        if os.environ.get("DROPI_NO_PROXY", "").strip().lower() in ("1", "true", "yes"):
+            if self.logger:
+                self.logger.info("   🌐 Sin proxy (DROPI_NO_PROXY=1)")
+            return None
+
+        # Mismo origen que novedadreporter: proxy_dev_config.json en desarrollo
+        proxy_config = get_dev_proxy_config(self.user_id)
+        if proxy_config:
+            if self.logger:
+                self.logger.info(f"🌐 Proxy (dev): {proxy_config.get('host')}:{proxy_config.get('port')}")
+            return proxy_config
+
+        # Producción: variables de entorno o valores por defecto (ResiProx)
+        host = os.environ.get("DROPI_PROXY_HOST") or "gw.dataimpulse.com"
+        port = int(os.environ.get("DROPI_PROXY_PORT", "823"))
+        username = os.environ.get("DROPI_PROXY_USER") or "2b3a0e0b5c2e4_country-co_session-1"
+        password = os.environ.get("DROPI_PROXY_PASS") or "bigotes2001"
+        proxy_config = {"host": host, "port": port, "username": username, "password": password}
+        if self.logger:
+            self.logger.info(f"🌐 Proxy: {host}:{port}")
+        return proxy_config
         
     def _init_progress(self):
         """Initialize or retrieve WorkflowProgress for user."""
@@ -167,7 +195,7 @@ class UnifiedReporter:
         self.logger.info("="*80)
         
         self._init_progress()
-        self._update_progress('step1_running', 'Iniciando flujo unificado (Descarga + Comparación + Reporte)...')
+        self._update_progress('step1_running', '⏳ Descargando archivos…')
         
         try:
             # ========================================================================
@@ -182,13 +210,20 @@ class UnifiedReporter:
                 headless=self.headless,
                 logger=self.logger,
                 download_dir=self.download_dir,
-                browser=self.browser_priority[0] if self.browser_priority else self.browser
+                browser=self.browser_priority[0] if self.browser_priority else self.browser,
+                proxy_config=self._get_proxy_config(),
             )
             self.driver = self.driver_manager.init_driver(browser_priority=self.browser_priority)
             
             if not self.driver:
                 self.logger.error("❌ No se pudo inicializar el driver")
                 return self.stats
+
+            # Con proxy (extensión de auth): dar tiempo a que la extensión se cargue (como en novedadreporter)
+            if self._get_proxy_config():
+                import time
+                self.logger.info("   ⏳ Esperando 3s para que la extensión del proxy se cargue...")
+                time.sleep(3)
             
             # ========================================================================
             # PASO 2: LOGIN (Una sola vez)
@@ -208,7 +243,7 @@ class UnifiedReporter:
             
             if not self.auth_manager.login():
                 self.logger.error("🛑 Login fallido. Terminando.")
-                self._update_progress('failed', 'Error: Autenticación fallida.')
+                self._update_progress('failed', 'Error: autenticación fallida.')
                 return self.stats
             
             # ========================================================================
@@ -249,10 +284,10 @@ class UnifiedReporter:
                     'procesados': 0,
                     'total': 0
                 }
-                self._update_progress('failed', 'Error: No se pudieron descargar los reportes.')
+                self._update_progress('failed', 'Error: no se pudieron descargar los reportes.')
                 return self.stats
                 
-            self._update_progress('step1_completed', f'Descarga completada: {len(downloaded_files)} archivos.')
+            self._update_progress('step1_completed', f'Descarga completada: {len(downloaded_files)} archivo(s).')
             self.logger.warning(f"✅ PASO 3: DESCARGA OK - {len(downloaded_files)} archivo(s). Iniciando comparación.")
             
             # ========================================================================
@@ -264,6 +299,7 @@ class UnifiedReporter:
             self.logger.info("🕵️ PASO 4: COMPARACIÓN DE REPORTES (BD)")
             self.logger.info("="*60)
             self.logger.warning("🕵️ PASO 4: COMPARACIÓN - Iniciando (solo BD, sin navegador)...")
+            self._update_progress('step2_running', '🔍 Analizando órdenes…')
             
             comparer = ReportComparer(
                 user_id=self.user_id,
@@ -280,7 +316,7 @@ class UnifiedReporter:
             if not comparison_success:
                 self.logger.warning("⚠️ Comparación falló o no encontró órdenes sin movimiento. Continuando con reporter...")
             else:
-                self._update_progress('step2_completed', f"Comparación completada: {comparer.stats.get('total_detected', 0)} órdenes detectadas.")
+                self._update_progress('step2_completed', f"📊 Detectadas {comparer.stats.get('total_detected', 0)} órdenes.")
             
             # ========================================================================
             # PASO 5: REPORTER (Usa driver logueado - Sesión persistente)
@@ -291,10 +327,10 @@ class UnifiedReporter:
             self.logger.info("="*60)
             self.logger.warning("🤖 PASO 5: REPORTER - Iniciando (formulario Siguiente + reportes en Dropi)...")
             
-            self._update_progress('step3_running', 'Generando reportes en Dropi...')
+            self._update_progress('step3_running', '🧾 Reportando en Dropi…')
 
             def on_order_processed(current, total, processed_count):
-                self._update_progress('step3_running', f'Procesando orden {current}/{total} ({processed_count} reportadas)...')
+                self._update_progress('step3_running', f'🧾 Reportando {current}/{total}…')
 
             reporter = DropiReporter(
                 driver=self.driver,
@@ -308,7 +344,7 @@ class UnifiedReporter:
             self.stats['reporter'] = reporter_stats
             
             self._update_progress('step3_completed', f"Reporte completado: {reporter_stats.get('procesados', 0)} órdenes reportadas.")
-            self._update_progress('completed', 'Flujo unificado completado exitosamente.')
+            self._update_progress('completed', '✅ Proceso finalizado.')
             
             # ========================================================================
             # RESUMEN FINAL
@@ -361,7 +397,8 @@ class UnifiedReporter:
             headless=self.headless,
             logger=self.logger,
             download_dir=download_dir,
-            browser=self.browser_priority[0] if self.browser_priority else self.browser
+            browser=self.browser_priority[0] if self.browser_priority else self.browser,
+            proxy_config=self._get_proxy_config(),
         )
         self.driver = self.driver_manager.init_driver(browser_priority=self.browser_priority)
         if not self.driver:

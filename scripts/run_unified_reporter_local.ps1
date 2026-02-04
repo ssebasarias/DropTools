@@ -15,7 +15,8 @@ param(
 )
 
 $projectRoot = Join-Path $PSScriptRoot ".."
-$venvActivate = Join-Path $projectRoot "venv" "Scripts" "Activate.ps1"
+$venvScripts = Join-Path (Join-Path $projectRoot "venv") "Scripts"
+$venvActivate = Join-Path $venvScripts "Activate.ps1"
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  EJECUTANDO FLUJO UNIFICADO (LOCAL)" -ForegroundColor Cyan

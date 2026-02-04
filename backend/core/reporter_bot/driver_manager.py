@@ -43,13 +43,13 @@ class DriverManager:
     # Navegadores soportados
     SUPPORTED_BROWSERS = ['chrome', 'edge', 'brave', 'firefox']
     
-    def __new__(cls, headless=False, logger=None, download_dir=None, browser='edge'):
+    def __new__(cls, headless=False, logger=None, download_dir=None, browser='edge', proxy_config=None):
         """Patrón Singleton - Retorna la misma instancia si ya existe"""
         if cls._instance is None:
             cls._instance = super(DriverManager, cls).__new__(cls)
         return cls._instance
     
-    def __init__(self, headless=False, logger=None, download_dir=None, browser='edge'):
+    def __init__(self, headless=False, logger=None, download_dir=None, browser='edge', proxy_config=None):
         """
         Inicializa el manager (solo una vez por instancia Singleton)
         
@@ -58,6 +58,7 @@ class DriverManager:
             logger: Logger configurado
             download_dir: Directorio para descargas
             browser: Navegador a usar ('chrome', 'edge', 'brave', 'firefox')
+            proxy_config: Dict opcional con host, port, username (opcional), password (opcional). No se loguea.
         """
         if hasattr(self, '_initialized'):
             return  # Ya inicializado
@@ -66,6 +67,7 @@ class DriverManager:
         self.logger = logger
         self.download_dir = download_dir
         self.browser = browser.lower() if browser else 'edge'
+        self.proxy_config = proxy_config if isinstance(proxy_config, dict) else None
         self.TIMEOUT_SECONDS = 15
         self._initialized = True
         
@@ -348,7 +350,9 @@ class DriverManager:
         
         # --- OPTIMIZACIONES DE RENDIMIENTO (CPU/RAM) ---
         options.add_argument('--disable-gpu')
-        options.add_argument('--disable-extensions')
+        # No deshabilitar extensiones si usamos proxy con auth (requiere extensión)
+        if not (self.proxy_config and self.proxy_config.get('username')):
+            options.add_argument('--disable-extensions')
         options.add_argument('--disable-plugins')
         options.add_argument('--mute-audio')
         options.add_argument('--disable-application-cache')
@@ -414,6 +418,124 @@ class DriverManager:
         options.add_experimental_option("prefs", prefs)
         
         self._log_step(f"Directorio de descarga: {download_directory}", 'info')
+        
+        # --- PROXY (opcional, no se loguean credenciales) ---
+        if self.proxy_config:
+            self._apply_proxy_chromium(options)
+    
+    def _apply_proxy_chromium(self, options):
+        """Inyecta proxy en opciones Chromium (Edge/Chrome/Brave). Sin logs de credenciales."""
+        host = self.proxy_config.get('host') or ''
+        port = self.proxy_config.get('port') or 8080
+        if not host:
+            return
+        
+        username = self.proxy_config.get('username')
+        password = self.proxy_config.get('password')
+        
+        # Si hay autenticación, usar SOLO la extensión (no --proxy-server)
+        # La extensión maneja tanto la configuración del proxy como la auth
+        if username and password:
+            try:
+                ext_path = self._create_proxy_auth_extension(host, port, username, password)
+                if ext_path:
+                    options.add_extension(ext_path)
+                    if self.logger:
+                        self.logger.info("   Proxy configurado con autenticacion (extension)")
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning("   Proxy auth extension failed: %s", str(e))
+        else:
+            # Sin autenticación, usar el método tradicional
+            proxy_server = f"http://{host}:{port}"
+            options.add_argument(f'--proxy-server={proxy_server}')
+            if self.logger:
+                self.logger.info("   Proxy configurado (host/port sin auth)")
+    
+    def _create_proxy_auth_extension(self, host, port, username, password):
+        """Crea un zip temporal con extensión Chrome para proxy auth. Versión mejorada."""
+        import zipfile
+        import base64
+        
+        # Manifest V2 con configuración completa
+        manifest_json = """{
+            "version": "1.0.0",
+            "manifest_version": 2,
+            "name": "Chrome Proxy Auth",
+            "permissions": [
+                "proxy",
+                "tabs",
+                "unlimitedStorage",
+                "storage",
+                "<all_urls>",
+                "webRequest",
+                "webRequestBlocking"
+            ],
+            "background": {
+                "scripts": ["background.js"]
+            },
+            "minimum_chrome_version": "22.0.0"
+        }"""
+        
+        # Background.js optimizado para respuesta rápida
+        background_js = """
+var config = {
+    mode: "fixed_servers",
+    rules: {
+        singleProxy: {
+            scheme: "http",
+            host: "%s",
+            port: parseInt(%s)
+        },
+        bypassList: ["localhost", "127.0.0.1"]
+    }
+};
+
+// Credenciales en caché para respuesta inmediata
+var credentials = {
+    username: "%s",
+    password: "%s"
+};
+
+// Configurar proxy settings inmediatamente
+chrome.proxy.settings.set({value: config, scope: "regular"}, function() {
+    if (chrome.runtime.lastError) {
+        console.error("Proxy config error:", chrome.runtime.lastError);
+    } else {
+        console.log("Proxy configured: %s:%s - Ready!");
+    }
+});
+
+// Manejar autenticación del proxy (respuesta inmediata desde caché)
+function callbackFn(details) {
+    console.log("Auth requested for:", details.url);
+    return {
+        authCredentials: credentials
+    };
+}
+
+// Registrar listener de autenticación
+chrome.webRequest.onAuthRequired.addListener(
+    callbackFn,
+    {urls: ["<all_urls>"]},
+    ['blocking']
+);
+
+console.log("Proxy auth extension loaded and ready");
+""" % (
+            host.replace('\\', '\\\\').replace('"', '\\"'),
+            port,
+            host.replace('\\', '\\\\').replace('"', '\\"'),
+            port,
+            username.replace('\\', '\\\\').replace('"', '\\"'),
+            password.replace('\\', '\\\\').replace('"', '\\"')
+        )
+        
+        zip_path = os.path.join(tempfile.gettempdir(), f'proxy_auth_{os.getpid()}.zip')
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", manifest_json.strip())
+            zf.writestr("background.js", background_js.strip())
+        return zip_path
     
     def _apply_common_options_firefox(self, options):
         """Aplica opciones comunes a Firefox"""
@@ -438,6 +560,31 @@ class DriverManager:
         options.set_preference("permissions.default.image", 2)  # Bloquear imágenes
         
         self._log_step(f"Directorio de descarga: {download_directory}", 'info')
+        
+        # --- PROXY (opcional) ---
+        if self.proxy_config:
+            self._apply_proxy_firefox(options)
+    
+    def _apply_proxy_firefox(self, options):
+        """Inyecta proxy en opciones Firefox. Sin logs de credenciales."""
+        host = self.proxy_config.get('host') or ''
+        port = self.proxy_config.get('port') or 8080
+        if not host:
+            return
+        options.set_preference("network.proxy.type", 1)
+        options.set_preference("network.proxy.http", host)
+        options.set_preference("network.proxy.http_port", int(port))
+        options.set_preference("network.proxy.ssl", host)
+        options.set_preference("network.proxy.ssl_port", int(port))
+        if self.logger:
+            self.logger.info("   Proxy configurado (host/port)")
+        username = self.proxy_config.get('username')
+        password = self.proxy_config.get('password')
+        if username and password:
+            options.set_preference("network.proxy.user", username)
+            options.set_preference("network.proxy.password", password)
+            if self.logger:
+                self.logger.info("   Proxy auth (preferencias)")
     
     def _configure_downloads(self):
         """Configura permisos de descarga vía CDP (solo Chromium)"""
