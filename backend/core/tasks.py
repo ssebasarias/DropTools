@@ -1,5 +1,5 @@
 """
-Tareas asíncronas de Celery para Dahell Intelligence
+Tareas asíncronas de Celery para DropTools
 """
 from celery import shared_task
 from celery.utils.log import get_task_logger

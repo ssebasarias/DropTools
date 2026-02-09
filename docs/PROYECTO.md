@@ -11,7 +11,7 @@ Este documento define la **Hoja de Ruta Maestra** y la filosofía inquebrantable
 2.  **La Ecuación de Valor:**
     *   **Dropi** nos da el **COSTO (Oferta)**.
     *   **El Mercado (Shopify/Trends)** nos da el **PRECIO y DEMANDA**.
-    *   **Dahell** calcula el **MARGEN y VIABILIDAD**.
+    *   **DropTools** calcula el **MARGEN y VIABILIDAD**.
 3.  **Realidad > Teoría:** No nos importa lo que *debería* venderse. Nos importa lo que *ya se está vendiendo* (Shopify) y *cuánto* podemos ganar.
 
 ---

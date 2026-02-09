@@ -51,6 +51,7 @@ class ReportComparer:
         self.stats = {
             'actual_batch_id': None,
             'base_batch_id': None,
+            'total_orders_compared': 0,
             'total_detected': 0
         }
 
@@ -142,7 +143,9 @@ class ReportComparer:
             dropi_order_id__startswith='NO-ID-'
         )
 
-        self.logger.info(f"      Snapshots Actual relevantes: {actual_qs.count()}")
+        total_actual = actual_qs.count()
+        self.stats['total_orders_compared'] = total_actual
+        self.logger.info(f"      Snapshots Actual relevantes: {total_actual}")
         if actual_qs.count() == 0:
             self.logger.warning("      ⚠️ No hay snapshots relevantes en el batch actual!")
 

@@ -37,7 +37,7 @@ const PublicNavbar = () => {
                 }}>
                     <Zap size={20} color="white" fill="white" />
                 </div>
-                <span style={{ fontSize: '1.5rem', fontWeight: 'bold', letterSpacing: '-0.02em', color: 'white' }}>Dahell</span>
+                <span style={{ fontSize: '1.5rem', fontWeight: 'bold', letterSpacing: '-0.02em', color: 'white' }}>DropTools</span>
             </Link>
 
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>

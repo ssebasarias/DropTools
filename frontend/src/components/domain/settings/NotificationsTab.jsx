@@ -55,7 +55,7 @@ const NotificationsTab = () => (
                         <h4 style={{ fontSize: '1rem', fontWeight: '600' }}>System Update</h4>
                         <span className="text-muted" style={{ fontSize: '0.8rem' }}>Yesterday</span>
                     </div>
-                    <p className="text-muted" style={{ fontSize: '0.9rem' }}>Dahell Intelligence platform was updated to v2.1.0 with new security features.</p>
+                    <p className="text-muted" style={{ fontSize: '0.9rem' }}>DropTools platform was updated to v2.1.0 with new security features.</p>
                 </div>
             </div>
         </div>

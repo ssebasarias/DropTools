@@ -1,4 +1,4 @@
-# Dahell Intelligence - Documentación Técnica (V1.2)
+# DropTools - Documentación Técnica (V1.2)
 
 ## 1. Visión General
 Dahell es una plataforma de inteligencia de mercado para Dropshipping diseñada para identificar productos ganadores ("Minas de Oro") mediante el análisis masivo de catálogos de proveedores.

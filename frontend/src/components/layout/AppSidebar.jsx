@@ -6,7 +6,7 @@ import { logout } from '../../services/authService';
 
 const AppSidebar = ({
     navItems,
-    title = "Dahell",
+    title = "DropTools",
     subtitle = "Intelligence",
     settingsPath = "/settings",
     userProfile = { initials: 'U', name: 'User', role: 'Guest' }

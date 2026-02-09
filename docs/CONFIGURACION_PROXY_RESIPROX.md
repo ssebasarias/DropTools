@@ -2,7 +2,7 @@
 
 ## 📋 Resumen
 
-Se ha configurado exitosamente el proxy ResiProx (IPRoyal) en el sistema de reportes de Dahell. El proxy utiliza autenticación automática mediante extensión de Chrome, compatible con Selenium.
+Se ha configurado exitosamente el proxy ResiProx (IPRoyal) en el sistema de reportes de DropTools. El proxy utiliza autenticación automática mediante extensión de Chrome, compatible con Selenium.
 
 ## 🔧 Cambios Realizados
 
@@ -16,7 +16,7 @@ Se ha configurado exitosamente el proxy ResiProx (IPRoyal) en el sistema de repo
    - **Usuarios habilitados**: IDs `[2, 3, 4]`
 
 ### 2. **Actualizado `.env`**
-   - **Agregado**: `DAHELL_ENV=development`
+   - **Agregado**: `DROPTOOLS_ENV=development`
    - **Propósito**: Habilita el uso de `proxy_dev_config.json` en modo desarrollo
 
 ### 3. **Comando de verificación de proxy**
@@ -28,7 +28,7 @@ Se ha configurado exitosamente el proxy ResiProx (IPRoyal) en el sistema de repo
 ### Flujo de Autenticación del Proxy
 
 1. **Carga de configuración** (`proxy_dev_loader.py`):
-   - Lee `proxy_dev_config.json` cuando `DAHELL_ENV=development`
+   - Lee `proxy_dev_config.json` cuando `DROPTOOLS_ENV=development`
    - Verifica que el `user_id` esté en la lista de usuarios autorizados
 
 2. **Configuración del WebDriver** (`driver_manager.py`):
@@ -70,7 +70,7 @@ python manage.py verify_proxy_ip
 
 El sistema está configurado para usar el proxy automáticamente cuando:
 
-1. ✅ `DAHELL_ENV=development` está en `.env`
+1. ✅ `DROPTOOLS_ENV=development` está en `.env`
 2. ✅ `proxy_dev_config.json` existe y tiene credenciales válidas
 3. ✅ El `user_id` está en la lista de usuarios autorizados
 
@@ -130,10 +130,10 @@ Los proxies ISP de IPRoyal proporcionan:
    ```
    Con Docker: `docker compose exec backend python manage.py verify_proxy_requests`
 
-2. **Verificar que DAHELL_ENV está configurado**:
+2. **Verificar que DROPTOOLS_ENV está configurado**:
    ```bash
    # En .env debe estar:
-   DAHELL_ENV=development
+   DROPTOOLS_ENV=development
    ```
 
 3. **Verificar que tu user_id está en la lista**:
@@ -154,7 +154,7 @@ Esto **NO debería pasar** con la configuración actual. Si ocurre:
 ## 📚 Archivos Modificados
 
 - ✅ `backend/proxy_dev_config.json` - Credenciales del proxy
-- ✅ `.env` - Variable `DAHELL_ENV=development`
+- ✅ `.env` - Variable `DROPTOOLS_ENV=development`
 - ✅ Comando `python manage.py verify_proxy_requests` - Verificación de proxy (desde `backend/`)
 
 ## 📚 Archivos Relevantes (sin modificar)

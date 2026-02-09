@@ -1,4 +1,4 @@
-# 🚀 DAHELL INTELLIGENCE
+# 🚀 DropTools
 
 **Sistema de Análisis de Saturación de Mercado para Dropshipping con IA**
 
@@ -10,7 +10,7 @@
 
 ---
 
-## 📋 ¿Qué es Dahell Intelligence?
+## 📋 ¿Qué es DropTools?
 
 Sistema de inteligencia artificial que detecta la saturación de mercado en productos de dropshipping. Utiliza embeddings vectoriales (CLIP) para identificar productos idénticos vendidos por diferentes proveedores, permitiendo encontrar **oportunidades de negocio con baja competencia**.
 
@@ -28,6 +28,8 @@ Sistema de inteligencia artificial que detecta la saturación de mercado en prod
 
 Sigue estos pasos para replicar el proyecto tal cual en otra máquina (Windows, Linux o Mac).
 
+> **Nota:** El proyecto se llama **DropTools**. Repositorio: `https://github.com/ssebasarias/DropTools.git`. Si renombras la carpeta local no afecta al funcionamiento.
+
 ### Prerrequisitos
 
 - **Git**
@@ -38,11 +40,9 @@ Sigue estos pasos para replicar el proyecto tal cual en otra máquina (Windows, 
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/TU_USUARIO/Dahell.git
-cd Dahell
+git clone https://github.com/ssebasarias/DropTools.git
+cd DropTools
 ```
-
-(Sustituye `TU_USUARIO/Dahell` por la URL real de tu repositorio.)
 
 ### 2. Variables de entorno
 
@@ -96,7 +96,7 @@ Asegúrate de tener `.env.docker` configurado (o que Docker use las variables ne
 docker compose up -d
 ```
 
-Esto levanta: PostgreSQL, Redis, backend Django, Celery worker, Flower y frontend. La base de datos se inicializa con `docs/dahell_db.sql` si existe en el primer arranque.
+Esto levanta: PostgreSQL, Redis, backend Django, Celery worker, Flower y frontend. La base de datos se inicializa con `docs/droptools_db.sql` si existe en el primer arranque.
 
 ### 6. Migraciones (si corres backend fuera de Docker)
 
@@ -151,8 +151,8 @@ cd backend && python manage.py createsuperuser && cd ..
 ### Instalación mínima
 
 ```bash
-git clone https://github.com/TU_USUARIO/Dahell.git
-cd Dahell
+git clone https://github.com/ssebasarias/DropTools.git
+cd DropTools
 cp .env.example .env
 cp .env.example .env.docker
 # Editar .env y .env.docker con tus valores
@@ -315,7 +315,7 @@ Ver **[docs/README.md](docs/README.md)** para el índice completo de documentaci
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    DAHELL INTELLIGENCE                  │
+│                      DropTools                          │
 └─────────────────────────────────────────────────────────┘
 
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
@@ -377,7 +377,7 @@ Ver **[docs/README.md](docs/README.md)** para el índice completo de documentaci
 ## 📊 ESTRUCTURA DEL PROYECTO
 
 ```
-Dahell/
+DropTools/
 ├── 📄 README.md                    ← EMPEZAR AQUÍ
 ├── 📄 requirements.txt             ← Dependencias Python
 ├── 📄 .env.example                 ← Plantilla de variables (copiar a .env)
@@ -387,7 +387,7 @@ Dahell/
 │
 ├── 📂 backend/                      ← DJANGO BACKEND
 │   ├── manage.py                    ← CLI de Django
-│   ├── dahell_backend/              ← Configuración Django (settings, urls, celery)
+│   ├── droptools_backend/              ← Configuración Django (settings, urls, celery)
 │   └── core/                        ← App principal
 │       ├── management/commands/    ← COMANDOS ETL y Reporter ⭐
 │       │   ├── scraper.py           ← Extracción de Dropi
@@ -403,7 +403,7 @@ Dahell/
 │   └── src/                         ← Componentes, páginas, servicios
 │
 ├── 📂 docs/                         ← DOCUMENTACIÓN
-│   ├── dahell_db.sql                ← Script init DB (Docker)
+│   ├── droptools_db.sql                ← Script init DB (Docker)
 │   ├── GUIA_COMANDOS.md             ← Guía de comandos
 │   ├── ARQUITECTURA.md              ← Arquitectura
 │   └── examples/                   ← Archivos de ejemplo
@@ -591,6 +591,7 @@ Abre un issue con:
 
 ---
 
-**Última actualización:** 2026-01  
+**Última actualización:** 2026-02  
 **Versión:** 2.2  
-**Estado:** ✅ En ejecución
+**Estado:** ✅ En ejecución  
+**Proyecto:** DropTools

@@ -32,7 +32,7 @@ const MainLayout = () => {
         <div className="app-container">
             <AppSidebar
                 navItems={adminNavItems}
-                title="Dahell"
+                title="DropTools"
                 subtitle="Intelligence"
                 settingsPath="/admin/settings"
                 userProfile={{

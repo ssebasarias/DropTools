@@ -1,4 +1,4 @@
-# 🔧 GUÍA DE DESARROLLO - DAHELL INTELLIGENCE
+# 🔧 GUÍA DE DESARROLLO - DropTools
 
 **Versión:** 2.0  
 **Última actualización:** 2025-12-14
@@ -36,7 +36,7 @@
 #### 1. Clonar el Repositorio
 ```bash
 git clone [url_del_repositorio]
-cd Dahell
+cd DropTools
 ```
 
 #### 2. Crear Entorno Virtual
@@ -66,11 +66,11 @@ DROPI_PASSWORD=tu_password
 HEADLESS=False  # True para producción
 
 # === DATABASE (Local) ===
-POSTGRES_USER=dahell_admin
+POSTGRES_USER=droptools_admin
 POSTGRES_PASSWORD=secure_password_123
 POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5433
-POSTGRES_DB=dahell_db
+POSTGRES_DB=droptools_db
 
 # === SCRAPER CONFIG ===
 MAX_PRODUCTS=200
@@ -127,7 +127,7 @@ Dahell/
 ```
 backend/
 ├── manage.py                    # CLI de Django
-├── dahell_backend/              # Configuración del proyecto
+├── droptools_backend/              # Configuración del proyecto
 │   ├── settings.py              # Configuración
 │   ├── urls.py                  # URLs principales
 │   └── wsgi.py                  # WSGI config
@@ -294,7 +294,7 @@ docker-compose logs -f clusterizer
 #### 5. Verificar Base de Datos
 ```bash
 # Conectar a PostgreSQL
-docker exec -it dahell_db psql -U dahell_admin -d dahell_db
+docker exec -it droptools_db psql -U droptools_admin -d droptools_db
 
 # Queries útiles
 SELECT COUNT(*) FROM products;
@@ -421,10 +421,10 @@ docker-compose logs -f
 
 ```bash
 # Crear backup
-docker exec dahell_db pg_dump -U dahell_admin dahell_db > backups/backup_$(date +%Y%m%d).sql
+docker exec droptools_db pg_dump -U droptools_admin droptools_db > backups/backup_$(date +%Y%m%d).sql
 
 # Restaurar backup
-docker exec -i dahell_db psql -U dahell_admin dahell_db < backups/backup_20251214.sql
+docker exec -i droptools_db psql -U droptools_admin droptools_db < backups/backup_20251214.sql
 ```
 
 ---

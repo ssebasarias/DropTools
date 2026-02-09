@@ -25,7 +25,7 @@ const ReportersTab = () => (
                             <label className="form-label">Worker Email</label>
                             <div style={{ position: 'relative' }}>
                                 <Mail size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
-                                <input type="email" className="glass-input" style={{ paddingLeft: '38px' }} defaultValue="worker.bot@dahell.com" />
+                                <input type="email" className="glass-input" style={{ paddingLeft: '38px' }} defaultValue="worker.bot@droptools.com" />
                             </div>
                         </div>
                         <div className="form-group">

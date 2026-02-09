@@ -1,5 +1,5 @@
 /**
- * System Service - Dahell Frontend
+ * System Service - DropTools Frontend
  * Servicios para System Status y control de contenedores
  */
 import { API_BASE_URL, API_ENDPOINTS } from '../config/constants';

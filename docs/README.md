@@ -1,4 +1,4 @@
-# 📚 DOCUMENTACIÓN DAHELL INTELLIGENCE
+# 📚 DOCUMENTACIÓN DropTools
 
 **Versión:** 2.0  
 **Última actualización:** 2025-12-14  

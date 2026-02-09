@@ -1,4 +1,4 @@
-# Instalación completa - Dahell Intelligence
+# Instalación completa - DropTools
 
 Sigue estos pasos **en tu terminal** (PowerShell o CMD) para dejar el repo listo y funcionando.
 
@@ -35,7 +35,7 @@ Ya creadas en la raíz: `raw_data`, `logs`, `cache_huggingface`, `results`.
 Si no existieran:
 
 ```powershell
-cd "c:\Users\guerr\OneDrive\Documentos\Dahell"
+cd "c:\Users\guerr\OneDrive\Documentos\DropTools"
 New-Item -ItemType Directory -Force -Path raw_data, logs, cache_huggingface, results
 ```
 
@@ -46,7 +46,7 @@ New-Item -ItemType Directory -Force -Path raw_data, logs, cache_huggingface, res
 Si quieres ejecutar el backend o comandos Django en tu máquina (no en Docker):
 
 ```powershell
-cd "c:\Users\guerr\OneDrive\Documentos\Dahell"
+cd "c:\Users\guerr\OneDrive\Documentos\DropTools"
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -65,7 +65,7 @@ pip install -r requirements.txt
 ## 4. Frontend (npm)
 
 ```powershell
-cd "c:\Users\guerr\OneDrive\Documentos\Dahell\frontend"
+cd "c:\Users\guerr\OneDrive\Documentos\DropTools\frontend"
 npm install
 cd ..
 ```
@@ -77,8 +77,8 @@ cd ..
 Si quieres **solo construir la imagen** del backend (sin levantar contenedores):
 
 ```powershell
-cd "c:\Users\guerr\OneDrive\Documentos\Dahell"
-docker build -t dahell-backend:latest --target selenium .
+cd "c:\Users\guerr\OneDrive\Documentos\DropTools"
+docker build -t droptools-backend:latest --target selenium .
 ```
 
 O usar el script:
@@ -97,7 +97,7 @@ La primera vez puede tardar varios minutos (descarga de capas base e instalació
 Con Docker Desktop abierto:
 
 ```powershell
-cd "c:\Users\guerr\OneDrive\Documentos\Dahell"
+cd "c:\Users\guerr\OneDrive\Documentos\DropTools"
 docker compose up -d --build
 ```
 
@@ -157,7 +157,7 @@ docker compose down
 
 ## Si algo falla
 
-- **"Connection refused" a la base de datos**: comprueba que el contenedor `dahell_db` esté en marcha (`docker ps`).
+- **"Connection refused" a la base de datos**: comprueba que el contenedor `droptools_db` esté en marcha (`docker ps`).
 - **Error al construir la imagen**: revisa que Docker tenga suficiente memoria (recomendado ≥ 4 GB para el frontend/backend).
 - **Puerto en uso**: cambia en `docker-compose.yml` el mapeo de puertos (por ejemplo `"5434:5432"` para la DB) y en `.env` local usa ese puerto en `POSTGRES_PORT`.
 

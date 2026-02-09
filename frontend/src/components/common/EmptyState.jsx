@@ -12,14 +12,15 @@ import GlassCard from './GlassCard';
  * @param {Object} props.action - Optional action button { label, onClick }
  */
 export default function EmptyState({ 
-  icon: Icon = Inbox, 
+  icon = Inbox, 
   title, 
   description, 
   action 
 }) {
+  const IconToRender = icon;
   return (
     <GlassCard style={{ textAlign: 'center', padding: '3rem' }}>
-      <Icon size={64} color="#64748b" style={{ marginBottom: '1rem' }} />
+      <IconToRender size={64} color="#64748b" style={{ marginBottom: '1rem' }} />
       {title && (
         <h3 style={{ color: '#fff', marginBottom: '0.5rem' }}>{title}</h3>
       )}

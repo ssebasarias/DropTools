@@ -48,7 +48,7 @@ const HeroSection = () => (
                 WebkitTextFillColor: 'transparent',
                 animationDelay: '0.2s'
             }}>
-                Dominate the Market with <span style={{ color: 'var(--primary)', WebkitTextFillColor: 'var(--primary)' }}>Dahell Intelligence</span>
+                Dominate the Market with <span style={{ color: 'var(--primary)', WebkitTextFillColor: 'var(--primary)' }}>DropTools</span>
             </h1>
 
             <p className="fade-in-up" style={{
@@ -109,7 +109,7 @@ const HeroSection = () => (
                         <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#F59E0B' }} />
                         <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#10B981' }} />
                     </div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Dahell Dashboard</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>DropTools Dashboard</div>
                 </div>
                 <div style={{ padding: '2rem', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1.5rem' }}>
                     <div style={{ height: '120px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }} />
@@ -154,7 +154,7 @@ const LandingPage = () => {
             <div style={{ padding: '4rem 2rem', position: 'relative' }}>
                 <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
                     <div style={{ textAlign: 'center', marginBottom: '4rem' }}>
-                        <h2 style={{ fontSize: '2.5rem', fontWeight: 'bold', marginBottom: '1rem' }}>Why Choose Dahell?</h2>
+                        <h2 style={{ fontSize: '2.5rem', fontWeight: 'bold', marginBottom: '1rem' }}>Why Choose DropTools?</h2>
                         <p className="text-muted" style={{ maxWidth: '600px', margin: '0 auto' }}>Everything you need to automate, analyze, and scale your e-commerce empire.</p>
                     </div>
 
@@ -197,9 +197,9 @@ const LandingPage = () => {
             }}>
                 <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'center', gap: '1rem', alignItems: 'center' }}>
                     <Zap size={24} color="var(--primary)" fill="var(--primary)" />
-                    <span style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>Dahell</span>
+                    <span style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'white' }}>DropTools</span>
                 </div>
-                <p>&copy; 2026 Dahell Intelligence. All rights reserved.</p>
+                <p>&copy; 2026 DropTools. All rights reserved.</p>
             </footer>
 
             <style>{`

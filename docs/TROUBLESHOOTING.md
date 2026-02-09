@@ -1,4 +1,4 @@
-# 🐛 TROUBLESHOOTING - DAHELL INTELLIGENCE
+# 🐛 TROUBLESHOOTING - DropTools
 
 **Versión:** 2.0  
 **Última actualización:** 2025-12-14
@@ -190,7 +190,7 @@ POSTGRES_PORT=5433        # Puerto mapeado
 
 #### 4. Probar conexión manual
 ```bash
-docker exec -it dahell_db psql -U dahell_admin -d dahell_db
+docker exec -it droptools_db psql -U droptools_admin -d droptools_db
 ```
 
 ---
@@ -199,14 +199,14 @@ docker exec -it dahell_db psql -U dahell_admin -d dahell_db
 
 **Síntoma:**
 ```
-FATAL: password authentication failed for user "dahell_admin"
+FATAL: password authentication failed for user "droptools_admin"
 ```
 
 **Solución:**
 
 #### 1. Verificar credenciales en .env
 ```env
-POSTGRES_USER=dahell_admin
+POSTGRES_USER=droptools_admin
 POSTGRES_PASSWORD=secure_password_123
 ```
 
@@ -218,10 +218,10 @@ docker-compose up -d
 
 #### 3. Resetear password (si es necesario)
 ```bash
-docker exec -it dahell_db psql -U postgres
+docker exec -it droptools_db psql -U postgres
 ```
 ```sql
-ALTER USER dahell_admin WITH PASSWORD 'secure_password_123';
+ALTER USER droptools_admin WITH PASSWORD 'secure_password_123';
 ```
 
 ---
@@ -242,19 +242,19 @@ ALTER USER dahell_admin WITH PASSWORD 'secure_password_123';
 
 #### 1. Verificar que DB está corriendo
 ```bash
-docker ps | grep dahell_db
+docker ps | grep droptools_db
 ```
 
 #### 2. Ver logs de DB
 ```bash
-docker logs dahell_db
+docker logs droptools_db
 ```
 
 #### 3. Verificar encoding en código
 ```python
 # En clusterizer.py y vectorizer.py
-dbname = str(os.getenv("POSTGRES_DB", "dahell_db"))
-user = str(os.getenv("POSTGRES_USER", "dahell_admin"))
+dbname = str(os.getenv("POSTGRES_DB", "droptools_db"))
+user = str(os.getenv("POSTGRES_USER", "droptools_admin"))
 password = str(os.getenv("POSTGRES_PASSWORD", "secure_password_123"))
 
 conn = psycopg2.connect(
@@ -426,7 +426,7 @@ Asegurarse de que `.dockerignore` incluya estas carpetas:
 backups
 tmp
 pg_data
-dahell_db_data
+droptools_db_data
 ram_data/*.jsonl
 ```
 
@@ -435,18 +435,18 @@ ram_data/*.jsonl
 ### ❌ Error: "La base de datos está vacía (Tablas no encontradas)"
 
 **Síntoma:**
-Al entrar a pgAdmin o conectar el backend, dice que las tablas no existen, a pesar de usar `dahell_db.sql`.
+Al entrar a pgAdmin o conectar el backend, dice que las tablas no existen, a pesar de usar `droptools_db.sql`.
 
 **Causa:**
 - El volumen en `docker-compose.yml` apuntaba a un archivo inexistente o ubicación incorrecta.
 
 **Solución:**
-Verificar que la ruta en `docker-compose.yml` sea correcta (ej: `./backend/dahell_db.sql`):
+Verificar que la ruta en `docker-compose.yml` sea correcta (ej: `./backend/droptools_db.sql`):
 ```yaml
     volumes:
       - pg_data:/var/lib/postgresql/data
       # Ruta CORRECTA al archivo SQL
-      - ./backend/dahell_db.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./backend/droptools_db.sql:/docker-entrypoint-initdb.d/init.sql
 ```
 *Nota: PostgreSQL solo ejecuta este script si la carpeta `pg_data` está vacía (primera vez). Si ya existe, hay que borrar el volumen.*
 
@@ -570,7 +570,7 @@ python backend/manage.py diagnose_stats
 docker-compose logs -f
 
 # Servicio específico
-docker-compose logs -f dahell_db
+docker-compose logs -f droptools_db
 docker-compose logs -f vectorizer
 docker-compose logs -f clusterizer
 ```
@@ -596,7 +596,7 @@ cat clusterizer_error.log
 
 ```bash
 # Conectar a PostgreSQL
-docker exec -it dahell_db psql -U dahell_admin -d dahell_db
+docker exec -it droptools_db psql -U droptools_admin -d droptools_db
 ```
 
 ```sql

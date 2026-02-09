@@ -1,6 +1,6 @@
 # ============================================================================
 # DOCKER COMPOSE - PRODUCCIÓN VPS
-# Dahell Intelligence - Configuración Optimizada para 24/7
+# DropTools - Configuración Optimizada para 24/7
 # ============================================================================
 version: '3.8'
 
@@ -10,18 +10,18 @@ services:
   # ========================================
   db:
     image: pgvector/pgvector:pg17
-    container_name: dahell_db
+    container_name: droptools_db
     restart: always
     env_file:
       - .env.production
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./docs/dahell_db.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./docs/droptools_db.sql:/docker-entrypoint-initdb.d/init.sql
       - backups_data:/app/backups
     ports:
       - "127.0.0.1:5433:5432"  # Solo accesible desde localhost
     networks:
-      - dahell_net
+      - droptools_net
     # Optimizaciones PostgreSQL para 32GB RAM
     command: >
       postgres
@@ -40,7 +40,7 @@ services:
       -c max_parallel_workers_per_gather=4
       -c max_parallel_workers=8
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dahell_admin"]
+      test: ["CMD-SHELL", "pg_isready -U droptools_admin"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -56,7 +56,7 @@ services:
   # ========================================
   pgadmin:
     image: dpage/pgadmin4
-    container_name: dahell_pgadmin
+    container_name: droptools_pgadmin
     restart: always
     env_file:
       - .env.production
@@ -65,7 +65,7 @@ services:
     depends_on:
       - db
     networks:
-      - dahell_net
+      - droptools_net
     logging:
       driver: "json-file"
       options:
@@ -80,7 +80,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_backend
+    container_name: droptools_backend
     restart: always
     env_file:
       - .env.production
@@ -93,7 +93,7 @@ services:
       - "127.0.0.1:8000:8000"  # Solo accesible desde localhost (Nginx hará proxy)
     command: python backend/manage.py runserver 0.0.0.0:8000
     networks:
-      - dahell_net
+      - droptools_net
     depends_on:
       - db
     deploy:
@@ -122,7 +122,7 @@ services:
   # ========================================
   frontend:
     image: node:20-alpine
-    container_name: dahell_frontend
+    container_name: droptools_frontend
     restart: always
     working_dir: /app
     volumes:
@@ -134,7 +134,7 @@ services:
       - CHOKIDAR_USEPOLLING=true
     command: sh -c "npm install && npm run dev -- --host"
     networks:
-      - dahell_net
+      - droptools_net
     deploy:
       resources:
         limits:
@@ -155,7 +155,7 @@ services:
   # ========================================
   nginx:
     image: nginx:alpine
-    container_name: dahell_nginx
+    container_name: droptools_nginx
     restart: always
     ports:
       - "80:80"
@@ -167,7 +167,7 @@ services:
       - backend
       - frontend
     networks:
-      - dahell_net
+      - droptools_net
     logging:
       driver: "json-file"
       options:
@@ -180,7 +180,7 @@ services:
   # ========================================
   portainer:
     image: portainer/portainer-ce:latest
-    container_name: dahell_portainer
+    container_name: droptools_portainer
     restart: always
     ports:
       - "127.0.0.1:9000:9000"  # Solo accesible desde localhost
@@ -188,7 +188,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - portainer_data:/data
     networks:
-      - dahell_net
+      - droptools_net
     logging:
       driver: "json-file"
       options:
@@ -205,7 +205,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_scraper
+    container_name: droptools_scraper
     restart: unless-stopped  # Auto-reinicio continuo
     env_file:
       - .env.production
@@ -223,7 +223,7 @@ services:
           memory: 256M
     shm_size: '1g'
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py scraper
     profiles: ["workers"]
     depends_on:
@@ -240,7 +240,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_loader
+    container_name: droptools_loader
     restart: unless-stopped
     env_file:
       - .env.production
@@ -254,7 +254,7 @@ services:
           cpus: '1.0'
           memory: 500M
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py loader
     profiles: ["workers"]
     depends_on:
@@ -271,7 +271,7 @@ services:
     build:
       context: .
       target: vectorizer
-    container_name: dahell_vectorizer
+    container_name: droptools_vectorizer
     restart: unless-stopped
     env_file:
       - .env.production
@@ -291,7 +291,7 @@ services:
         #       count: 1
         #       capabilities: [ gpu ]
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py vectorizer
     profiles: ["workers"]
     depends_on:
@@ -308,7 +308,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_clusterizer
+    container_name: droptools_clusterizer
     restart: "no"  # Ejecución manual
     env_file:
       - .env.production
@@ -321,7 +321,7 @@ services:
           cpus: '1.0'
           memory: 1G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py clusterizer
     profiles: ["workers"]
     depends_on:
@@ -338,7 +338,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_classifier
+    container_name: droptools_classifier
     restart: "no"  # Ejecución manual
     env_file:
       - .env.production
@@ -351,7 +351,7 @@ services:
           cpus: '1.0'
           memory: 1.2G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py classifier
     profiles: ["workers"]
     depends_on:
@@ -368,7 +368,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_classifier_2
+    container_name: droptools_classifier_2
     restart: "no"  # Ejecución manual
     env_file:
       - .env.production
@@ -381,7 +381,7 @@ services:
           cpus: '1.0'
           memory: 1.2G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py classifier
     profiles: ["workers"]
     depends_on:
@@ -398,7 +398,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_market_trender
+    container_name: droptools_market_trender
     restart: "no"  # Ejecución manual
     env_file:
       - .env.production
@@ -411,7 +411,7 @@ services:
           cpus: '1.0'
           memory: 1G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py market_trender
     profiles: ["workers"]
     depends_on:
@@ -428,7 +428,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_meta_scholar
+    container_name: droptools_meta_scholar
     restart: "no"  # Ejecución manual
     env_file:
       - .env.production
@@ -442,7 +442,7 @@ services:
           cpus: '1.0'
           memory: 2G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py meta_scholar
     profiles: ["workers"]
     depends_on:
@@ -460,7 +460,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_shopify_auditor
+    container_name: droptools_shopify_auditor
     restart: "no"  # Ejecución manual
     env_file:
       - .env.production
@@ -474,7 +474,7 @@ services:
           cpus: '1.0'
           memory: 1G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py shopify_auditor
     profiles: ["workers"]
     depends_on:
@@ -501,5 +501,5 @@ volumes:
 # RED INTERNA
 # ========================================
 networks:
-  dahell_net:
+  droptools_net:
     driver: bridge

@@ -18,7 +18,7 @@ const Sidebar = () => {
                     <Zap size={24} color="white" fill="#6366f1" />
                 </div>
                 <div className="logo-text">
-                    <h2>Dahell</h2>
+                    <h2>DropTools</h2>
                     <span>Intelligence</span>
                 </div>
             </div>

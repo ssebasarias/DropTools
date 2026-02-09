@@ -176,7 +176,7 @@ Para aislar: ejecutar **sin proxy** (quitar o vaciar `proxy_dev_config.json` o n
 - **Reservas creadas** para la hora de prueba: `ensure_reporter_reservations --user-ids=2,3,4 --hour=10 --monthly-orders=6000` (peso 3 cada uno).
 - Slot con **capacity_points = 6** (por defecto 6).
 - **proxy_dev_config.json** con `user_ids: [2, 3, 4]` y el proxy 198.143.22.45:12323.
-- **DAHELL_ENV=development** en backend y celery_worker (ya está en tu `docker-compose` y override).
+- **DROPTOOLS_ENV=development** en backend y celery_worker (ya está en tu `docker-compose` y override).
 
 ---
 

@@ -210,7 +210,7 @@ export const startReporterWorkflow = async () => {
 export const fetchReporterEnv = async () => {
     const response = await fetch(`${API_URL}/reporter/env/`);
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) return { dahell_env: 'production', reporter_use_celery: true };
+    if (!response.ok) return { droptools_env: 'production', reporter_use_celery: true };
     return data;
 };
 
@@ -252,7 +252,18 @@ export const fetchReporterList = async (page = 1, pageSize = 50, statusFilter = 
 // Reporter slots & reservations (nuevo sistema por hora)
 export const fetchReporterSlots = async () => {
     const response = await authFetch(`${API_URL}/reporter/slots/`);
-    if (!response.ok) throw new Error('No se pudieron cargar los horarios');
+    if (!response.ok) {
+        let msg = 'No se pudieron cargar los horarios';
+        try {
+            const data = await response.json().catch(() => ({}));
+            if (data?.error) {
+                msg = data.error;
+                if (data?.hint) msg += ` — ${data.hint}`;
+            } else if (response.status === 401) msg = 'Sesión expirada. Vuelve a iniciar sesión.';
+            else if (response.status >= 500) msg = 'Error en el servidor. Revisa que el backend esté en marcha y que hayas ejecutado: python manage.py migrate';
+        } catch (_) {}
+        throw new Error(msg);
+    }
     return await response.json();
 };
 

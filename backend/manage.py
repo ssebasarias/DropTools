@@ -8,7 +8,7 @@ def main():
     """Run administrative tasks."""
     # if sys.platform == 'win32':
     #    sys.stdout.reconfigure(encoding='utf-8')
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'dahell_backend.settings')
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'droptools_backend.settings')
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

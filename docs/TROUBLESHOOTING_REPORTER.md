@@ -4,23 +4,23 @@
 
 | | **Desarrollo (local)** | **Desarrollo (Docker)** | **Producción (Docker)** |
 |---|------------------------|-------------------------|--------------------------|
-| **Variable** | `DAHELL_ENV=development` en `.env`, backend **fuera** de Docker | `DAHELL_ENV=development` en override, backend **en** Docker | `DAHELL_ENV=production` o sin definir |
+| **Variable** | `DROPTOOLS_ENV=development` en `.env`, backend **fuera** de Docker | `DROPTOOLS_ENV=development` en override, backend **en** Docker | `DAHELL_ENV=production` o sin definir |
 | **Qué hace el botón** | Reporter **en proceso** (Edge visible en tu PC) | Reporter **vía Celery** (worker en Docker, mismo flujo que producción) | Reporter **vía Celery** (servidor) |
 | **Requisitos** | Backend en local, BD accesible | Docker Compose (backend + celery_worker + redis + db) | Igual que desarrollo Docker |
 | **Badge en UI** | "Modo desarrollo" (verde) | "Modo desarrollo (Docker)" (naranja) | "Modo producción" (azul) |
 
 ### Desarrollo local (sin Docker)
 
-En la raíz del proyecto, en tu `.env`, pon `DAHELL_ENV=development`. Arranca solo el backend (`venv\Scripts\python.exe backend\manage.py runserver`) y el frontend. Verás **"Modo desarrollo"** y el reporter se ejecuta en proceso (navegador visible).
+En la raíz del proyecto, en tu `.env`, pon `DROPTOOLS_ENV=development`. Arranca solo el backend (`venv\Scripts\python.exe backend\manage.py runserver`) y el frontend. Verás **"Modo desarrollo"** y el reporter se ejecuta en proceso (navegador visible).
 
 ### Desarrollo con Docker (Windows + WSL, pruebas antes de subir al servidor)
 
 Para probar el flujo **igual que en producción** (Celery, Chromium/Firefox en contenedor) pero en tu PC:
 
-1. El archivo **`docker-compose.override.yml`** ya define `DAHELL_ENV=development` para `backend` y `celery_worker`.
+1. El archivo **`docker-compose.override.yml`** ya define `DROPTOOLS_ENV=development` para `backend` y `celery_worker`.
 2. Levanta todo: `docker compose up -d` (o `docker compose up -d --build`).
 3. En Reporter Configuration verás el badge **"Modo desarrollo (Docker)"** (naranja). Al pulsar "Iniciar a Reportar" se encola en Celery y el worker ejecuta el reporter en el contenedor (timeouts y config de desarrollo).
-4. En consola del backend al arrancar: `[DAHELL] DAHELL_ENV=development | Reporter: Celery (desarrollo Docker)`.
+4. En consola del backend al arrancar: `[DropTools] DROPTOOLS_ENV=development | Reporter: Celery (desarrollo Docker)`.
 
 Así puedes hacer cambios en tu PC, probar con Docker + Celery, y cuando funcione subir al servidor sin que el servidor sufra cada cambio.
 
@@ -110,7 +110,7 @@ El backend **encola** el trabajo en Redis; el worker de Celery lo ejecuta. Si Re
 docker compose ps
 ```
 
-Deben estar **Up**: `dahell_redis`, `dahell_backend`, `dahell_celery_worker`.
+Deben estar **Up**: `droptools_redis`, `droptools_backend`, `droptools_celery_worker`.
 
 **Logs del backend** (al hacer clic en "Iniciar a Reportar"):
 
@@ -332,8 +332,8 @@ Desde la raíz del proyecto (donde está `docker-compose.yml`):
 **1. Ver tareas activas del reporter (qué está ejecutándose ahora):**
 
 ```powershell
-cd "c:\Users\guerr\OneDrive\Documentos\Dahell"
-docker compose exec celery_worker celery -A dahell_backend inspect active
+cd "c:\Users\guerr\OneDrive\Documentos\DropTools"
+docker compose exec celery_worker celery -A droptools_backend inspect active
 ```
 
 Verás por worker la lista de tareas con `id`, `name` (p. ej. `core.tasks.execute_workflow_task`), etc.
@@ -341,7 +341,7 @@ Verás por worker la lista de tareas con `id`, `name` (p. ej. `core.tasks.execut
 **2. Vaciar la cola (solo tareas pendientes, no las que ya están corriendo):**
 
 ```powershell
-docker compose exec celery_worker celery -A dahell_backend purge
+docker compose exec celery_worker celery -A droptools_backend purge
 ```
 
 Responde `y` si pregunta confirmación. Esto borra las tareas en espera; las que ya están en ejecución siguen hasta terminar o hasta que las revoquemos.
@@ -351,7 +351,7 @@ Responde `y` si pregunta confirmación. Esto borra las tareas en espera; las que
 Primero obtén el `id` de la tarea con el comando del punto 1. Luego:
 
 ```powershell
-docker compose exec celery_worker celery -A dahell_backend control revoke <TASK_ID> --terminate
+docker compose exec celery_worker celery -A droptools_backend control revoke <TASK_ID> --terminate
 ```
 
 Sustituye `<TASK_ID>` por el UUID que salió en `inspect active` (ej. `3b068bf7-c89b-482a-8f14-80fcac6cd3dc`).

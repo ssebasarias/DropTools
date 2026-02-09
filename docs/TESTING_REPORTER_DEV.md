@@ -15,7 +15,7 @@ Configuración actual (ejemplo para tu entorno):
 - **Password:** (definido en el JSON, no loguear)  
 - **user_ids:** [2, 3, 4] — usuarios que usan este proxy en DEV  
 
-Solo se usa cuando `DAHELL_ENV=development` y el archivo existe. En producción se ignora.
+Solo se usa cuando `DROPTOOLS_ENV=development` y el archivo existe. En producción se ignora.
 
 ## Comandos y scripts
 

@@ -90,7 +90,7 @@ function ErrorFallback({ error, errorInfo, onReset }) {
             Ha ocurrido un error inesperado. Por favor, intenta recargar la página o regresar al inicio.
           </p>
 
-          {process.env.NODE_ENV === 'development' && error && (
+          {import.meta.env.DEV && error && (
             <details style={{
               marginBottom: '1.5rem',
               padding: '1rem',

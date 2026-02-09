@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Trophy, Bot, BarChart3, Zap } from 'lucide-react';
+import { Trophy, Bot, BarChart3, Zap, Lock } from 'lucide-react';
 import './Sidebar.css';
 import { getAuthUser } from '../../services/authService';
 
@@ -11,9 +11,26 @@ const UserSidebar = () => {
     const initials = displayName.substring(0, 2).toUpperCase();
 
     const navItems = [
-        { path: '/user/dashboard', label: 'Winner Products', icon: Trophy, glow: true },
-        { path: '/user/reporter-setup', label: 'Configuración Reporter', icon: Bot },
-        { path: '/user/analysis', label: 'Análisis de Reportes', icon: BarChart3 },
+        { 
+            path: '/user/dashboard', 
+            label: 'Winner Products', 
+            icon: Trophy, 
+            glow: true,
+            disabled: true,
+            disabledMessage: 'Esta función estará disponible próximamente. Estamos trabajando en traerte los mejores productos ganadores.'
+        },
+        { 
+            path: '/user/reporter-setup', 
+            label: 'Configuración Reporter', 
+            icon: Bot 
+        },
+        { 
+            path: '/user/analysis', 
+            label: 'Análisis de Reportes', 
+            icon: BarChart3,
+            disabled: true,
+            disabledMessage: 'Análisis avanzado disponible próximamente. Podrás ver estadísticas detalladas de tus reportes.'
+        },
     ];
 
     return (
@@ -23,24 +40,75 @@ const UserSidebar = () => {
                     <Zap size={24} color="white" fill="#6366f1" />
                 </div>
                 <div className="logo-text">
-                    <h2>Dahell</h2>
+                    <h2>DropTools</h2>
                     <span>Portal de Usuario</span>
                 </div>
             </div>
 
             <nav className="nav-menu">
-                {navItems.map((item) => (
-                    <NavLink
-                        key={item.path}
-                        to={item.path}
-                        className={({ isActive }) =>
-                            `nav-item ${isActive ? 'active' : ''} ${item.glow ? 'glow-effect' : ''}`
-                        }
-                    >
-                        <item.icon size={20} />
-                        <span>{item.label}</span>
-                    </NavLink>
-                ))}
+                {navItems.map((item) => {
+                    // Si está deshabilitado, renderizar como div en lugar de NavLink
+                    if (item.disabled) {
+                        return (
+                            <div
+                                key={item.path}
+                                className="nav-item nav-item-disabled"
+                                title={item.disabledMessage}
+                                style={{
+                                    opacity: 0.5,
+                                    cursor: 'not-allowed',
+                                    position: 'relative',
+                                    pointerEvents: 'none',
+                                    filter: 'grayscale(0.3)'
+                                }}
+                            >
+                                <item.icon size={20} />
+                                <span>{item.label}</span>
+                                
+                                {/* Badge "Próximamente" */}
+                                <span style={{
+                                    position: 'absolute',
+                                    top: '8px',
+                                    right: '8px',
+                                    fontSize: '0.65rem',
+                                    fontWeight: 600,
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+                                    color: '#f59e0b',
+                                    border: '1px solid rgba(245, 158, 11, 0.3)'
+                                }}>
+                                    Próximamente
+                                </span>
+                                
+                                {/* Icono de candado */}
+                                <Lock 
+                                    size={14} 
+                                    style={{
+                                        position: 'absolute',
+                                        bottom: '8px',
+                                        right: '8px',
+                                        color: 'rgba(245, 158, 11, 0.6)'
+                                    }}
+                                />
+                            </div>
+                        );
+                    }
+                    
+                    // Si NO está deshabilitado, renderizar NavLink normal
+                    return (
+                        <NavLink
+                            key={item.path}
+                            to={item.path}
+                            className={({ isActive }) =>
+                                `nav-item ${isActive ? 'active' : ''} ${item.glow ? 'glow-effect' : ''}`
+                            }
+                        >
+                            <item.icon size={20} />
+                            <span>{item.label}</span>
+                        </NavLink>
+                    );
+                })}
             </nav>
 
             <div className="sidebar-footer">

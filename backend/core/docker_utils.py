@@ -15,15 +15,15 @@ CACHE_LOCK = threading.Lock()
 # Configuration
 MONITORING_INTERVAL = 3  # Seconds between updates
 CONTAINERS_TO_MONITOR = [
-    "dahell_scraper", 
-    "dahell_shopify",  # Changed from dahell_market_agent / dahell_amazon_explorer
-    "dahell_loader", 
-    "dahell_vectorizer", 
-    "dahell_classifier",
-    "dahell_clusterizer", 
-    "dahell_ai_trainer",
-    "dahell_celery_worker",
-    "dahell_db"
+    "droptools_scraper", 
+    "droptools_shopify",
+    "droptools_loader", 
+    "droptools_vectorizer", 
+    "droptools_classifier",
+    "droptools_clusterizer", 
+    "droptools_ai_trainer",
+    "droptools_celery_worker",
+    "droptools_db"
 ]
 
 _docker_error_logged = False

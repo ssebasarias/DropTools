@@ -1,4 +1,4 @@
-# Auditoría Técnica FINAL - Proyecto Dahell (Diciembre 2025)
+# Auditoría Técnica FINAL - Proyecto DropTools (Diciembre 2025)
 
 ## 1. Estado del Proyecto: 🟢 OPTIMIZADO
 Tras las intervenciones realizadas el 16 de Diciembre, el sistema ha pasado de un estado "Funcional con Deuda Técnica" a **"Production Ready"**.

@@ -1,25 +1,25 @@
-# Contenedores para Dahell Intelligence (Scraper + DB + GUI)
+# Contenedores para DropTools (Scraper + DB + GUI)
 # (version ya no es necesario en Docker Compose v2+)
 services:
   # 1. Base de Datos PostgreSQL con pgvector
   db:
     image: pgvector/pgvector:pg17
-    container_name: dahell_db
+    container_name: droptools_db
     restart: always
     env_file:
       - .env.docker
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./docs/dahell_db.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./docs/droptools_db.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5433:5432"
     networks:
-      - dahell_net
+      - droptools_net
 
   # 2. Interfaz Gráfica para DB (pgAdmin 4)
   pgadmin:
     image: dpage/pgadmin4
-    container_name: dahell_pgadmin
+    container_name: droptools_pgadmin
     restart: always
     env_file:
       - .env.docker
@@ -28,14 +28,14 @@ services:
     depends_on:
       - db
     networks:
-      - dahell_net
+      - droptools_net
 
   # 3. Scraper (Python + Selenium)
   scraper:
     build:
       context: .
       target: selenium
-    container_name: dahell_scraper
+    container_name: droptools_scraper
     # Comparte variables del .env con Python
     env_file:
       - .env.docker
@@ -56,7 +56,7 @@ services:
     # No inicia solo, tú lo lanzas cuando quieras scrapear
     profiles: [ "workers" ]
     networks:
-      - dahell_net
+      - droptools_net
     # Comando por defecto (opcional, o se corre manual)
     command: python backend/manage.py scraper
     restart: on-failure:3 # Auto-reinicio en caso de error
@@ -67,7 +67,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_loader
+    container_name: droptools_loader
     env_file:
       - .env.docker
     volumes:
@@ -80,7 +80,7 @@ services:
           cpus: '1.0'
           memory: 500M
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py loader
     profiles: [ "workers" ]
     restart: on-failure:3 # Auto-reinicio en caso de error
@@ -91,7 +91,7 @@ services:
     build:
       context: .
       target: vectorizer
-    container_name: dahell_vectorizer
+    container_name: droptools_vectorizer
     env_file:
       - .env.docker
     volumes:
@@ -110,7 +110,7 @@ services:
               count: 1
               capabilities: [ gpu ]
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py vectorizer
     profiles: [ "workers" ]
     restart: on-failure:3 # Auto-reinicio en caso de error
@@ -121,7 +121,7 @@ services:
     build:
       context: .
       target: selenium # Reusamos la imagen que ya tiene python y librerias
-    container_name: dahell_clusterizer
+    container_name: droptools_clusterizer
     env_file:
       - .env.docker
     volumes:
@@ -133,7 +133,7 @@ services:
           cpus: '1.0'
           memory: 1G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py clusterizer
     profiles: [ "workers" ]
     restart: no
@@ -144,7 +144,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_classifier
+    container_name: droptools_classifier
     env_file:
       - .env.docker
     volumes:
@@ -156,7 +156,7 @@ services:
           cpus: '1.0'
           memory: 1.2G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py classifier
     profiles: [ "workers" ]
     restart: no
@@ -167,7 +167,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_classifier_2
+    container_name: droptools_classifier_2
     env_file:
       - .env.docker
     volumes:
@@ -179,7 +179,7 @@ services:
           cpus: '1.0'
           memory: 1.2G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py classifier
     profiles: [ "workers" ]
     restart: no
@@ -190,7 +190,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_market_trender
+    container_name: droptools_market_trender
     env_file:
       - .env.docker
     volumes:
@@ -202,7 +202,7 @@ services:
           cpus: '1.0'
           memory: 1G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py market_trender
     profiles: [ "workers" ]
     restart: no
@@ -213,7 +213,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_meta_scholar
+    container_name: droptools_meta_scholar
     env_file:
       - .env.docker
     volumes:
@@ -226,7 +226,7 @@ services:
           cpus: '1.0'
           memory: 2G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py meta_scholar
     profiles: [ "workers" ]
     restart: "no"
@@ -238,7 +238,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_shopify_auditor
+    container_name: droptools_shopify_auditor
     env_file:
       - .env.docker
     volumes:
@@ -251,7 +251,7 @@ services:
           cpus: '1.0'
           memory: 1G
     networks:
-      - dahell_net
+      - droptools_net
     command: python backend/manage.py shopify_auditor
     profiles: [ "workers" ]
     restart: no
@@ -263,18 +263,18 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_backend
+    container_name: droptools_backend
     restart: always
     env_file:
       - .env.docker
     environment:
-      # Modo: development (con override) o production. Si no usas override, pon aquí DAHELL_ENV=production
-      - DAHELL_ENV=development
+      # Modo: development (con override) o production. Si no usas override, pon aquí DROPTOOLS_ENV=production
+      - DROPTOOLS_ENV=development
       # Hot-reload y desarrollo
       - PYTHONUNBUFFERED=1
       - PYTHONIOENCODING=utf-8
       - PYTHONUTF8=1
-      - DJANGO_SETTINGS_MODULE=dahell_backend.settings
+      - DJANGO_SETTINGS_MODULE=droptools_backend.settings
       - PYTHONPATH=/app/backend
       # Celery configuration
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -295,16 +295,16 @@ services:
       - db
       - redis
     networks:
-      - dahell_net
+      - droptools_net
     # 6. Redis (Message Broker para Celery)
   redis:
     image: redis:7-alpine
-    container_name: dahell_redis
+    container_name: droptools_redis
     restart: always
     ports:
       - "6379:6379"
     networks:
-      - dahell_net
+      - droptools_net
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
@@ -314,12 +314,12 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_celery_worker
+    container_name: droptools_celery_worker
     restart: always
     env_file:
       - .env.docker
     environment:
-      - DAHELL_ENV=development
+      - DROPTOOLS_ENV=development
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -336,12 +336,12 @@ services:
       - ./logs:/app/logs
       - ./results:/app/backend/results
     working_dir: /app/backend
-    command: celery -A dahell_backend worker -l info --concurrency=3
+    command: celery -A droptools_backend worker -l info --concurrency=3
     depends_on:
       - redis
       - backend
     networks:
-      - dahell_net
+      - droptools_net
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -360,7 +360,7 @@ services:
     build:
       context: .
       target: selenium
-    container_name: dahell_flower
+    container_name: droptools_flower
     restart: always
     env_file:
       - .env.docker
@@ -370,16 +370,16 @@ services:
     ports:
       - "5555:5555"
     working_dir: /app/backend
-    command: celery -A dahell_backend flower --port=5555
+    command: celery -A droptools_backend flower --port=5555
     depends_on:
       - redis
       - celery_worker
     networks:
-      - dahell_net
+      - droptools_net
     # 9. Frontend (React + Vite)
   frontend:
     image: node:20-alpine
-    container_name: dahell_frontend
+    container_name: droptools_frontend
     restart: always
     working_dir: /app
     volumes:
@@ -391,7 +391,7 @@ services:
       - CHOKIDAR_USEPOLLING=true # Necesario para hot-reload en Windows/Docker
     command: sh -c "npm install --legacy-peer-deps && npm run dev -- --host"
     networks:
-      - dahell_net
+      - droptools_net
 
 volumes:
   pg_data: # Persistencia de la DB
@@ -399,5 +399,5 @@ volumes:
     # Persistencia de Redis
 
 networks:
-  dahell_net:
+  droptools_net:
     driver: bridge

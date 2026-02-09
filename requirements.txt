@@ -1,5 +1,5 @@
 # =============================================================================
-# Dahell Intelligence - Python Dependencies
+# DropTools - Python Dependencies
 # =============================================================================
 # Instalar: pip install -r requirements.txt
 # Recomendado: usar entorno virtual (venv) antes de instalar.
@@ -59,3 +59,8 @@ SQLAlchemy>=2.0.0
 # --- Utilities ---
 tqdm>=4.65.0
 docker>=7.0.0
+
+# --- Google OAuth ---
+google-auth==2.25.2
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0

@@ -69,5 +69,5 @@ Para ejecutar el slot sin esperar a Celery Beat:
 
 ## Despliegue
 
-- Ejecutar Celery Beat además del worker: `celery -A dahell_backend beat -l info` (o incluir beat en el mismo proceso según tu setup).
+- Ejecutar Celery Beat además del worker: `celery -A droptools_backend beat -l info` (o incluir beat en el mismo proceso según tu setup).
 - Asegurar que Redis esté disponible y que `CELERY_BROKER_URL` apunte al mismo Redis usado por el semáforo.

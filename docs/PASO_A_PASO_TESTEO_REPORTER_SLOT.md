@@ -11,7 +11,7 @@ Guía con **comandos completos en PowerShell** para: migraciones, cargar usuario
 ### 1.1 Ir a la raíz del proyecto
 
 ```powershell
-cd c:\Users\guerr\OneDrive\Documentos\Dahell
+cd c:\Users\guerr\OneDrive\Documentos\DropTools
 ```
 
 ### 1.2 Levantar solo los servicios necesarios (DB, Redis, Backend)
@@ -27,7 +27,7 @@ Start-Sleep -Seconds 10
 docker compose exec backend python backend/manage.py migrate --noinput
 ```
 
-**Si la BD se inicializó desde `docs/dahell_db.sql`** (tablas ya existen, esquema distinto a las migraciones de Django):
+**Si la BD se inicializó desde `docs/droptools_db.sql`** (tablas ya existen, esquema distinto a las migraciones de Django):
 
 1. Reparar contenttypes y preparar migraciones (quita el fake de 0002 y añade la columna `name` para que 0002 pueda aplicarse de verdad):
 
@@ -156,7 +156,7 @@ docker compose up -d
 ### 4.2 Ver que el worker tiene 6 procesos
 
 ```powershell
-docker compose exec celery_worker celery -A dahell_backend inspect active
+docker compose exec celery_worker celery -A droptools_backend inspect active
 ```
 
 O revisar logs al arrancar:
@@ -275,7 +275,7 @@ if r:
 
 ```powershell
 # 1. Raíz del proyecto
-cd c:\Users\guerr\OneDrive\Documentos\Dahell
+cd c:\Users\guerr\OneDrive\Documentos\DropTools
 
 # 2. Levantar DB, Redis, Backend
 docker compose up -d db redis backend

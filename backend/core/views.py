@@ -5,6 +5,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
+from django.conf import settings
 from core.models import User
 from django.db import transaction
 from django.db.models import Avg, Count, Q, Sum
@@ -28,6 +29,7 @@ from .models import (
     ReporterRun,
     ReporterRunUser,
     reporter_reservation_weight_from_orders,
+    assign_best_available_slot,
 )
 from .permissions import IsAdminRole, MinSubscriptionTier
 from datetime import datetime, timedelta, time as dt_time
@@ -40,13 +42,13 @@ class DashboardStatsView(APIView):
     permission_classes = [IsAdminRole]
     def get(self, request):
         """
-        Centro de Comando EstratÃ©gico (V2).
-        Retorna inteligencia real del mercado y oportunidades tÃ¡cticas, 
+        Centro de Comando Estratégico (V2).
+        Retorna inteligencia real del mercado y oportunidades tácticas, 
         ya no solo estado del servidor.
         """
         
         # ---------------------------------------------------------
-        # 1. FLASH OPPORTUNITIES (Los mejores hallazgos de las Ãºltimas 48h)
+        # 1. FLASH OPPORTUNITIES (Los mejores hallazgos de las últimas 48h)
         # ---------------------------------------------------------
         # Buscamos productos recientes que prometen alto margen y baja competencia.
         # Estrategia: Productos recientes -> Ordenados por Margen -> Que NO tengan muchos competidores.
@@ -64,18 +66,18 @@ class DashboardStatsView(APIView):
         # 1. Extraer los IDs de los productos obtenidos
         p_ids = [p.product_id for p in flash_ops]
         
-        # 2. Traer todas las membresÃ­as relevantes de una sola vez
+        # 2. Traer todas las membresías relevantes de una sola vez
         memberships = ProductClusterMembership.objects.filter(
             product_id__in=p_ids
         ).select_related('cluster')
         
-        # 3. Crear un diccionario para acceso instantÃ¡neo O(1)
+        # 3. Crear un diccionario para acceso instantáneo O(1)
         # Map: product_id -> cluster_obj
         cluster_map = {m.product_id: m.cluster for m in memberships}
 
         tactical_feed = []
         for p in flash_ops:
-            # Ahora la bÃºsqueda es en memoria (InstantÃ¡nea)
+            # Ahora la búsqueda es en memoria (Instantánea)
             cluster = cluster_map.get(p.product_id)
             
             competitors = 1
@@ -97,9 +99,9 @@ class DashboardStatsView(APIView):
                 if len(tactical_feed) >= 5: break # Solo queremos los Top 5 para el UI
 
         # ---------------------------------------------------------
-        # 2. MARKET RADAR (Inteligencia por CategorÃ­a)
+        # 2. MARKET RADAR (Inteligencia por Categoría)
         # ---------------------------------------------------------
-        # OPTIMIZACION: Query Ãºnica con Agregaciones (Elimina N+1 Problems)
+        # OPTIMIZACION: Query única con Agregaciones (Elimina N+1 Problems)
         # Calculamos conteo, precio promedio, margen promedio y competencia promedio en una sola consulta.
         
         radar_qs = Category.objects.filter(
@@ -108,11 +110,11 @@ class DashboardStatsView(APIView):
             product_count=Count('productcategory__product', distinct=True),
             avg_price=Avg('productcategory__product__sale_price'),
             avg_margin=Avg('productcategory__product__profit_margin'),
-            # Competencia: Promedio de competidores de los clusters asociados a los productos de la categorÃ­a
+            # Competencia: Promedio de competidores de los clusters asociados a los productos de la categoría
             avg_competitiveness=Avg('productcategory__product__cluster_membership__cluster__total_competitors')
         ).filter(
-            product_count__gte=5 # Solo categorÃ­as relevantes
-        ).order_by('-avg_margin') # Priorizar las mÃ¡s rentables
+            product_count__gte=5 # Solo categorías relevantes
+        ).order_by('-avg_margin') # Priorizar las más rentables
 
         radar_data = []
         
@@ -132,7 +134,7 @@ class DashboardStatsView(APIView):
 
         return Response({
             "tactical_feed": tactical_feed,
-            "market_radar": radar_data[:15] # Top 15 categorÃ­as para no saturar el grÃ¡fico
+            "market_radar": radar_data[:15] # Top 15 categorías para no saturar el gráfico
         })
 
 from django.db import connection
@@ -141,7 +143,7 @@ from django.db import connection
 class GoldMineView(APIView):
     permission_classes = [IsAdminRole]
     def post(self, request):
-        """BÃºsqueda Visual (Reverse Image Search)"""
+        """Búsqueda Visual (Reverse Image Search)"""
         if 'image' not in request.FILES:
             return Response({"error": "No image provided"}, status=400)
             
@@ -173,12 +175,12 @@ class GoldMineView(APIView):
             similar_pids = [r[0] for r in rows]
 
         # 3. Recuperar detalles de clusters para esos productos
-        # Queremos saber a quÃ© cluster pertenecen esos productos similares
+        # Queremos saber a qué cluster pertenecen esos productos similares
         # y devolver el cluster entero o el representante
         results = []
         if similar_pids:
             # Traer info de clusters donde esos productos son miembros o representantes
-            # SimplificaciÃ³n: Devolvemos los productos directos encontrados, enriquecidos con su cluster info
+            # Simplificación: Devolvemos los productos directos encontrados, enriquecidos con su cluster info
             products = Product.objects.filter(product_id__in=similar_pids).select_related('supplier')
             
             # --- OPTIMIZACION N+1 ---
@@ -191,7 +193,7 @@ class GoldMineView(APIView):
             dist_map = {r[0]: r[1] for r in rows}
             
             for p in products:
-                # BÃºsqueda en memoria O(1)
+                # Búsqueda en memoria O(1)
                 cluster_info = cluster_map.get(p.product_id)
                 
                 results.append({
@@ -212,7 +214,7 @@ class GoldMineView(APIView):
         return Response(results)
 
     def get(self, request):
-        """BÃºsqueda Textual y Filtros"""
+        """Búsqueda Textual y Filtros"""
         try:
             min_comp = int(request.query_params.get('min_comp', 0))
             max_comp = int(request.query_params.get('max_comp', 50)) 
@@ -227,7 +229,7 @@ class GoldMineView(APIView):
         # 2. Construir Query
         filters = Q(total_competitors__gte=min_comp) & Q(total_competitors__lte=max_comp)
         
-        # Filtro opcional de precio si lo envÃ­an
+        # Filtro opcional de precio si lo envían
         min_price = request.query_params.get('min_price')
         max_price = request.query_params.get('max_price')
         
@@ -243,7 +245,7 @@ class GoldMineView(APIView):
         if search_query:
             filters &= Q(representative_product__title__icontains=search_query)
             
-        # Filtro de CategorÃ­a
+        # Filtro de Categoría
         if category_filter and category_filter != 'all':
             filters &= Q(representative_product__productcategory__category__id=category_filter)
 
@@ -280,10 +282,10 @@ class GoldMineView(APIView):
 class GoldMineStatsView(APIView):
     permission_classes = [IsAdminRole]
     def get(self, request):
-        """Retorna estadÃ­sticas globales de distribuciÃ³n de competidores"""
+        """Retorna estadísticas globales de distribución de competidores"""
         
         # Filtros Base (Search, Category, Price)
-        # NOTA: NO filtramos por min_comp/max_comp aquÃ­, para mostrar el panorama completo
+        # NOTA: NO filtramos por min_comp/max_comp aquí, para mostrar el panorama completo
         search_query = request.query_params.get('q', '')
         category_filter = request.query_params.get('category', None)
         min_price = request.query_params.get('min_price')
@@ -297,7 +299,7 @@ class GoldMineStatsView(APIView):
         if category_filter and category_filter != 'all':
             filters &= Q(representative_product__productcategory__category__id=category_filter)
 
-        # AgregaciÃ³n: Contar cuantos clusters tienen X competidores
+        # Agregación: Contar cuantos clusters tienen X competidores
         # SELECT total_competitors, COUNT(*) as count FROM unique_product_clusters WHERE filters GROUP BY total_competitors
         stats = UniqueProductCluster.objects.filter(filters)\
             .values('total_competitors')\
@@ -314,11 +316,11 @@ from django.utils import timezone
 class ClusterLabStatsView(APIView):
     permission_classes = [IsAdminRole]
     """
-    MÃ©tricas para el Sidebar del Cluster Lab (XP y Progreso).
+    Métricas para el Sidebar del Cluster Lab (XP y Progreso).
     """
     def get(self, request):
         try:
-            # 1. Total AuditorÃ­as Realizadas (XP del Usuario)
+            # 1. Total Auditorías Realizadas (XP del Usuario)
             total_feedback = AIFeedback.objects.count()
             
             # --- XP DIARIA ---
@@ -329,12 +331,12 @@ class ClusterLabStatsView(APIView):
             # 2. Total Decisiones IA Registradas
             total_logs = ClusterDecisionLog.objects.count()
 
-            # 3. PrecisiÃ³n Humana (Correcciones vs Confirmaciones)
+            # 3. Precisión Humana (Correcciones vs Confirmaciones)
             correct_feedback = AIFeedback.objects.filter(feedback='CORRECT').count()
             incorrect_feedback = AIFeedback.objects.filter(feedback='INCORRECT').count()
             
             # --- SALUD DEL SISTEMA ---
-            # HuÃ©rfanos: Clusters con singletons
+            # Huérfanos: Clusters con singletons
             pending_orphans = UniqueProductCluster.objects.filter(total_competitors=1).count()
             total_products = Product.objects.count()
 
@@ -354,7 +356,7 @@ class ClusterAuditView(APIView):
     permission_classes = [IsAdminRole]
     """
     API para el 'Cluster Lab'.
-    1. GET: Retorna los Ãºltimos logs de decisiÃ³n del Clusterizer (Persistent DB).
+    1. GET: Retorna los últimos logs de decisión del Clusterizer (Persistent DB).
     2. POST: (Opcional) Simula un match entre dos productos (Dry Run).
     """
     def get(self, request):
@@ -397,11 +399,11 @@ class ClusterAuditView(APIView):
 class ClusterOrphansView(APIView):
     permission_classes = [IsAdminRole]
     """
-    Retorna productos que estÃ¡n en clusters 'SINGLETON' (solitarios)
-    para auditar por quÃ© no se unieron.
+    Retorna productos que están en clusters 'SINGLETON' (solitarios)
+    para auditar por qué no se unieron.
     """
     def get(self, request):
-        # Buscar clusters con tamaÃ±o 1 (o marcados como SINGLETON si tuvieramos ese flag)
+        # Buscar clusters con tamaño 1 (o marcados como SINGLETON si tuviéramos ese flag)
         # Por eficiencia, buscamos en la tabla de metricas
         orphans = UniqueProductCluster.objects.filter(total_competitors=1).order_by('-updated_at')[:20]
         
@@ -422,7 +424,7 @@ class ClusterOrphansView(APIView):
 
     def post(self, request):
         """
-        Simula la bÃºsqueda de candidatos para un producto huÃ©rfano.
+        Simula la búsqueda de candidatos para un producto huérfano.
         Argumentos: { "product_id": 123 }
         Retorna: Lista de Top 15 (antes 10) Candidatos con scores detallados (Grid V3).
         """
@@ -464,12 +466,12 @@ class ClusterOrphansView(APIView):
                 for row in cur.fetchall():
                     c_pid, c_title, c_price, c_img, dist = row
                     
-                    # Calcular Scores (Misma lÃ³gica que Clusterizer V3)
+                    # Calcular Scores (Misma lógica que Clusterizer V3)
                     visual_score = max(0, 1.0 - float(dist))
                     text_score = SequenceMatcher(None, str(target_title).lower(), str(c_title).lower()).ratio()
                     final_score = (0.6 * visual_score) + (0.4 * text_score)
                     
-                    # LÃ³gica de Rescate (Simulada)
+                    # Lógica de Rescate (Simulada)
                     method = "REJECTED"
                     if visual_score >= 0.92: method = "VISUAL_MATCH"
                     elif text_score >= 0.95 and visual_score >= 0.65: method = "TEXT_RESCUE"
@@ -501,7 +503,7 @@ class ClusterOrphansView(APIView):
 class CategoriesView(APIView):
     permission_classes = [IsAdminRole]
     def get(self, request):
-        """Listar todas las categorÃ­as disponibles"""
+        """Listar todas las categorías disponibles"""
         cats = Category.objects.all().order_by('name')
         data = [{"id": c.id, "name": c.name} for c in cats]
         return Response(data)
@@ -519,13 +521,13 @@ class SystemLogsView(APIView):
         """
         # Mapeo Service ID -> Container Name
         services = {
-            "scraper": "dahell_scraper",
-            "loader": "dahell_loader",
-            "vectorizer": "dahell_vectorizer",
-            "classifier": "dahell_classifier",
-            "clusterizer": "dahell_clusterizer",
-            "shopify": "dahell_shopify", 
-            "ai_trainer": "dahell_ai_trainer"
+            "scraper": "droptools_scraper",
+            "loader": "droptools_loader",
+            "vectorizer": "droptools_vectorizer",
+            "classifier": "droptools_classifier",
+            "clusterizer": "droptools_clusterizer",
+            "shopify": "droptools_shopify", 
+            "ai_trainer": "droptools_ai_trainer"
         }
         
         results = {}
@@ -553,7 +555,7 @@ class ClusterFeedbackView(APIView):
     permission_classes = [IsAdminRole]
     def post(self, request):
         """
-        Guarda el feedback del usuario sobre una decisiÃ³n de clustering (RICHER DATA).
+        Guarda el feedback del usuario sobre una decisión de clustering (RICHER DATA).
         Body: { product_id, candidate_id, decision, feedback, visual_score, text_score, final_score, method, active_weights }
         """
         try:
@@ -589,16 +591,16 @@ class ContainerStatsView(APIView):
         Retorna estado robusto de los contenedores (CPU, RAM, Status).
         """
         containers = {
-            "scraper": "dahell_scraper",
-            "loader": "dahell_loader",
-            "vectorizer": "dahell_vectorizer",
-            "classifier": "dahell_classifier",
-            "clusterizer": "dahell_clusterizer",
-            "market_agent": "dahell_market_agent",
-            "amazon_explorer": "dahell_amazon_explorer",
-            "ai_trainer": "dahell_ai_trainer",
-            "celery_worker": "dahell_celery_worker",
-            "db": "dahell_db"
+            "scraper": "droptools_scraper",
+            "loader": "droptools_loader",
+            "vectorizer": "droptools_vectorizer",
+            "classifier": "droptools_classifier",
+            "clusterizer": "droptools_clusterizer",
+            "market_agent": "droptools_market_agent",
+            "amazon_explorer": "droptools_amazon_explorer",
+            "ai_trainer": "droptools_ai_trainer",
+            "celery_worker": "droptools_celery_worker",
+            "db": "droptools_db"
         }
         
         data = {}
@@ -616,16 +618,16 @@ class ContainerControlView(APIView):
         """
         # Map logical service ids -> container names
         mapping = {
-            "scraper": ["dahell_scraper"],
-            "loader": ["dahell_loader"],
-            "vectorizer": ["dahell_vectorizer"],
+            "scraper": ["droptools_scraper"],
+            "loader": ["droptools_loader"],
+            "vectorizer": ["droptools_vectorizer"],
             # For 'classifier' we intentionally map to BOTH classifier containers
-            "classifier": ["dahell_classifier", "dahell_classifier_2"],
-            "clusterizer": ["dahell_clusterizer"],
-            "market_agent": ["dahell_market_agent"],
-            "amazon_explorer": ["dahell_amazon_explorer"],
-            "ai_trainer": ["dahell_ai_trainer"],
-            "celery_worker": ["dahell_celery_worker"]
+            "classifier": ["droptools_classifier", "droptools_classifier_2"],
+            "clusterizer": ["droptools_clusterizer"],
+            "market_agent": ["droptools_market_agent"],
+            "amazon_explorer": ["droptools_amazon_explorer"],
+            "ai_trainer": ["droptools_ai_trainer"],
+            "celery_worker": ["droptools_celery_worker"]
         }
 
         container_names = mapping.get(service)
@@ -667,7 +669,7 @@ class ClusterOrphanActionView(APIView):
             if not product:
                 return Response({"error": "Product not found"}, status=404)
 
-            print(f"âš¡ ORPHAN ACTION: {action} on Target {target_id}")
+            print(f"ORPHAN ACTION: {action} on Target {target_id}")
 
             with transaction.atomic():
                 if action == 'TRASH':
@@ -675,16 +677,16 @@ class ClusterOrphanActionView(APIView):
                     # Esto lo saca del radar del sistema de IA y Clustering
                     ProductEmbedding.objects.filter(product_id=target_id).delete()
                     ProductClusterMembership.objects.filter(product_id=target_id).delete()
-                    # Opcional: Marcar producto como inactivo si tuvieramos campo status
+                    # Opcional: Marcar producto como inactivo si tuviéramos campo status
                     # product.status = 'TRASH'
                     # product.save()
                     msg = "Product incinerated (Embeddings & Cluster info removed)"
 
                 elif action == 'CONFIRM_SINGLETON':
-                    # Confirmar que es Ãºnico. 
-                    # Simplemente nos aseguramos que tenga un cluster propio y valido.
+                    # Confirmar que es único. 
+                    # Simplemente nos aseguramos que tenga un cluster propio y válido.
                     # El hecho de que el usuario lo revise ya valida su existencia.
-                    # PodrÃ­amos agregar un flag 'verified_by_human' en el futuro.
+                    # Podríamos agregar un flag 'verified_by_human' en el futuro.
                     msg = "Singleton confirmed"
 
                 elif action == 'MERGE_SELECTED':
@@ -700,7 +702,7 @@ class ClusterOrphanActionView(APIView):
 
                     # 2. Mover candidatos a este cluster
                     for cand_id in candidates:
-                        # Borrar membresÃ­a anterior
+                        # Borrar membresía anterior
                         ProductClusterMembership.objects.filter(product_id=cand_id).delete()
                         # Crear nueva en el cluster del target
                         ProductClusterMembership.objects.create(
@@ -805,8 +807,8 @@ class ReporterConfigView(APIView):
 class ReporterStartView(APIView):
     """
     Inicia el workflow de reportes manualmente.
-    - DAHELL_ENV=development: ejecuta el reporter en proceso (Windows/local, Edge, sin Celery).
-    - DAHELL_ENV=production: encola la tarea en Celery (Docker/Linux).
+    - DROPTOOLS_ENV=development: ejecuta el reporter en proceso (Windows/local, Edge, sin Celery).
+    - DROPTOOLS_ENV=production: encola la tarea en Celery (Docker/Linux).
     """
     def post(self, request):
         user = request.user
@@ -938,7 +940,7 @@ class ReporterEnvView(APIView):
 
     def get(self, request):
         from django.conf import settings
-        env_name = getattr(settings, 'DAHELL_ENV', 'production')
+        env_name = getattr(settings, 'DROPTOOLS_ENV', getattr(settings, 'DAHELL_ENV', 'production'))
         use_celery = getattr(settings, 'REPORTER_USE_CELERY', True)
         run_mode = getattr(settings, 'REPORTER_RUN_MODE', 'production')
         if run_mode == 'development_docker':
@@ -948,7 +950,7 @@ class ReporterEnvView(APIView):
         else:
             message = "producción (Celery)"
         return Response({
-            "dahell_env": env_name,
+            "droptools_env": env_name,
             "reporter_use_celery": use_celery,
             "run_mode": run_mode,
             "message": message,
@@ -977,7 +979,7 @@ class ReporterStopView(APIView):
         revoked_ids = []
         purged = False
         try:
-            from dahell_backend.celery import app
+            from droptools_backend.celery import app
             # Tareas del reporter que queremos revocar
             reporter_task_names = (
                 'core.tasks.execute_workflow_task',
@@ -1038,15 +1040,24 @@ class ReporterStatusView(APIView):
             
             print(f"DEBUG: Status check for user {user.username} ({user.id})")
 
-            # Contar reportes por estado
-            # CORRECCIÓN KPI: Solo contar los reportes realizados HOY
-            today = timezone.now().date()
+            # Contar reportes por estado (fechas en timezone del servidor: America/Bogota)
+            now = timezone.now()
+            today = now.date()
+            # Primer día del mes actual (inclusive) para total_reported_month
+            first_of_month = today.replace(day=1)
+
             total_reported = OrderReport.objects.filter(
-                user=user, 
+                user=user,
                 status='reportado',
                 updated_at__date=today
             ).count()
-            
+
+            total_reported_month = OrderReport.objects.filter(
+                user=user,
+                status='reportado',
+                updated_at__date__gte=first_of_month
+            ).count()
+
             pending_24h = OrderReport.objects.filter(
                 user=user,
                 status='cannot_generate_yet',
@@ -1077,6 +1088,7 @@ class ReporterStatusView(APIView):
             
             return Response({
                 "total_reported": total_reported,
+                "total_reported_month": total_reported_month,
                 "pending_24h": pending_24h,
                 "total_pending": total_pending,
                 "last_updated": last_updated,
@@ -1106,13 +1118,8 @@ class ReporterListView(APIView):
             page_size = int(request.query_params.get('page_size', 50))
             status_filter = request.query_params.get('status', 'reportado')
             
-            # Filtrar reportes - Solo mostrar reportes del día actual
-            today = timezone.now().date()
-            queryset = OrderReport.objects.filter(
-                user=user,
-                updated_at__date=today  # Solo reportes del día actual
-            )
-            
+            # Todas las órdenes reportadas del usuario (hoy, mes e histórico), no solo del día
+            queryset = OrderReport.objects.filter(user=user)
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
             
@@ -1128,7 +1135,7 @@ class ReporterListView(APIView):
             # Serializar resultados
             from django.utils import timezone
             
-            # Función helper para corregir encoding (Ã³ -> ó)
+            # Función helper para corregir encoding (ó -> ó)
             def fix_encoding(text):
                 if not text: return text
                 try:
@@ -1195,17 +1202,25 @@ class ReporterSlotsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        config = ReporterSlotConfig.objects.first()
-        hour_start = getattr(config, 'reporter_hour_start', 0) if config else 0
-        hour_end = getattr(config, 'reporter_hour_end', 24) if config else 24
-        slots = (
-            ReporterHourSlot.objects.filter(hour__gte=hour_start, hour__lt=hour_end)
-            .annotate(used_points=Sum('reservations__calculated_weight'))
-            .order_by('hour')
-        )
-        from .serializers import ReporterSlotSerializer
-        serializer = ReporterSlotSerializer(slots, many=True)
-        return Response(serializer.data)
+        try:
+            config = ReporterSlotConfig.objects.first()
+            hour_start = getattr(config, 'reporter_hour_start', 0) if config else 0
+            hour_end = getattr(config, 'reporter_hour_end', 24) if config else 24
+            slots = (
+                ReporterHourSlot.objects.filter(hour__gte=hour_start, hour__lt=hour_end)
+                .annotate(used_points=Sum('reservations__calculated_weight'))
+                .order_by('hour')
+            )
+            from .serializers import ReporterSlotSerializer
+            serializer = ReporterSlotSerializer(slots, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            import logging
+            logging.exception("ReporterSlotsView GET failed")
+            return Response(
+                {"error": f"Error al cargar horarios: {str(e)}", "hint": "Ejecuta: python manage.py migrate"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class ReporterReservationsView(APIView):
@@ -1228,42 +1243,64 @@ class ReporterReservationsView(APIView):
         return Response(serializer.data)
 
     def post(self, request):
+        """
+        Crear o actualizar reserva con asignación automática de slot.
+        
+        Body: { "monthly_orders_estimate": 500 }
+        
+        El sistema asigna automáticamente la mejor hora disponible según:
+        - Peso del usuario (calculado desde monthly_orders_estimate)
+        - Capacidad disponible en cada slot
+        - Ventana horaria configurada (6am-6pm por defecto)
+        """
         user = request.user
         if not user or not user.is_authenticated:
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
-        slot_id = request.data.get('slot_id')
+        
         monthly_orders_estimate = int(request.data.get('monthly_orders_estimate', 0) or 0)
-        if slot_id is None:
-            return Response({"error": "slot_id requerido"}, status=status.HTTP_400_BAD_REQUEST)
-        new_weight = reporter_reservation_weight_from_orders(monthly_orders_estimate)
-        with transaction.atomic():
-            slot = ReporterHourSlot.objects.select_for_update().filter(id=slot_id).first()
-            if not slot:
-                return Response({"error": "Slot no encontrado"}, status=status.HTTP_404_NOT_FOUND)
-            capacity = getattr(slot, 'capacity_points', 6) or 6
-            used_result = ReporterReservation.objects.filter(slot=slot).aggregate(
-                used=Sum('calculated_weight')
+        
+        if monthly_orders_estimate <= 0:
+            return Response(
+                {"error": "monthly_orders_estimate debe ser mayor a 0"},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            used = (used_result.get('used') or 0) or 0
-            old_reservation = ReporterReservation.objects.filter(user=user).select_related('slot').first()
-            if old_reservation and old_reservation.slot_id == slot.id:
-                used_after = used - old_reservation.calculated_weight + new_weight
-            else:
-                used_after = used + new_weight
-            if used_after > capacity:
-                return Response(
-                    {"error": f"La hora {slot.hour:02d}:00 está llena por capacidad (máx {capacity} puntos). Hora llena por alta demanda."},
-                    status=status.HTTP_400_BAD_REQUEST
+        
+        try:
+            with transaction.atomic():
+                # Asignar automáticamente el mejor slot disponible
+                best_slot = assign_best_available_slot(user, monthly_orders_estimate)
+                
+                # Eliminar reserva anterior si existe
+                ReporterReservation.objects.filter(user=user).delete()
+                
+                # Crear nueva reserva
+                reservation = ReporterReservation.objects.create(
+                    user=user,
+                    slot=best_slot,
+                    monthly_orders_estimate=monthly_orders_estimate
                 )
-            ReporterReservation.objects.filter(user=user).delete()
-            reservation = ReporterReservation.objects.create(
-                user=user,
-                slot=slot,
-                monthly_orders_estimate=monthly_orders_estimate
+                
+            from .serializers import ReporterReservationSerializer
+            serializer = ReporterReservationSerializer(reservation)
+            
+            return Response({
+                **serializer.data,
+                "message": f"¡Reserva confirmada! Tus reportes se ejecutarán automáticamente todos los días a las {best_slot.hour:02d}:00"
+            }, status=status.HTTP_201_CREATED)
+            
+        except ValueError as e:
+            # Error de capacidad (no hay slots disponibles)
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
             )
-        from .serializers import ReporterReservationSerializer
-        serializer = ReporterReservationSerializer(reservation)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            import logging
+            logging.exception("Error al crear reserva automática")
+            return Response(
+                {"error": f"Error al crear reserva: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def delete(self, request):
         user = request.user
@@ -1280,20 +1317,28 @@ class ReporterRunsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-        if not user or not user.is_authenticated:
-            return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
-        from django.utils import timezone
-        from datetime import timedelta
-        days = int(request.query_params.get('days', 7))
-        since = timezone.now() - timedelta(days=days)
-        runs = ReporterRun.objects.filter(
-            run_users__user=user,
-            scheduled_at__gte=since
-        ).select_related('slot').distinct().order_by('-scheduled_at')[:20]
-        from .serializers import ReporterRunSerializer
-        serializer = ReporterRunSerializer(runs, many=True)
-        return Response(serializer.data)
+        try:
+            user = request.user
+            if not user or not user.is_authenticated:
+                return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
+            from django.utils import timezone
+            from datetime import timedelta
+            days = int(request.query_params.get('days', 7))
+            since = timezone.now() - timedelta(days=days)
+            runs = ReporterRun.objects.filter(
+                run_users__user=user,
+                scheduled_at__gte=since
+            ).select_related('slot').distinct().order_by('-scheduled_at')[:20]
+            from .serializers import ReporterRunSerializer
+            serializer = ReporterRunSerializer(runs, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            import logging
+            logging.exception("ReporterRunsView GET failed")
+            return Response(
+                {"error": f"Error al cargar runs: {str(e)}", "hint": "Ejecuta: python manage.py migrate"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class ReporterRunProgressView(APIView):
@@ -1345,20 +1390,33 @@ class ClientDashboardAnalyticsView(APIView):
         if not user or not user.is_authenticated:
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        period = (request.query_params.get("period") or "week").strip().lower()
+        period = (request.query_params.get("period") or "month").strip().lower()
         if period not in ("day", "week", "fortnight", "month"):
-            period = "week"
+            period = "month"
         batch_id_param = request.query_params.get("batch_id")
 
         now = timezone.now()
+        # day = solo hoy (desde medianoche en timezone del servidor)
         if period == "day":
-            since = now - timedelta(days=1)
+            today_start = timezone.make_aware(
+                datetime.combine(now.date(), dt_time.min),
+                timezone.get_current_timezone()
+            )
+            since = today_start
         elif period == "week":
             since = now - timedelta(days=7)
         elif period == "fortnight":
             since = now - timedelta(days=15)
         else:
-            since = now - timedelta(days=30)
+            # Histórico: último año para que se vean datos de hace muchos días
+            since = now - timedelta(days=365)
+
+        period_label = {
+            "day": "Hoy",
+            "week": "Última semana",
+            "fortnight": "Última quincena",
+            "month": "Histórico (último año)",
+        }.get(period, "Histórico (último año)")
 
         empty_response = {
             "kpis": {
@@ -1373,6 +1431,8 @@ class ClientDashboardAnalyticsView(APIView):
             "top_products": [],
             "by_carrier": [],
             "last_updated": None,
+            "period_used": period,
+            "period_label": period_label,
         }
 
         try:
@@ -1392,6 +1452,16 @@ class ClientDashboardAnalyticsView(APIView):
                 ).order_by("-created_at")
 
             batch_ids = list(batches.values_list("id", flat=True))
+            # Si no hay batches en el período, usar los más recientes disponibles (fallback histórico)
+            if not batch_ids and period != "day":
+                batches_fallback = ReportBatch.objects.filter(
+                    user=user,
+                    status="SUCCESS",
+                ).order_by("-created_at")[:10]
+                batch_ids = list(batches_fallback.values_list("id", flat=True))
+                if batch_ids:
+                    batches = batches_fallback
+                    period_label = "Histórico (últimos datos disponibles)"
             if not batch_ids:
                 return Response(empty_response, status=status.HTTP_200_OK)
 
@@ -1412,12 +1482,15 @@ class ClientDashboardAnalyticsView(APIView):
             cancelled_count = snapshots.filter(
                 current_status__icontains="CANCELAD"
             ).count()
-            products_sold = snapshots.aggregate(s=Coalesce(Sum("quantity"), 0))["s"] or 0
-            total_revenue = snapshots.aggregate(s=Coalesce(Sum("total_amount"), 0))["s"] or 0
+            agg_qty = snapshots.aggregate(s=Coalesce(Sum("quantity"), 0))
+            agg_rev = snapshots.aggregate(s=Coalesce(Sum("total_amount"), 0))
+            products_sold = int(agg_qty.get("s") or 0)
+            _rev = agg_rev.get("s")
+            total_revenue = float(_rev) if _rev is not None else 0.0
             confirmation_pct = round(
                 (total_orders - cancelled_count) / total_orders * 100, 1
-            )
-            cancellation_pct = round(cancelled_count / total_orders * 100, 1)
+            ) if total_orders else 0.0
+            cancellation_pct = round(cancelled_count / total_orders * 100, 1) if total_orders else 0.0
 
             by_region_qs = (
                 snapshots.values("department")
@@ -1427,14 +1500,17 @@ class ClientDashboardAnalyticsView(APIView):
                 )
                 .order_by("-orders")
             )
-            by_region = [
-                {
-                    "department": (x["department"] or "Sin departamento").strip() or "Sin departamento",
-                    "orders": x["orders"],
-                    "revenue": float(x["revenue"]),
-                }
-                for x in by_region_qs
-            ]
+            by_region = []
+            for x in by_region_qs:
+                try:
+                    rev = x.get("revenue")
+                    by_region.append({
+                        "department": (x.get("department") or "Sin departamento").strip() or "Sin departamento",
+                        "orders": x.get("orders") or 0,
+                        "revenue": float(rev) if rev is not None else 0.0,
+                    })
+                except (TypeError, ValueError):
+                    continue
 
             top_products_qs = (
                 snapshots.values("product_name")
@@ -1444,14 +1520,17 @@ class ClientDashboardAnalyticsView(APIView):
                 )
                 .order_by("-quantity")[:10]
             )
-            top_products = [
-                {
-                    "product_name": (x["product_name"] or "Sin nombre").strip() or "Sin nombre",
-                    "quantity": x["quantity"],
-                    "revenue": float(x["revenue"]),
-                }
-                for x in top_products_qs
-            ]
+            top_products = []
+            for x in top_products_qs:
+                try:
+                    qty, rev = x.get("quantity"), x.get("revenue")
+                    top_products.append({
+                        "product_name": (x.get("product_name") or "Sin nombre").strip() or "Sin nombre",
+                        "quantity": int(qty) if qty is not None else 0,
+                        "revenue": float(rev) if rev is not None else 0.0,
+                    })
+                except (TypeError, ValueError):
+                    continue
 
             carriers = list(
                 snapshots.exclude(carrier__isnull=True)
@@ -1477,24 +1556,26 @@ class ClientDashboardAnalyticsView(APIView):
 
             return Response({
                 "kpis": {
-                    "total_orders": total_orders,
-                    "delivered": delivered_count,
-                    "products_sold": products_sold,
+                    "total_orders": int(total_orders),
+                    "delivered": int(delivered_count),
+                    "products_sold": int(products_sold),
                     "total_revenue": float(total_revenue),
-                    "confirmation_pct": confirmation_pct,
-                    "cancellation_pct": cancellation_pct,
+                    "confirmation_pct": float(confirmation_pct),
+                    "cancellation_pct": float(cancellation_pct),
                 },
                 "by_region": by_region,
                 "top_products": top_products,
                 "by_carrier": by_carrier,
                 "last_updated": last_updated,
+                "period_used": period,
+                "period_label": period_label,
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
-            return Response(
-                {"error": f"Error al calcular analytics: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            import logging
+            logging.exception("ClientDashboardAnalyticsView error: %s", e)
+            # Devolver estructura vacía en lugar de 500 para que el dashboard cargue y muestre "Aún no hay reportes"
+            return Response(empty_response, status=status.HTTP_200_OK)
 
 
 # =============================================================================
@@ -1542,6 +1623,66 @@ class AuthLoginView(APIView):
         )
 
 
+class GoogleAuthView(APIView):
+    """
+    Endpoint para autenticación con Google OAuth.
+    
+    POST /api/auth/google/
+    Body: { "token": "google_id_token" }
+    
+    Retorna:
+    - user: Información del usuario
+    - token: Token de autenticación de Django
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        import logging
+        from rest_framework.serializers import ValidationError as DRFValidationError
+        from .serializers import GoogleAuthSerializer
+
+        logger = logging.getLogger(__name__)
+        serializer = GoogleAuthSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            err_msg = serializer.errors.get('token', serializer.errors)
+            if isinstance(err_msg, list):
+                err_msg = err_msg[0] if err_msg else str(serializer.errors)
+            return Response(
+                {'error': err_msg},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = serializer.save()
+            token, _ = Token.objects.get_or_create(user=user)
+            return Response({
+                'token': token.key,
+                'user': {
+                    'id': user.id,
+                    'email': user.email,
+                    'username': user.username,
+                    'full_name': user.full_name,
+                    'is_admin': user.is_admin(),
+                    'subscription_tier': user.subscription_tier,
+                    'subscription_active': user.subscription_active,
+                }
+            }, status=status.HTTP_200_OK)
+        except DRFValidationError as e:
+            detail = e.detail if hasattr(e, 'detail') else str(e)
+            if isinstance(detail, list):
+                detail = detail[0] if detail else str(detail)
+            if isinstance(detail, dict):
+                detail = str(detail)
+            return Response({'error': detail}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.exception("Google auth 500: %s", e)
+            return Response(
+                {'error': f'Error al autenticar con Google: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 class AuthRegisterView(APIView):
     permission_classes = [AllowAny]
 
@@ -1568,7 +1709,8 @@ class AuthRegisterView(APIView):
         user.full_name = full_name
         user.role = User.ROLE_CLIENT
         user.subscription_tier = User.TIER_BRONZE
-        user.subscription_active = False
+        # En desarrollo (DEBUG): bronce activo por defecto para poder probar la app
+        user.subscription_active = getattr(settings, 'DEBUG', False)
         user.save()
 
         # Asignar proxy disponible al nuevo usuario (si hay proxies configurados)

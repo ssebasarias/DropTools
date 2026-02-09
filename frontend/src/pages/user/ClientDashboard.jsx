@@ -16,11 +16,9 @@ import ErrorState from '../../components/common/ErrorState';
 import EmptyState from '../../components/common/EmptyState';
 import ColombiaMap from '../../components/domain/market/ColombiaMap';
 
-const timeFilters = [
-    { value: 'day', label: 'Día' },
-    { value: 'week', label: 'Semana' },
-    { value: 'fortnight', label: 'Quincena' },
-    { value: 'month', label: 'Mes' },
+const dashboardModes = [
+    { value: 'day', label: 'Hoy', description: 'Reportes del día' },
+    { value: 'month', label: 'Histórico', description: 'Último año' },
 ];
 
 function formatCurrency(value) {
@@ -43,12 +41,16 @@ const ClientDashboard = () => {
     const [analytics, setAnalytics] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [timeFilter, setTimeFilter] = useState('week');
+    const [timeFilter, setTimeFilter] = useState('month');
 
     const loadAnalytics = useCallback(async () => {
         setError(null);
+        setLoading(true);
         try {
             const data = await fetchClientDashboardAnalytics(timeFilter);
+            if (data && typeof data.error === 'string') {
+                throw new Error(data.error);
+            }
             setAnalytics(data);
         } catch (err) {
             setError(err?.message || 'Error al cargar los datos del dashboard');
@@ -83,26 +85,56 @@ const ClientDashboard = () => {
     }
 
     const hasData = analytics?.kpis?.total_orders > 0;
+    const periodLabel = analytics?.period_label || (timeFilter === 'day' ? 'Hoy' : 'Histórico (último año)');
+
     if (!hasData) {
         return (
             <div style={{ padding: '2rem', maxWidth: '1600px', margin: '0 auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--glass-bg)', padding: '0.5rem', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
+                        {dashboardModes.map((mode) => (
+                            <button
+                                key={mode.value}
+                                onClick={() => setTimeFilter(mode.value)}
+                                style={{
+                                    padding: '0.5rem 1rem',
+                                    borderRadius: '8px',
+                                    background: timeFilter === mode.value ? 'linear-gradient(135deg, var(--primary), #4f46e5)' : 'transparent',
+                                    color: timeFilter === mode.value ? 'white' : 'var(--text-muted)',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    fontWeight: timeFilter === mode.value ? 600 : 400,
+                                    transition: 'all 0.2s',
+                                }}
+                            >
+                                {mode.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
                 <EmptyState
                     icon={BarChart3}
-                    title="Aún no hay reportes"
-                    description="Los datos del dashboard se generan a partir de los reportes de Dropi. Ejecuta el reporter para cargar datos."
-                    action={{
-                        label: 'Ir a configuración del Reporter',
-                        onClick: () => navigate('/user/reporter-setup'),
-                    }}
+                    title={timeFilter === 'day' ? 'No hay reportes de hoy' : 'No hay reportes en el período'}
+                    description={
+                        timeFilter === 'day'
+                            ? 'Aún no hay datos del día. Cambia a Histórico para ver reportes de días o semanas anteriores, o ejecuta el reporter para generar datos de hoy.'
+                            : 'Los datos del dashboard se generan a partir de los reportes de Dropi. Ejecuta el reporter para cargar datos.'
+                    }
+                    action={
+                        timeFilter === 'day'
+                            ? { label: 'Ver Histórico', onClick: () => setTimeFilter('month') }
+                            : { label: 'Ir a configuración del Reporter', onClick: () => navigate('/user/reporter-setup') }
+                    }
                 />
             </div>
         );
     }
 
-    const { kpis, by_region, top_products, by_carrier, last_updated } = analytics;
+    const { kpis = {}, by_region = [], top_products = [], by_carrier = [], last_updated } = analytics || {};
     const topProduct = top_products?.[0] ?? null;
-    const carrierEffectivenessPct = by_carrier?.length
-        ? (by_carrier.reduce((acc, c) => acc + c.delivered, 0) / by_carrier.reduce((acc, c) => acc + c.total, 0) * 100).toFixed(1)
+    const carrierTotal = by_carrier.reduce((acc, c) => acc + (c.total || 0), 0);
+    const carrierEffectivenessPct = carrierTotal > 0
+        ? (by_carrier.reduce((acc, c) => acc + (c.delivered || 0), 0) / carrierTotal * 100).toFixed(1)
         : 0;
 
     return (
@@ -111,29 +143,31 @@ const ClientDashboard = () => {
                 <div>
                     <h1 className="text-gradient" style={{ fontSize: '2.5rem', margin: 0 }}>Dashboard</h1>
                     <p className="text-muted" style={{ marginTop: '0.5rem' }}>Análisis de rendimiento y estadísticas de tu negocio</p>
-                    {last_updated && (
-                        <p className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
-                            Datos del reporte: {new Date(last_updated).toLocaleDateString('es-CO', { dateStyle: 'medium' })}
-                        </p>
-                    )}
+                    <p className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ color: 'var(--primary)', fontWeight: 600 }}>Mostrando: {periodLabel}</span>
+                        {last_updated && (
+                            <span> · Datos del reporte: {new Date(last_updated).toLocaleDateString('es-CO', { dateStyle: 'medium' })}</span>
+                        )}
+                    </p>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--glass-bg)', padding: '0.5rem', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
-                    {timeFilters.map((filter) => (
+                    {dashboardModes.map((mode) => (
                         <button
-                            key={filter.value}
-                            onClick={() => setTimeFilter(filter.value)}
+                            key={mode.value}
+                            onClick={() => setTimeFilter(mode.value)}
                             style={{
                                 padding: '0.5rem 1rem',
                                 borderRadius: '8px',
-                                background: timeFilter === filter.value ? 'linear-gradient(135deg, var(--primary), #4f46e5)' : 'transparent',
-                                color: timeFilter === filter.value ? 'white' : 'var(--text-muted)',
+                                background: timeFilter === mode.value ? 'linear-gradient(135deg, var(--primary), #4f46e5)' : 'transparent',
+                                color: timeFilter === mode.value ? 'white' : 'var(--text-muted)',
                                 border: 'none',
                                 cursor: 'pointer',
-                                fontWeight: timeFilter === filter.value ? 600 : 400,
+                                fontWeight: timeFilter === mode.value ? 600 : 400,
                                 transition: 'all 0.2s',
                             }}
+                            title={mode.description}
                         >
-                            {filter.label}
+                            {mode.label}
                         </button>
                     ))}
                 </div>
@@ -184,7 +218,7 @@ const ClientDashboard = () => {
                             <CheckCircle size={20} style={{ color: 'var(--success)' }} />
                         </div>
                     </div>
-                    <h2 style={{ fontSize: '1.75rem', margin: 0, fontWeight: 'bold', color: 'var(--success)' }}>{kpis.confirmation_pct}%</h2>
+                    <h2 style={{ fontSize: '1.75rem', margin: 0, fontWeight: 'bold', color: 'var(--success)' }}>{kpis.confirmation_pct ?? 0}%</h2>
                 </GlassCard>
                 <GlassCard>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.5rem' }}>
@@ -193,7 +227,7 @@ const ClientDashboard = () => {
                             <XCircle size={20} style={{ color: 'var(--danger)' }} />
                         </div>
                     </div>
-                    <h2 style={{ fontSize: '1.75rem', margin: 0, fontWeight: 'bold', color: 'var(--danger)' }}>{kpis.cancellation_pct}%</h2>
+                    <h2 style={{ fontSize: '1.75rem', margin: 0, fontWeight: 'bold', color: 'var(--danger)' }}>{kpis.cancellation_pct ?? 0}%</h2>
                 </GlassCard>
             </div>
 
@@ -212,7 +246,7 @@ const ClientDashboard = () => {
                     {topProduct ? (
                         <>
                             <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem', wordBreak: 'break-word' }}>
-                                {topProduct.product_name.length > 60 ? `${topProduct.product_name.slice(0, 60)}…` : topProduct.product_name}
+                                {(topProduct.product_name || '').length > 60 ? `${(topProduct.product_name || '').slice(0, 60)}…` : (topProduct.product_name || '—')}
                             </h4>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem' }}>
                                 <div>
@@ -240,12 +274,12 @@ const ClientDashboard = () => {
                             <p className="text-muted" style={{ fontSize: '0.85rem', margin: 0 }}>Por departamento — clic en zona para ver pedidos y facturación</p>
                         </div>
                     </div>
-                    <ColombiaMap byRegion={by_region} style={{ minHeight: '320px' }} />
-                    {by_region?.length > 0 && (
+                    <ColombiaMap byRegion={Array.isArray(by_region) ? by_region : []} style={{ minHeight: '320px' }} />
+                    {Array.isArray(by_region) && by_region.length > 0 && (
                         <ul style={{ margin: '1rem 0 0', paddingLeft: '1.25rem', color: 'var(--text-muted)', fontSize: '0.85rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem' }}>
                             {by_region.slice(0, 6).map((r, i) => (
                                 <li key={i}>
-                                    <strong style={{ color: 'var(--text-main)' }}>{r.department}</strong>: {formatNumber(r.orders)} pedidos — {formatCurrency(r.revenue)}
+                                    <strong style={{ color: 'var(--text-main)' }}>{r.department ?? '—'}</strong>: {formatNumber(r.orders)} pedidos — {formatCurrency(r.revenue)}
                                 </li>
                             ))}
                         </ul>

@@ -1,8 +1,8 @@
 -- Añade columnas faltantes en raw_order_snapshots cuando la BD fue creada por init.sql
 -- y las migraciones Django no se aplican (p. ej. contenttypes ya distinto).
 -- Ejecutar desde el host:
---   Linux/macOS: docker exec -i dahell_db psql -U dahell_admin -d dahell_db < scripts/add_raw_order_snapshot_columns.sql
---   PowerShell: Get-Content scripts/add_raw_order_snapshot_columns.sql -Raw | docker exec -i dahell_db psql -U dahell_admin -d dahell_db
+--   Linux/macOS: docker exec -i droptools_db psql -U droptools_admin -d droptools_db < scripts/add_raw_order_snapshot_columns.sql
+--   PowerShell: Get-Content scripts/add_raw_order_snapshot_columns.sql -Raw | docker exec -i droptools_db psql -U droptools_admin -d droptools_db
 
 ALTER TABLE raw_order_snapshots ADD COLUMN IF NOT EXISTS customer_email VARCHAR(255) NULL;
 ALTER TABLE raw_order_snapshots ADD COLUMN IF NOT EXISTS product_id VARCHAR(100) NULL;

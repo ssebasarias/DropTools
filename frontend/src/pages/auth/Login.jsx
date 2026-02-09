@@ -1,16 +1,40 @@
 import React, { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import { Zap, Mail, Lock, ArrowRight, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { GoogleLogin } from '@react-oauth/google';
 
 import PublicNavbar from '../../components/layout/PublicNavbar';
-import { login as apiLogin } from '../../services/authService';
+import { login as apiLogin, loginWithGoogle } from '../../services/authService';
 
 const Login = () => {
-    const navigate = useNavigate();
     const [credentials, setCredentials] = useState({ email: '', password: '' });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [showPassword, setShowPassword] = useState(false);
+    const [googleLoading, setGoogleLoading] = useState(false);
+
+    // Handler para login con Google
+    const handleGoogleSuccess = async (credentialResponse) => {
+        setError('');
+        setGoogleLoading(true);
+
+        try {
+            const result = await loginWithGoogle(credentialResponse.credential);
+            const user = result?.user;
+            const path = user?.is_admin ? '/admin' : '/user/dashboard';
+            // Redirección con recarga completa: evita pantalla en blanco en navegador embebido (Cursor/Brave)
+            window.location.href = path;
+            return;
+        } catch (err) {
+            setError(err.message || 'Error al iniciar sesión con Google');
+        } finally {
+            setGoogleLoading(false);
+        }
+    };
+
+    const handleGoogleError = () => {
+        setError('Error al conectar con Google');
+    };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -19,8 +43,9 @@ const Login = () => {
         try {
             const res = await apiLogin(credentials.email, credentials.password);
             const user = res?.user;
-            if (user?.is_admin) navigate('/admin', { replace: true });
-            else navigate('/user/reporter-setup', { replace: true });
+            const path = user?.is_admin ? '/admin' : '/user/reporter-setup';
+            window.location.href = path;
+            return;
         } catch (err) {
             setError(err.message || 'Error al iniciar sesión');
         } finally {
@@ -59,6 +84,32 @@ const Login = () => {
                         </div>
                     )}
 
+                    {/* Botón de Google OAuth (sin width="100%" para evitar [GSI LOGGER] invalid width) */}
+                    <div style={{ marginBottom: '1.5rem', width: '100%', display: 'flex', justifyContent: 'center' }}>
+                        <GoogleLogin
+                            onSuccess={handleGoogleSuccess}
+                            onError={handleGoogleError}
+                            useOneTap={false}
+                            theme="outline"
+                            size="large"
+                            text="signin_with"
+                            shape="rectangular"
+                            disabled={loading || googleLoading}
+                        />
+                    </div>
+
+                    {/* Separador "o" */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '1rem',
+                        marginBottom: '1.5rem'
+                    }}>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--glass-border)' }}></div>
+                        <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>o</span>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--glass-border)' }}></div>
+                    </div>
+
                     <form onSubmit={handleSubmit}>
                         <div className="form-group">
                             <label className="form-label">Email or Username</label>
@@ -71,7 +122,7 @@ const Login = () => {
                                     placeholder="email or username"
                                     value={credentials.email}
                                     onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
-                                    disabled={loading}
+                                    disabled={loading || googleLoading}
                                     required
                                 />
                             </div>
@@ -132,10 +183,10 @@ const Login = () => {
                                 justifyContent: 'center',
                                 alignItems: 'center',
                                 gap: '0.5rem',
-                                opacity: loading ? 0.7 : 1,
-                                cursor: loading ? 'not-allowed' : 'pointer'
+                                opacity: (loading || googleLoading) ? 0.7 : 1,
+                                cursor: (loading || googleLoading) ? 'not-allowed' : 'pointer'
                             }}
-                            disabled={loading}
+                            disabled={loading || googleLoading}
                         >
                             {loading ? 'Iniciando...' : 'Sign In'} {!loading && <ArrowRight size={18} />}
                         </button>

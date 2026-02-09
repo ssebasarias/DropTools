@@ -138,3 +138,14 @@
     font-size: 0.7rem;
     color: var(--text-muted);
 }
+
+/* Estilo para items deshabilitados del sidebar */
+.nav-item-disabled {
+    background: rgba(255, 255, 255, 0.02) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+.nav-item-disabled:hover {
+    background: rgba(255, 255, 255, 0.03) !important;
+    transform: none !important;
+}

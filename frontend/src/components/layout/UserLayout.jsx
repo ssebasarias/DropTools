@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Trophy, Bot, BarChart3, LayoutDashboard } from 'lucide-react';
 import AppSidebar from './AppSidebar';
@@ -35,7 +35,7 @@ const UserLayout = () => {
         <div className="app-container">
             <AppSidebar
                 navItems={userNavItems}
-                title="Dahell"
+                title="DropTools"
                 subtitle="User Portal"
                 settingsPath="/user/settings"
                 userProfile={{

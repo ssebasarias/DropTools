@@ -1,4 +1,4 @@
-# 📚 GUÍA DE COMANDOS - DAHELL INTELLIGENCE
+# 📚 GUÍA DE COMANDOS - DropTools
 
 **Versión:** 2.1 (Optimizado)  
 **Última actualización:** 2025-12-15
@@ -81,31 +81,31 @@ pip check
 #### Conectarse a PostgreSQL (Docker)
 ```bash
 # Conectar con psql
-docker exec -it dahell_db psql -U dahell_admin -d dahell_db
+docker exec -it droptools_db psql -U droptools_admin -d droptools_db
 
 # Ejecutar comando SQL directo
-docker exec dahell_db psql -U dahell_admin -d dahell_db -c "SELECT COUNT(*) FROM products;"
+docker exec droptools_db psql -U droptools_admin -d droptools_db -c "SELECT COUNT(*) FROM products;"
 ```
 
 #### Verificar estado de la DB
 ```bash
 # Ver bases de datos
-docker exec dahell_db psql -U dahell_admin -d dahell_db -c "\l"
+docker exec droptools_db psql -U droptools_admin -d droptools_db -c "\l"
 
 # Ver tablas
-docker exec dahell_db psql -U dahell_admin -d dahell_db -c "\dt"
+docker exec droptools_db psql -U droptools_admin -d droptools_db -c "\dt"
 
 # Ver tamaño de tablas
-docker exec dahell_db psql -U dahell_admin -d dahell_db -c "SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size FROM pg_tables WHERE schemaname = 'public' ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;"
+docker exec droptools_db psql -U droptools_admin -d droptools_db -c "SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size FROM pg_tables WHERE schemaname = 'public' ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;"
 ```
 
 #### Backup y Restore
 ```bash
 # Crear backup
-docker exec dahell_db pg_dump -U dahell_admin dahell_db > backup_$(date +%Y%m%d).sql
+docker exec droptools_db pg_dump -U droptools_admin droptools_db > backup_$(date +%Y%m%d).sql
 
 # Restaurar backup
-docker exec -i dahell_db psql -U dahell_admin dahell_db < backup_20251214.sql
+docker exec -i droptools_db psql -U droptools_admin droptools_db < backup_20251214.sql
 ```
 
 #### Borrar todos los datos excepto usuarios
@@ -137,7 +137,7 @@ Después de `clear_data_keep_users` puedes comprobar que las tablas quedaron vac
 
 ```bash
 # Conectar a la DB y ejecutar SELECTs
-docker exec -it dahell_db psql -U dahell_admin -d dahell_db -c "
+docker exec -it droptools_db psql -U droptools_admin -d droptools_db -c "
 SELECT 'raw_order_snapshots' AS tabla, COUNT(*) AS registros FROM raw_order_snapshots
 UNION ALL SELECT 'report_batches', COUNT(*) FROM report_batches
 UNION ALL SELECT 'order_reports', COUNT(*) FROM order_reports
@@ -151,7 +151,7 @@ ORDER BY tabla;
 **Estimado de filas en todas las tablas (estadísticas de PostgreSQL):**
 
 ```bash
-docker exec dahell_db psql -U dahell_admin -d dahell_db -c "
+docker exec droptools_db psql -U droptools_admin -d droptools_db -c "
 SELECT relname AS tabla, n_live_tup AS registros_aprox
 FROM pg_stat_user_tables
 WHERE schemaname = 'public'
@@ -162,7 +162,7 @@ ORDER BY n_live_tup DESC;
 **Solo una tabla (ej. snapshots):**
 
 ```bash
-docker exec dahell_db psql -U dahell_admin -d dahell_db -c "SELECT COUNT(*) FROM raw_order_snapshots;"
+docker exec droptools_db psql -U droptools_admin -d droptools_db -c "SELECT COUNT(*) FROM raw_order_snapshots;"
 ```
 
 **Con Django (conteos de las tablas que vacía `clear_data_keep_users`):**
@@ -198,12 +198,12 @@ La base de datos fue creada por `init.sql` con un esquema que no coincide con el
 
 ```bash
 # Linux / macOS (bash)
-docker exec -i dahell_db psql -U dahell_admin -d dahell_db < scripts/add_raw_order_snapshot_columns.sql
+docker exec -i droptools_db psql -U droptools_admin -d droptools_db < scripts/add_raw_order_snapshot_columns.sql
 ```
 
 ```powershell
 # Windows PowerShell (el operador < no redirige; usar tubería)
-Get-Content scripts/add_raw_order_snapshot_columns.sql -Raw | docker exec -i dahell_db psql -U dahell_admin -d dahell_db
+Get-Content scripts/add_raw_order_snapshot_columns.sql -Raw | docker exec -i droptools_db psql -U droptools_admin -d droptools_db
 ```
 
 Así el downloader de reportes puede guardar snapshots sin depender de que las migraciones de contenttypes/auth pasen.
@@ -271,7 +271,7 @@ docker compose logs -f celery_worker
 http://localhost:5050
 
 # Credenciales (definidas en .env):
-Email: admin@dahell.com
+Email: admin@droptools.com
 Password: admin
 ```
 
@@ -371,7 +371,7 @@ python verificar_encoding.py
 #### Probar conexión a DB
 ```bash
 .\activate_env.bat
-python -c "from config_encoding import setup_utf8; import psycopg2; conn = psycopg2.connect(dbname='dahell_db', user='dahell_admin', password='secure_password_123', host='127.0.0.1', port='5433'); print('✅ Conexión exitosa'); conn.close()"
+python -c "from config_encoding import setup_utf8; import psycopg2; conn = psycopg2.connect(dbname='droptools_db', user='droptools_admin', password='secure_password_123', host='127.0.0.1', port='5433'); print('✅ Conexión exitosa'); conn.close()"
 ```
 
 ---
@@ -412,7 +412,7 @@ python manage.py makemigrations
 python manage.py migrate
 ```
 
-**Nota:** Los modelos tienen `managed=False`, por lo que Django no crea/modifica tablas. El esquema se define en `dahell_db.sql`.
+**Nota:** Los modelos tienen `managed=False`, por lo que Django no crea/modifica tablas. El esquema se define en `droptools_db.sql`.
 
 ---
 
@@ -445,7 +445,7 @@ docker-compose logs -f dashboard
 ```bash
 # 1. Clonar repositorio (si aplica)
 git clone [url]
-cd Dahell
+cd DropTools
 
 # 2. Crear y activar venv
 python -m venv venv
@@ -593,8 +593,8 @@ git push origin main
 ### Variables Principales
 ```env
 # Base de Datos
-POSTGRES_DB=dahell_db
-POSTGRES_USER=dahell_admin
+POSTGRES_DB=droptools_db
+POSTGRES_USER=droptools_admin
 POSTGRES_PASSWORD=secure_password_123
 POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5433
@@ -605,7 +605,7 @@ DROPI_PASSWORD=tu_contraseña
 HEADLESS_MODE=False
 
 # pgAdmin
-PGADMIN_EMAIL=admin@dahell.com
+PGADMIN_EMAIL=admin@droptools.com
 PGADMIN_PASSWORD=admin
 ```
 

@@ -29,11 +29,11 @@ const ProfileTab = () => (
                     </div>
                     <div className="form-group">
                         <label className="form-label">Username</label>
-                        <input type="text" className="glass-input" defaultValue="@admin_dahell" />
+                        <input type="text" className="glass-input" defaultValue="@admin_droptools" />
                     </div>
                     <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                         <label className="form-label">Email Address</label>
-                        <input type="email" className="glass-input" defaultValue="admin@dahell.intelligence.com" />
+                        <input type="email" className="glass-input" defaultValue="admin@droptools.com" />
                     </div>
                     <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                         <label className="form-label">Bio</label>

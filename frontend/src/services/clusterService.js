@@ -1,5 +1,5 @@
 /**
- * Cluster Service - Dahell Frontend
+ * Cluster Service - DropTools Frontend
  * Servicios para Cluster Lab
  */
 import { API_BASE_URL } from '../config/constants';

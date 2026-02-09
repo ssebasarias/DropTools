@@ -58,14 +58,16 @@ export default function ColombiaMap({ byRegion, style: containerStyle }) {
 
     useEffect(() => {
         let cancelled = false;
-        setLoadError(null);
         fetch('/colombia-deptos.geojson')
             .then((res) => {
                 if (!res.ok) throw new Error('No se pudo cargar el mapa');
                 return res.json();
             })
             .then((data) => {
-                if (!cancelled) setGeojson(data);
+                if (!cancelled) {
+                    setGeojson(data);
+                    setLoadError(null);
+                }
             })
             .catch((err) => {
                 if (!cancelled) setLoadError(err?.message || 'Error al cargar el mapa');

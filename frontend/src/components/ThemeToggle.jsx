@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 
-const THEME_KEY = 'dahell_theme';
-const EYE_KEY = 'dahell_eye_protect';
+const THEME_KEY = 'droptools_theme';
+const EYE_KEY = 'droptools_eye_protect';
 
 function applyPrefs(theme, eye) {
   const root = document.documentElement;

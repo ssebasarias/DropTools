@@ -1,7 +1,7 @@
 import React from 'react';
 import ThemeToggle from '../ThemeToggle';
 
-const DashboardHeader = ({ title, breadcrumbRoot = "Dahell" }) => {
+const DashboardHeader = ({ title, breadcrumbRoot = "DropTools" }) => {
     return (
         <header className="top-header glass-panel-flat">
             <div className="breadcrumbs">

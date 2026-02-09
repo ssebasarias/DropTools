@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Carga de proxy desde archivo JSON solo en DEV.
-Usado cuando DAHELL_ENV=development y existe proxy_dev_config.json.
+Usado cuando DROPTOOLS_ENV=development y existe proxy_dev_config.json.
 No loguea contraseñas.
 """
 import json

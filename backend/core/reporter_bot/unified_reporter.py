@@ -179,12 +179,22 @@ class UnifiedReporter:
         except Exception as e:
             self.logger.warning(f"Failed to update progress: {e}")
     
+    def _is_proxy_related_error(self, e):
+        """Indica si el error puede deberse a proxy/timeout para reintentar sin proxy."""
+        try:
+            from selenium.common.exceptions import TimeoutException as SeTimeout
+            from selenium.common.exceptions import WebDriverException
+            if isinstance(e, (SeTimeout, WebDriverException, OSError, ConnectionError)):
+                return True
+        except Exception:
+            pass
+        msg = (getattr(e, 'msg', None) or getattr(e, 'args', [None])[0] or str(e)).lower()
+        return any(k in msg for k in ('timeout', 'proxy', 'connection', 'refused', 'timed out', 'network'))
+
     def run(self):
         """
-        Ejecuta el flujo completo unificado
-        
-        Returns:
-            dict: Estadísticas del proceso completo
+        Ejecuta el flujo completo unificado.
+        Si hay proxy y falla por timeout/conexión, reintenta con internet local (sin proxy).
         """
         self.logger.info("="*80)
         self.logger.info("🚀 INICIANDO FLUJO UNIFICADO DE REPORTES")
@@ -193,10 +203,33 @@ class UnifiedReporter:
         self.logger.info(f"   🌐 Navegador: {self.browser.upper()}")
         self.logger.info(f"   {'🔇 Headless' if self.headless else '👀 Modo Visible'}: {self.headless}")
         self.logger.info("="*80)
-        
+
         self._init_progress()
+        proxy_config = self._get_proxy_config()
+
+        try:
+            return self._run_impl(proxy_config)
+        except Exception as e:
+            if proxy_config and self._is_proxy_related_error(e):
+                self.logger.warning(f"⚠️ Error con proxy/timeout: {e}. Reintentando con internet local (sin proxy)...")
+                if self.driver_manager:
+                    try:
+                        self.driver_manager.close()
+                    except Exception:
+                        pass
+                    self.driver_manager = None
+                    self.driver = None
+                    DriverManager._driver = None
+                self._update_progress('step1_running', '⏳ Reintentando sin proxy (internet local)…')
+                return self._run_impl(None)
+            raise
+
+    def _run_impl(self, proxy_config):
+        """
+        Flujo completo usando proxy_config (None = internet local).
+        """
         self._update_progress('step1_running', '⏳ Descargando archivos…')
-        
+
         try:
             # ========================================================================
             # PASO 1: INICIAR DRIVER (Una sola vez - Singleton)
@@ -205,22 +238,29 @@ class UnifiedReporter:
             self.logger.info("="*60)
             self.logger.info("📦 PASO 1: INICIALIZANDO DRIVER")
             self.logger.info("="*60)
-            
+
             self.driver_manager = DriverManager(
                 headless=self.headless,
                 logger=self.logger,
                 download_dir=self.download_dir,
                 browser=self.browser_priority[0] if self.browser_priority else self.browser,
-                proxy_config=self._get_proxy_config(),
+                proxy_config=proxy_config,
             )
             self.driver = self.driver_manager.init_driver(browser_priority=self.browser_priority)
-            
+
             if not self.driver:
                 self.logger.error("❌ No se pudo inicializar el driver")
                 return self.stats
 
-            # Con proxy (extensión de auth): dar tiempo a que la extensión se cargue (como en novedadreporter)
-            if self._get_proxy_config():
+            # Timeout de carga de página para no quedarse pegado (ej. proxy lento)
+            try:
+                self.driver.set_page_load_timeout(120)
+                self.driver.set_script_timeout(60)
+            except Exception:
+                pass
+
+            # Con proxy (extensión de auth): dar tiempo a que la extensión se cargue
+            if proxy_config:
                 import time
                 self.logger.info("   ⏳ Esperando 3s para que la extensión del proxy se cargue...")
                 time.sleep(3)
@@ -316,7 +356,9 @@ class UnifiedReporter:
             if not comparison_success:
                 self.logger.warning("⚠️ Comparación falló o no encontró órdenes sin movimiento. Continuando con reporter...")
             else:
-                self._update_progress('step2_completed', f"📊 Detectadas {comparer.stats.get('total_detected', 0)} órdenes.")
+                total_orders = comparer.stats.get('total_orders_compared', 0)
+                total_detected = comparer.stats.get('total_detected', 0)
+                self._update_progress('step2_completed', f"📊 Órdenes totales analizadas: {total_orders}. Sin movimiento: {total_detected}.")
             
             # ========================================================================
             # PASO 5: REPORTER (Usa driver logueado - Sesión persistente)

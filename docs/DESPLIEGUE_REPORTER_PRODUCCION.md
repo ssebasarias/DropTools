@@ -47,7 +47,7 @@ Este documento se centra en **Fase 6 — Activación controlada en producción**
 
 ```bash
 # Ejemplo PostgreSQL
-pg_dump -h <host> -U <user> -d dahell > backup_antes_0009_$(date +%Y%m%d).sql
+pg_dump -h <host> -U <user> -d droptools_db > backup_antes_0009_$(date +%Y%m%d).sql
 ```
 
 **Aplicar migraciones solo de core:**

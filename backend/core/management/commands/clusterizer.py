@@ -100,8 +100,8 @@ def get_db_connection():
                 if port == '5433': pass 
                 else: port = '5432'
         
-        dbname = str(os.getenv("POSTGRES_DB", "dahell_db"))
-        user = str(os.getenv("POSTGRES_USER", "dahell_admin"))
+        dbname = str(os.getenv("POSTGRES_DB", "droptools_db"))
+        user = str(os.getenv("POSTGRES_USER", "droptools_admin"))
         password = str(os.getenv("POSTGRES_PASSWORD", "secure_password_123"))
         
         return psycopg2.connect(

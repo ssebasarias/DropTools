@@ -55,6 +55,38 @@ export async function register({ full_name, name, email, password }) {
   return data;
 }
 
+/**
+ * Autenticar con Google OAuth
+ * @param {string} googleToken - Token de ID de Google
+ * @returns {Promise<{user: Object, token: string}>}
+ */
+export async function loginWithGoogle(googleToken) {
+  try {
+    const response = await fetch(`${API_URL}/auth/google/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ token: googleToken }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const msg = typeof data.error === 'string' ? data.error : (data.error?.message || JSON.stringify(data.error) || 'Error al autenticar con Google');
+      throw new Error(msg);
+    }
+
+    // Guardar token y usuario en sessionStorage (consistente con el resto de la app)
+    setToken(data.token);
+    sessionStorage.setItem("auth_user", JSON.stringify(data.user));
+    
+    return data;
+  } catch (error) {
+    console.error('Error en loginWithGoogle:', error);
+    throw error;
+  }
+}
+
 export async function me() {
   const token = getToken();
   if (!token) throw new Error("Sin token");

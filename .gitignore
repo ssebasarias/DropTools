@@ -45,6 +45,8 @@ staticfiles/
 .env.docker
 .env.*
 !.env.example
+# JSON de credenciales OAuth de Google (contiene client_secret)
+client_secret_*.json
 
 # --- IDE / Editor / Agent ---
 .vscode/

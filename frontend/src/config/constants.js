@@ -1,5 +1,5 @@
 /**
- * Constantes Centralizadas - Dahell Frontend
+ * Constantes Centralizadas - DropTools Frontend
  * Lugar único para configuraciones, URLs, y valores constantes
  */
 

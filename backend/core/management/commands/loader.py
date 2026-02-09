@@ -100,11 +100,11 @@ class Command(BaseCommand):
 
     def get_session(self):
         """Crea sesión de base de datos"""
-        user = os.getenv("POSTGRES_USER", "dahell_admin")
+        user = os.getenv("POSTGRES_USER", "droptools_admin")
         pwd = os.getenv("POSTGRES_PASSWORD", "secure_password_123")
         host = os.getenv("POSTGRES_HOST", "127.0.0.1")
         port = os.getenv("POSTGRES_PORT", "5433")
-        dbname = os.getenv("POSTGRES_DB", "dahell_db")
+        dbname = os.getenv("POSTGRES_DB", "droptools_db")
         raw_db_url = f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{dbname}"
         
         engine = create_engine(

@@ -42,12 +42,12 @@ def addapt_numpy_array(numpy_array):
 register_adapter(np.ndarray, addapt_numpy_array)
 
 # Configuración DB
-user = os.getenv("POSTGRES_USER", "dahell_admin")
+user = os.getenv("POSTGRES_USER", "droptools_admin")
 # SECURITY: Never hardcode passwords. Ensure ENV var is set.
 pwd = os.getenv("POSTGRES_PASSWORD") 
 host = os.getenv("POSTGRES_HOST", "127.0.0.1")
 port = os.getenv("POSTGRES_PORT", "5433")
-dbname = os.getenv("POSTGRES_DB", "dahell_db")
+dbname = os.getenv("POSTGRES_DB", "droptools_db")
 
 if not pwd:
     # Fallback inseguro eliminado. Loguear warning crítico si estamos en local, o error.
