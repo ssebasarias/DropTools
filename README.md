@@ -28,7 +28,7 @@ Sistema de inteligencia artificial que detecta la saturación de mercado en prod
 
 Sigue estos pasos para replicar el proyecto tal cual en otra máquina (Windows, Linux o Mac).
 
-> **Nota:** El proyecto se llama **DropTools**. Repositorio: `https://github.com/ssebasarias/DropTools.git`. Si renombras la carpeta local no afecta al funcionamiento.
+> **Nota:** El proyecto se llama **DropTools**. Repositorio: `https://github.com/ssebasarias/DropTools.git`. Producción: **https://droptools.cloud**
 
 ### Prerrequisitos
 

@@ -181,6 +181,7 @@ class DropiReporter:
                 }
                 result['order_info'] = order_info
                 self.result_manager.save_result(result, row)
+                self.logger.info(f"   Orden {idx + 1}/{len(df)} terminada: status={result['status']}")
 
                 # Notificar progreso para que el frontend actualice contador y panel
                 if callable(self.on_order_processed):
@@ -274,16 +275,14 @@ class DropiReporter:
                     self.stats['errores'] += 1
                     return result
             
-            # Buscar orden (Prioridad: ID > Teléfono)
-            search_term = order_id if (order_id and str(order_id).strip()) else phone
-            
-            if not self.searcher.search_order(search_term):
+            # Buscar orden por teléfono (Dropi ya no muestra ID/guía en búsqueda, solo teléfono)
+            if not self.searcher.search_order(str(phone).strip()):
                 result['status'] = 'not_found'
                 self.stats['no_encontrados'] += 1
                 return result
             
-            # Validar estado
-            if not self.searcher.validate_order_state(expected_state):
+            # Validar estado; si hay varias órdenes del mismo cliente, hacer match por ID de orden
+            if not self.searcher.validate_order_state(expected_state, order_id=order_id):
                 result['status'] = 'error'
                 self.stats['errores'] += 1
                 return result
@@ -293,8 +292,7 @@ class DropiReporter:
             
             # Click en Nueva Consulta
             if not self.form_handler.click_new_consultation(order_row):
-                result['status'] = 'error'
-                self.stats['errores'] += 1
+                self._handle_unexpected_error(phone, result, retry_count, "Nueva consulta (botón no disponible)")
                 return result
             
             # Limpiar referencia a la fila
@@ -316,9 +314,17 @@ class DropiReporter:
                     return result
             
             # Seleccionar tipo de consulta
-            if not self.form_handler.select_consultation_type():
-                result['status'] = 'error'
-                self.stats['errores'] += 1
+            type_result = self.form_handler.select_consultation_type()
+            if type_result == 'carrier_not_allowed':
+                self.logger.warning("⚠️ Estado de la orden no permite conversación con transportadora (popup Dropi)")
+                result['status'] = 'cannot_generate_yet'
+                result['report_generated'] = False
+                next_attempt = self.result_manager.calculate_next_attempt_time('cannot_generate_yet', retry_count)
+                result['next_attempt_time'] = next_attempt.strftime('%Y-%m-%d %H:%M:%S') if next_attempt else None
+                self.stats['saltados_por_tiempo'] += 1
+                return result
+            if not type_result:
+                self._handle_unexpected_error(phone, result, retry_count, "Tipo de consulta (dropdown Transportadora)")
                 return result
             
             # Seleccionar motivo
@@ -339,29 +345,22 @@ class DropiReporter:
                 return result
             
             if not reason_result:
-                result['status'] = 'error'
-                self.stats['errores'] += 1
+                self._handle_unexpected_error(phone, result, retry_count, "Motivo de consulta (dropdown orden sin movimiento)")
                 return result
             
             # Click en Siguiente
             if not self.form_handler.click_next_button():
-                result['status'] = 'cannot_generate_yet'
-                result['report_generated'] = False
-                next_attempt = self.result_manager.calculate_next_attempt_time('cannot_generate_yet', retry_count)
-                result['next_attempt_time'] = next_attempt.strftime('%Y-%m-%d %H:%M:%S') if next_attempt else None
-                self.stats['errores'] += 1
+                self._handle_unexpected_error(phone, result, retry_count, "Botón Siguiente (bloqueado o no encontrado)")
                 return result
             
             # Ingresar observación
             if not self.form_handler.enter_observation_text():
-                result['status'] = 'error'
-                self.stats['errores'] += 1
+                self._handle_unexpected_error(phone, result, retry_count, "Campo observación")
                 return result
             
             # Iniciar conversación
             if not self.form_handler.start_conversation():
-                result['status'] = 'error'
-                self.stats['errores'] += 1
+                self._handle_unexpected_error(phone, result, retry_count, "Iniciar conversación (botón bloqueado o imprevisto)")
                 return result
             
             # Éxito
@@ -370,16 +369,38 @@ class DropiReporter:
             result['next_attempt_time'] = None
             self.stats['procesados'] += 1
             
+            # Tras reportar, Dropi puede redirigir a otra página; asegurar que estamos en Mis Pedidos para la siguiente orden
+            time.sleep(3)
+            if "/dashboard/orders" not in self.driver.current_url:
+                self.logger.info("   Redirección detectada tras reportar; volviendo a Mis Pedidos...")
+                if not self._navigate_to_orders():
+                    self.logger.warning("   No se pudo volver a Mis Pedidos; la siguiente orden podría fallar.")
+            
         except TimeoutException:
-            self.logger.error(f"❌ Timeout procesando orden {phone}")
-            result['status'] = 'session_expired'
-            self.session_expired = True
+            self._handle_unexpected_error(phone, result, retry_count, "Timeout")
         except Exception as e:
-            result['status'] = 'error'
-            self.stats['errores'] += 1
-            self.logger.error(f"❌ Error procesando orden {phone}: {str(e)}")
+            self._handle_unexpected_error(phone, result, retry_count, str(e))
         
         return result
+    
+    def _handle_unexpected_error(self, phone, result, retry_count, detail=""):
+        """
+        Manejo de error inesperado (popup nuevo, timeout, etc.):
+        Refresca la página para cerrar modales/overlays y marca la orden como
+        no reportada por tiempo (cannot_generate_yet) para continuar con la siguiente.
+        """
+        self.logger.warning(f"⚠️ Error inesperado en orden {phone}: {detail}")
+        try:
+            self.driver.refresh()
+            time.sleep(2)
+            self.logger.info("   Página refrescada; se continuará con la siguiente orden.")
+        except Exception as e:
+            self.logger.debug("Refresh falló: %s", e)
+        result['status'] = 'cannot_generate_yet'
+        result['report_generated'] = False
+        next_attempt = self.result_manager.calculate_next_attempt_time('cannot_generate_yet', retry_count)
+        result['next_attempt_time'] = next_attempt.strftime('%Y-%m-%d %H:%M:%S') if next_attempt else None
+        self.stats['saltados_por_tiempo'] += 1
     
     def _print_final_stats(self):
         """Imprime las estadísticas finales"""

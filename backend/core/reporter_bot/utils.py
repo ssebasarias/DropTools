@@ -1,19 +1,29 @@
 
 import logging
+import sys
 from datetime import datetime
 from pathlib import Path
+
+
+class FlushingStreamHandler(logging.StreamHandler):
+    """StreamHandler que hace flush tras cada mensaje (útil para ver logs en tiempo real en Docker)."""
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
 
 def setup_logger(name='ReporterBot'):
     """
     Configura un logger centralizado para todo el módulo del bot.
     Evita duplicidad de logs y asegura formato consistente.
+    Flush en consola para que Docker/terminal muestre cada línea al instante.
     """
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     
     if not logger.hasHandlers():
-        # Handler para consola
-        console_handler = logging.StreamHandler()
+        # Handler para consola (con flush para ver en tiempo real)
+        console_handler = FlushingStreamHandler(sys.stdout)
         console_handler.setLevel(logging.INFO)
         
         # Handler para archivo (rotativo idealmente, pero simple por ahora)

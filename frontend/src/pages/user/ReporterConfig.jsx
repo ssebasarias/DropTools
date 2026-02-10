@@ -216,12 +216,11 @@ const ReporterConfigInner = () => {
 
     const loadRunsAndProgress = useCallback(async () => {
         try {
-            // 1. Ver si hay runs hoy o recientes
             const runsData = await fetchReporterRuns();
-            if (runsData && runsData.results && runsData.results.length > 0) {
-                // Tomar el más reciente
-                const lastRun = runsData.results[0];
-                // 2. Cargar progreso detallado
+            // La API devuelve un array de runs, no { results: [] }
+            const runsList = Array.isArray(runsData) ? runsData : (runsData?.results || []);
+            if (runsList.length > 0) {
+                const lastRun = runsList[0];
                 const progress = await fetchReporterRunProgress(lastRun.id);
                 setLastRunProgress(progress);
             } else {
@@ -229,7 +228,6 @@ const ReporterConfigInner = () => {
             }
         } catch (e) {
             console.error('Error cargando runs/progreso:', e);
-            // No mostrar error en UI, es info secundaria
         }
     }, []);
 
@@ -245,6 +243,42 @@ const ReporterConfigInner = () => {
             setMyReservation(null);
         }
     }, []);
+
+    // Mensaje de estado orientado al cliente (no técnico)
+    const getLiveStatusMessage = useCallback(() => {
+        const msg = workflowProgress?.current_message || '';
+        if (workflowProgress?.status) {
+            if (workflowProgress.status === 'step1_running' || (msg && (msg.includes('Descargando') || msg.includes('Reintentando'))))
+                return 'Preparando datos…';
+            if (workflowProgress.status === 'step2_running' || (msg && msg.includes('Analizando')))
+                return 'Analizando órdenes…';
+            const reportandoMatch = msg.match(/Reportando\s+(\d+)\s*\/\s*(\d+)/);
+            if (workflowProgress.status === 'step3_running' || reportandoMatch)
+                return reportandoMatch ? `Reportando órdenes (${reportandoMatch[1]} de ${reportandoMatch[2]})` : 'Reportando en Dropi…';
+            if (['step1_completed', 'step2_completed'].includes(workflowProgress.status))
+                return msg || 'Procesando…';
+            if (workflowProgress.status === 'completed' || (msg && (msg.includes('Completado') || msg.includes('finalizado'))))
+                return 'Completado. Todas las órdenes fueron reportadas.';
+            if (workflowProgress.status === 'failed' || workflowProgress.status === 'stopped')
+                return msg || 'Proceso detenido o finalizado.';
+        }
+        if (lastRunProgress?.users?.length) {
+            const u = lastRunProgress.users.find(uu => uu.user_id === getAuthUser()?.id) || lastRunProgress.users[0];
+            const running = lastRunProgress.run_status === 'running';
+            const incomplete = u && u.total_ranges != null && (u.ranges_completed ?? 0) < u.total_ranges;
+            if (running && incomplete && u.total_ranges > 0)
+                return `El bot está reportando tus órdenes (${u.ranges_completed ?? 0} de ${u.total_ranges})`;
+            if (lastRunProgress.run_status === 'completed' || lastRunProgress.run_status === 'finished')
+                return 'Ejecución programada completada.';
+            if (lastRunProgress.run_status === 'running')
+                return 'El bot está trabajando en tus reportes.';
+        }
+        if (myReservation?.slot?.hour != null) {
+            const h = String(myReservation.slot.hour ?? '').padStart(2, '0');
+            return `Tu próximo reporte está programado a las ${myReservation.slot?.hour_label ?? `${h}:00`}.`;
+        }
+        return 'Sin ejecución en curso.';
+    }, [workflowProgress, lastRunProgress, myReservation]);
 
     // Guardar formulario en localStorage cada vez que cambie (solo si no hay cuentas guardadas)
     useEffect(() => {
@@ -274,20 +308,31 @@ const ReporterConfigInner = () => {
         loadRunsAndProgress().catch(() => { });
     }, [load, loadStatus, loadReportsList, loadReporterEnv, loadMyReservation, loadRunsAndProgress]);
 
-    // Auto-refresh solo cuando el workflow está corriendo (menos frecuente en reposo para evitar parpadeos)
+    // Run activo: ejecución programada en curso (run_status running o rangos incompletos)
+    const isRunActive = lastRunProgress?.run_status === 'running' ||
+        (lastRunProgress?.users?.length && (lastRunProgress.users || []).some(u =>
+            u.total_ranges != null && (u.ranges_completed ?? 0) < u.total_ranges
+        ));
+
+    // Auto-refresh: 3–5 s con run activo o workflow manual; 15 s con reserva en reposo; 30 s sin reserva
     useEffect(() => {
         const isWorkflowRunning = workflowProgress &&
             ['step1_running', 'step2_running', 'step3_running', 'step1_completed', 'step2_completed'].includes(workflowProgress.status);
         const isStep3 = workflowProgress?.status === 'step3_running';
 
-        const ms = isStep3 ? 3000 : (isWorkflowRunning ? 5000 : 30000); // Idle: 30s (antes 10s), running: 5s, step3: 3s
+        const ms = isStep3 ? 3000 : (isWorkflowRunning ? 5000 : (isRunActive ? 4000 : (myReservation ? 15000 : 30000)));
         const interval = setInterval(() => {
             loadStatus(true);
-            if (isWorkflowRunning) loadReportsList(true);
+            if (isWorkflowRunning || isRunActive) {
+                loadReportsList(true);
+                loadRunsAndProgress();
+            } else if (myReservation) {
+                loadRunsAndProgress();
+            }
         }, ms);
 
         return () => clearInterval(interval);
-    }, [workflowProgress?.status, loadStatus, loadReportsList]);
+    }, [workflowProgress?.status, myReservation, isRunActive, loadStatus, loadReportsList, loadRunsAndProgress]);
 
     // Auto-refresh lista de reportes solo cuando hay reportes y cada 10s (no 5s para reducir parpadeo)
     useEffect(() => {
@@ -400,40 +445,57 @@ const ReporterConfigInner = () => {
                             <p style={{ margin: 0, fontWeight: 600 }}>{proxyAssigned || 'Sin proxy asignado'}</p>
                         </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', marginTop: '1rem' }}>
-                        <p style={{ margin: 0, fontSize: '1rem', color: 'var(--success)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <CheckCircle2 size={20} style={{ color: 'var(--success)' }} />
-                            ¡Todo listo! Tu reporte se ejecutará automáticamente todos los días a las {myReservation.slot?.hour_label ?? `${String(myReservation.slot?.hour ?? '').padStart(2, '0')}:00`} 🎉
-                        </p>
-                        <button
-                            type="button"
-                            onClick={() => setShowCancelModal(true)}
-                            style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.5rem',
-                                padding: '0.6rem 1.25rem',
-                                borderRadius: '12px',
-                                fontWeight: 500,
-                                background: 'rgba(239, 68, 68, 0.12)',
-                                border: '1px solid rgba(239, 68, 68, 0.35)',
-                                color: 'var(--danger)',
-                                transition: 'all 0.2s',
-                                boxShadow: '0 2px 8px rgba(239, 68, 68, 0.15)'
-                            }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
-                                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.5)';
-                                e.currentTarget.style.transform = 'translateY(-1px)';
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)';
-                                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.35)';
-                                e.currentTarget.style.transform = 'translateY(0)';
-                            }}
-                        >
-                            Cancelar reserva
-                        </button>
+                    <p style={{ margin: 0, marginTop: '1rem', fontSize: '1rem', color: 'var(--success)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <CheckCircle2 size={20} style={{ color: 'var(--success)' }} />
+                        ¡Todo listo! Tu reporte se ejecutará automáticamente todos los días a las {myReservation.slot?.hour_label ?? `${String(myReservation.slot?.hour ?? '').padStart(2, '0')}:00`} 🎉
+                    </p>
+                </div>
+            )}
+
+            {/* Panel de proceso en tiempo real (siempre visible con reserva) */}
+            {myReservation && (
+                <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(99,102,241,0.3)', animation: 'fadeInUp 0.5s ease-out' }}>
+                    <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <RefreshCw size={22} style={{ color: 'var(--primary)' }} />
+                        Proceso en tiempo real
+                    </h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
+                        <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
+                            <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.35rem' }}>Reportados hoy</p>
+                            <p style={{ fontSize: '1.5rem', margin: 0, fontWeight: 'bold', color: 'var(--success)' }}>
+                                {status != null ? (() => {
+                                    const safeNum = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : 0);
+                                    const fromDb = safeNum(Number(status.total_reported));
+                                    const fromRun = (lastRunProgress?.users?.length)
+                                        ? (lastRunProgress.users || []).reduce((s, u) => s + safeNum(u.ranges_completed), 0)
+                                        : 0;
+                                    const msg = workflowProgress?.current_message || '';
+                                    const reportandoMatch = msg.match(/Reportando\s+(\d+)\s*\/\s*\d+/);
+                                    const fromMessage = reportandoMatch ? safeNum(parseInt(reportandoMatch[1], 10)) : 0;
+                                    return Math.max(0, fromDb, fromRun, fromMessage);
+                                })() : (statusLoading ? 'Cargando…' : '—')}
+                            </p>
+                        </div>
+                        <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
+                            <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.35rem' }}>Reportados mes</p>
+                            <p style={{ fontSize: '1.5rem', margin: 0, fontWeight: 'bold', color: 'var(--success)' }}>
+                                {status != null ? (Number.isFinite(Number(status.total_reported_month)) ? Number(status.total_reported_month) : 0) : (statusLoading ? 'Cargando…' : '—')}
+                            </p>
+                        </div>
+                        <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
+                            <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.35rem' }}>Órdenes pendientes</p>
+                            <p style={{ fontSize: '1.5rem', margin: 0, fontWeight: 'bold', color: 'var(--warning)' }}>
+                                {status != null
+                                    ? (Number.isFinite(Number(status.total_pending)) ? Number(status.total_pending) : 0)
+                                    : (lastRunProgress?.users?.[0]?.total_pending_orders != null ? lastRunProgress.users[0].total_pending_orders : (statusLoading ? 'Cargando…' : '—'))}
+                            </p>
+                        </div>
+                        <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid var(--glass-border)', gridColumn: '1 / -1' }}>
+                            <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.35rem' }}>Estado actual</p>
+                            <p style={{ fontSize: '1rem', margin: 0, color: 'var(--text-main)' }}>
+                                {getLiveStatusMessage()}
+                            </p>
+                        </div>
                     </div>
                 </div>
             )}
@@ -783,221 +845,9 @@ const ReporterConfigInner = () => {
                 </>
             )}
 
-            {/* Tu progreso (solo con reserva) */}
+            {/* Con reserva: Estado del reporte y Tus órdenes reportadas */}
             {myReservation && (
                 <>
-                    {/* Tu ejecución de hoy / último progreso */}
-                    {lastRunProgress && (
-                        <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(99,102,241,0.25)' }}>
-                            <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <BarChart3 size={22} style={{ color: 'var(--primary)' }} />
-                                Tu ejecución
-                            </h3>
-                            <p className="text-muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>
-                                Programada: {lastRunProgress.scheduled_at ? new Date(lastRunProgress.scheduled_at).toLocaleString('es-CO') : '—'} · Estado: {lastRunProgress.run_status}
-                            </p>
-                            {lastRunProgress.users && lastRunProgress.users.length > 0 && (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                    {(lastRunProgress.users || []).map((u, idx) => (
-                                        <div key={idx} style={{
-                                            padding: '0.75rem 1rem',
-                                            background: 'rgba(255,255,255,0.03)',
-                                            borderRadius: '10px',
-                                            display: 'flex',
-                                            justifyContent: 'space-between',
-                                            alignItems: 'center',
-                                            flexWrap: 'wrap',
-                                            gap: '0.5rem'
-                                        }}>
-                                            <span>{u.username ?? `Usuario ${u.user_id}`}</span>
-                                            <span className="text-muted" style={{ fontSize: '0.9rem' }}>
-                                                Descarga: {u.download_compare_status} · Rangos: {u.ranges_completed ?? 0}/{u.total_ranges ?? 0}
-                                                {u.total_pending_orders != null && u.total_pending_orders > 0 && ` (${u.total_pending_orders} órdenes pendientes)`}
-                                            </span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* Tu progreso — KPIs */}
-                    <div className="glass-card" style={{ marginBottom: '2rem', animation: 'fadeInUp 0.6s ease-out' }}>
-                        <h3 style={{ marginBottom: '1rem', fontSize: '1.1rem', color: 'var(--text-main)' }}>Tu progreso</h3>
-
-                        {/* En esta ejecución: solo cuando hay workflow activo */}
-                        {workflowProgress && ['step1_running', 'step2_running', 'step3_running', 'step1_completed', 'step2_completed'].includes(workflowProgress.status) && (
-                            <div style={{
-                                padding: '1rem 1.25rem',
-                                background: 'rgba(99, 102, 241, 0.08)',
-                                borderRadius: '12px',
-                                border: '1px solid rgba(99, 102, 241, 0.25)',
-                                marginBottom: '1rem'
-                            }}>
-                                <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <RefreshCw size={14} className="spinning" style={{ color: 'var(--primary)' }} />
-                                    En esta ejecución
-                                </p>
-                                <p style={{ fontSize: '1rem', margin: 0, marginBottom: '0.5rem', color: 'var(--text-main)' }}>
-                                    {workflowProgress.current_message || 'Procesando…'}
-                                </p>
-                                {(() => {
-                                    const messages = workflowProgress.messages || [];
-                                    const analizadasMsg = messages.find(m => typeof m === 'string' && m.includes('Órdenes totales analizadas'));
-                                    const match = analizadasMsg ? analizadasMsg.match(/Órdenes totales analizadas:\s*(\d+).*Sin movimiento:\s*(\d+)/) : null;
-                                    let totalAnalizadas = match ? match[1] : null;
-                                    let sinMovimiento = match ? match[2] : null;
-                                    if (sinMovimiento == null) {
-                                        const oldMsg = messages.find(m => typeof m === 'string' && m.includes('Detectadas') && m.includes('órdenes'));
-                                        const oldMatch = oldMsg ? oldMsg.match(/Detectadas\s+(\d+)\s+órdenes/) : null;
-                                        if (oldMatch) sinMovimiento = oldMatch[1];
-                                    }
-                                    const hasRunUsers = lastRunProgress?.users && lastRunProgress.users.length > 0;
-                                    return (totalAnalizadas != null || sinMovimiento != null || hasRunUsers) ? (
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '0.75rem', fontSize: '0.9rem', alignItems: 'center' }}>
-                                            {totalAnalizadas != null && (
-                                                <span style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                                                    <span style={{ color: 'var(--text-muted)' }}>Órdenes totales analizadas:</span>
-                                                    <strong style={{ color: 'var(--primary)' }}>{totalAnalizadas}</strong>
-                                                </span>
-                                            )}
-                                            {sinMovimiento != null && (
-                                                <span style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                                                    <span style={{ color: 'var(--text-muted)' }}>Órdenes sin movimiento:</span>
-                                                    <strong style={{ color: 'var(--warning)' }}>{sinMovimiento}</strong>
-                                                </span>
-                                            )}
-                                            {hasRunUsers && (lastRunProgress.users || []).map((u, idx) => (
-                                                <span key={idx} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                                    <span style={{ color: 'var(--text-muted)' }}>Pendientes:</span>
-                                                    <strong style={{ color: 'var(--warning)' }}>{u.total_pending_orders ?? 0}</strong>
-                                                    <span style={{ color: 'var(--text-muted)' }}>· Reportadas en este run:</span>
-                                                    <strong style={{ color: 'var(--success)' }}>{u.ranges_completed ?? 0}</strong>
-                                                    <span style={{ color: 'var(--text-muted)' }}> de {u.total_ranges ?? 0}</span>
-                                                </span>
-                                            ))}
-                                        </div>
-                                    ) : null;
-                                })()}
-                            </div>
-                        )}
-
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '1rem', marginBottom: '0.5rem' }}>
-                            <div style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.75rem',
-                                padding: '1rem 1.25rem',
-                                background: 'rgba(99,102,241,0.1)',
-                                borderRadius: '12px',
-                                border: '1px solid rgba(99,102,241,0.2)'
-                            }}>
-                                <div style={{ padding: '0.6rem', background: 'rgba(99,102,241,0.2)', borderRadius: '10px' }}>
-                                    <FileText size={22} style={{ color: 'var(--primary)' }} />
-                                </div>
-                                <div>
-                                    <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.2rem' }} title="Contador en vivo: aumenta a medida que el bot va reportando hoy.">Hoy</p>
-                                    <p style={{ fontSize: '1.75rem', margin: 0, fontWeight: 'bold', color: 'var(--primary)' }}>
-                                        {(() => {
-                                            const fromDb = status?.total_reported ?? 0;
-                                            if (workflowProgress?.status === 'step3_running' && lastRunProgress?.users?.length) {
-                                                const fromRun = (lastRunProgress.users || []).reduce((s, u) => s + (u.ranges_completed ?? 0), 0);
-                                                return Math.max(fromDb, fromRun);
-                                            }
-                                            return fromDb;
-                                        })()}
-                                    </p>
-                                </div>
-                            </div>
-                            <div style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.75rem',
-                                padding: '1rem 1.25rem',
-                                background: 'rgba(16,185,129,0.08)',
-                                borderRadius: '12px',
-                                border: '1px solid rgba(16,185,129,0.2)'
-                            }}>
-                                <div style={{ padding: '0.6rem', background: 'rgba(16,185,129,0.2)', borderRadius: '10px' }}>
-                                    <BarChart3 size={22} style={{ color: 'var(--success)' }} />
-                                </div>
-                                <div>
-                                    <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.2rem' }} title="Total de órdenes reportadas desde el día 1 del mes (base de datos).">Este mes</p>
-                                    <p style={{ fontSize: '1.75rem', margin: 0, fontWeight: 'bold', color: 'var(--success)' }}>
-                                        {status?.total_reported_month != null
-                                            ? status.total_reported_month
-                                            : (() => {
-                                                const list = reportsList || [];
-                                                const now = new Date();
-                                                return list.filter(r => {
-                                                    const d = r.updated_at || r.reported_at;
-                                                    if (!d) return false;
-                                                    const dt = new Date(d);
-                                                    return dt.getMonth() === now.getMonth() && dt.getFullYear() === now.getFullYear();
-                                                }).length;
-                                            })()}
-                                    </p>
-                                </div>
-                            </div>
-                            {(status?.total_pending != null && status.total_pending > 0) && (
-                                <div style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.75rem',
-                                    padding: '1rem 1.25rem',
-                                    background: 'rgba(245,158,11,0.08)',
-                                    borderRadius: '12px',
-                                    border: '1px solid rgba(245,158,11,0.2)'
-                                }}>
-                                    <div style={{ padding: '0.6rem', background: 'rgba(245,158,11,0.2)', borderRadius: '10px' }}>
-                                        <Clock size={22} style={{ color: 'var(--warning)' }} />
-                                    </div>
-                                    <div>
-                                        <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.2rem' }} title="Órdenes aún no reportadas (pendientes de procesar o en espera).">Pendientes</p>
-                                        <p style={{ fontSize: '1.75rem', margin: 0, fontWeight: 'bold', color: 'var(--warning)' }}>
-                                            {status.total_pending}
-                                        </p>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                        <p className="text-muted" style={{ fontSize: '0.75rem', margin: 0, marginBottom: '1rem', lineHeight: 1.4 }}>
-                            Hoy = contador en vivo que sube mientras el bot reporta. Este mes = total desde el día 1 del mes (base de datos).
-                        </p>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
-                            <button
-                                type="button"
-                                onClick={() => { loadMyReservation(); loadRunsAndProgress(); loadStatus(); loadReportsList(); }}
-                                style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    padding: '0.6rem 1.25rem',
-                                    borderRadius: '12px',
-                                    fontWeight: 500,
-                                    background: 'rgba(99, 102, 241, 0.12)',
-                                    border: '1px solid rgba(99, 102, 241, 0.35)',
-                                    color: 'var(--primary)',
-                                    transition: 'all 0.2s',
-                                    boxShadow: '0 2px 8px rgba(99, 102, 241, 0.15)'
-                                }}
-                                onMouseEnter={(e) => {
-                                    e.currentTarget.style.background = 'rgba(99, 102, 241, 0.22)';
-                                    e.currentTarget.style.borderColor = 'rgba(99, 102, 241, 0.5)';
-                                    e.currentTarget.style.transform = 'translateY(-1px)';
-                                }}
-                                onMouseLeave={(e) => {
-                                    e.currentTarget.style.background = 'rgba(99, 102, 241, 0.12)';
-                                    e.currentTarget.style.borderColor = 'rgba(99, 102, 241, 0.35)';
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                }}
-                            >
-                                <RefreshCw size={16} />
-                                Actualizar
-                            </button>
-                        </div>
-                    </div>
-
                     {/* Estado del reporte (progreso dinámico) */}
                     {workflowProgress && (
                         <div className="glass-card" style={{ marginBottom: '2rem', border: '2px solid rgba(99,102,241,0.3)', animation: 'fadeInUp 0.7s ease-out' }}>
@@ -1091,43 +941,11 @@ const ReporterConfigInner = () => {
 
                     {/* Tus órdenes reportadas */}
                     <div className="glass-card" style={{ animation: 'fadeInUp 0.8s ease-out' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                            <div>
-                                <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Tus órdenes reportadas</h3>
-                                <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0 0 0' }}>
-                                    Guía, teléfono, cliente y producto de cada orden reportada
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => { loadStatus(); loadReportsList(); }}
-                                style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    padding: '0.6rem 1.25rem',
-                                    borderRadius: '12px',
-                                    fontWeight: 500,
-                                    background: 'rgba(99, 102, 241, 0.12)',
-                                    border: '1px solid rgba(99, 102, 241, 0.35)',
-                                    color: 'var(--primary)',
-                                    transition: 'all 0.2s',
-                                    boxShadow: '0 2px 8px rgba(99, 102, 241, 0.15)'
-                                }}
-                                onMouseEnter={(e) => {
-                                    e.currentTarget.style.background = 'rgba(99, 102, 241, 0.22)';
-                                    e.currentTarget.style.borderColor = 'rgba(99, 102, 241, 0.5)';
-                                    e.currentTarget.style.transform = 'translateY(-1px)';
-                                }}
-                                onMouseLeave={(e) => {
-                                    e.currentTarget.style.background = 'rgba(99, 102, 241, 0.12)';
-                                    e.currentTarget.style.borderColor = 'rgba(99, 102, 241, 0.35)';
-                                    e.currentTarget.style.transform = 'translateY(0)';
-                                }}
-                            >
-                                <RefreshCw size={16} />
-                                Actualizar
-                            </button>
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Tus órdenes reportadas</h3>
+                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0 0 0' }}>
+                                Guía, teléfono, cliente y producto de cada orden reportada
+                            </p>
                         </div>
 
                         {statusLoading ? (
@@ -1231,28 +1049,6 @@ const ReporterConfigInner = () => {
                                             </div>
                                             <div style={{ marginLeft: '2.5rem', fontSize: '0.95rem', color: 'var(--text-main)' }}>
                                                 {report.product_name || 'N/A'}
-                                            </div>
-                                        </div>
-
-                                        <div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                                                <div style={{
-                                                    padding: '0.5rem',
-                                                    background: 'rgba(156,163,175,0.2)',
-                                                    borderRadius: '8px'
-                                                }}>
-                                                    <Clock size={16} style={{ color: 'var(--text-muted)' }} />
-                                                </div>
-                                                <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Días sin Movimiento</strong>
-                                            </div>
-                                            <div style={{ marginLeft: '2.5rem' }}>
-                                                <span style={{
-                                                    fontSize: '1.1rem',
-                                                    fontWeight: 'bold',
-                                                    color: (report.days_without_movement || 0) > 7 ? 'var(--danger)' : ((report.days_without_movement || 0) > 3 ? 'var(--warning)' : 'var(--success)')
-                                                }}>
-                                                    {report.days_without_movement || report.days_stuck || 'N/A'} días
-                                                </span>
                                             </div>
                                         </div>
 

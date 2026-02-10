@@ -111,56 +111,72 @@ class OrderSearcher:
                 
         return False
     
-    def validate_order_state(self, expected_state):
+    def validate_order_state(self, expected_state, order_id=None):
         """
         Valida que el estado de la orden coincida con el esperado.
+        Si order_id viene informado y hay varias filas (mismo teléfono), elige la fila
+        cuya columna # coincide con order_id.
         Guarda referencia a la fila correcta para acciones posteriores.
         
         Args:
             expected_state: Estado esperado de la orden
+            order_id: ID de la orden (opcional). Si hay varias órdenes del cliente, se hace match por este ID.
             
         Returns:
             True si el estado coincide, False en caso contrario
         """
         try:
-            self.logger.info(f"Validando estado esperado: {expected_state}")
+            self.logger.info(f"Validando estado esperado: {expected_state}" + (f" (ID orden: {order_id})" if order_id else ""))
             
-            # Al buscar por ID, solo debería haber una fila relevante (la primera)
-            try:
-                row = self.driver.find_element(By.CSS_SELECTOR, "tbody.list tr:first-child")
-            except NoSuchElementException:
+            rows = self.driver.find_elements(By.CSS_SELECTOR, "tbody.list tr")
+            if not rows:
                 self.logger.warning("❌ No se encontraron filas en la tabla")
-                return False
-                
-            # Validar coincidencias
-            badges = row.find_elements(By.CSS_SELECTOR, "td span.badge, td div.badge, td span.status")
-            if not badges:
-                self.logger.warning(f"   ⚠️ Fila 1: No se encontraron badges de estado")
                 return False
 
             expected_normalized = expected_state.upper().strip()
+            target_row = None
+
+            if order_id and str(order_id).strip():
+                # Buscar la fila cuya columna # (segunda celda, índice 1) coincide con order_id
+                order_id_str = str(order_id).strip()
+                for row in rows:
+                    cells = row.find_elements(By.XPATH, "./td | ./th")
+                    if len(cells) < 2:
+                        continue
+                    cell_id_text = cells[1].text.strip()
+                    if cell_id_text == order_id_str:
+                        target_row = row
+                        self.logger.info(f"   Fila con ID de orden '{order_id_str}' encontrada.")
+                        break
+                if not target_row:
+                    self.logger.warning(f"   No se encontró ninguna fila con ID de orden '{order_id_str}' en los resultados.")
+                    return False
+            else:
+                target_row = rows[0]
+
+            # Validar estado en la fila elegida
+            badges = target_row.find_elements(By.CSS_SELECTOR, "td span.badge, td div.badge, td span.status")
+            if not badges:
+                self.logger.warning("   No se encontraron badges de estado en la fila.")
+                return False
+
             found_match = False
-            
             for badge in badges:
                 current_state = badge.text.strip()
                 if not current_state:
                     continue
                 current_normalized = current_state.upper().strip()
-                
-                # Coincidencia flexible
                 if (expected_normalized in current_normalized) or (current_normalized in expected_normalized):
-                    self.logger.info(f"   ✅ ¡COINCIDENCIA! Fila 1 tiene el estado correcto: '{current_state}'")
+                    self.logger.info(f"   ✅ ¡COINCIDENCIA! Estado correcto: '{current_state}'")
                     found_match = True
                     break
-            
+
             if found_match:
-                # Guardar referencia a la fila correcta
-                self.current_order_row = row
+                self.current_order_row = target_row
                 return True
-            else:
-                self.logger.warning(f"❌ La orden encontrada no coincide con el estado esperado '{expected_state}'")
-                return False
-            
+            self.logger.warning(f"❌ La orden no coincide con el estado esperado '{expected_state}'")
+            return False
+
         except Exception as e:
             self.logger.error(f"❌ Error al validar estado: {str(e)}")
             return False

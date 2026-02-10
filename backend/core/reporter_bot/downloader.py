@@ -103,21 +103,32 @@ class DropiDownloader:
             self.logger.info("📥 INICIANDO MÓDULO DOWNLOADER (Unificado)")
             self.logger.info("="*60)
         
-        # PASO 1: Validar si existe reporte generado AYER (en timezone del servidor)
-        # Solo descargamos el reporte de AYER si no existe en BD. Si ya existe, solo descargamos HOY.
+        # PASO 1: Validar si existe reporte generado AYER y HOY (en timezone de la aplicación)
+        # created_at se guarda en UTC; comparar por rango en timezone local evita falsos negativos.
         today_local = django_tz.localdate()
         yesterday_local = today_local - timedelta(days=1)
+        tz = django_tz.get_current_timezone()
+
+        def _start_of_day(d):
+            return django_tz.make_aware(datetime.combine(d, datetime.min.time()), tz)
+
+        start_yesterday = _start_of_day(yesterday_local)
+        end_yesterday = _start_of_day(today_local)
+        start_today = _start_of_day(today_local)
+        end_today = _start_of_day(today_local + timedelta(days=1))
 
         exists_batch_yesterday = ReportBatch.objects.filter(
             user_id=self.user_id,
             status='SUCCESS',
-            created_at__date=yesterday_local
+            created_at__gte=start_yesterday,
+            created_at__lt=end_yesterday
         ).exists()
 
         exists_batch_today = ReportBatch.objects.filter(
             user_id=self.user_id,
             status='SUCCESS',
-            created_at__date=today_local
+            created_at__gte=start_today,
+            created_at__lt=end_today
         ).exists()
 
         dates_to_download = []

@@ -56,15 +56,13 @@ class ReportFormHandler:
         """
         self.driver = driver
         self.logger = logger
-        self.wait = WebDriverWait(driver, 15)
-        # En Docker/headless la página puede tardar más; tiempo mayor para Siguiente
-        try:
-            from core.reporter_bot.docker_config import IS_DOCKER, get_downloader_wait_timeout
-            self.long_wait_sec = get_downloader_wait_timeout() if IS_DOCKER else 25
-        except Exception:
-            self.long_wait_sec = 25
+        self.wait = WebDriverWait(driver, 10)
+        # Timeouts del formulario: fallar antes para no bloquear (refresh y siguiente orden)
+        # 12s es suficiente para saber si el elemento aparece; evita esperas de 25–120s
+        self.form_wait_sec = 12
         self.short_wait = WebDriverWait(driver, 5)
-        self.long_wait = WebDriverWait(driver, self.long_wait_sec)
+        self.long_wait = WebDriverWait(driver, self.form_wait_sec)
+        self.modal_wait = WebDriverWait(driver, self.form_wait_sec)
     
     def click_new_consultation(self, order_row=None):
         """
@@ -151,32 +149,72 @@ class ReportFormHandler:
         """
         Selecciona el tipo de consulta: Transportadora / Carrier
         
+        Estructura Dropi: app-dropi-select > div.custom-select > label "Type of inquiry"
+        > div.dropdown-container > button.select-button > div.elipsis "Select the type of inquiry"
+        
         Returns:
             True si fue exitoso, False en caso contrario
         """
         self.logger.info("Seleccionando tipo de consulta: Transportadora/Carrier...")
         
         try:
-            dropdown_xpath = "//button[contains(@class, 'select-button') and (descendant::p[contains(text(), 'Select the type')] or descendant::p[contains(text(), 'Selecciona el tipo')])]"
-            dropdown_css = ".select-container:first-child .select-button"
-            
-            try:
-                type_dropdown = self.wait.until(EC.element_to_be_clickable((By.XPATH, dropdown_xpath)))
-            except Exception:
-                type_dropdown = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, dropdown_css)))
+            # En headless/proxy Angular puede tardar más en renderizar el modal
+            self.logger.info("   Esperando 4s a que el modal renderice (Angular)...")
+            time.sleep(4)
+            # Espera más larga solo para este paso (dropdown crítico)
+            type_wait = WebDriverWait(self.driver, 25)
+            # Selectores que coinciden con el DOM real: app-dropi-select, .dropdown-container, .elipsis
+            type_dropdown_selectors = [
+                # Exacto: componente app-dropi-select con el botón del dropdown
+                (By.CSS_SELECTOR, "app-dropi-select .dropdown-container button.select-button"),
+                (By.CSS_SELECTOR, "app-dropi-select .custom-select button.select-button"),
+                (By.CSS_SELECTOR, "div.custom-select .select-button"),
+                (By.XPATH, "//div[contains(@class, 'custom-select')][.//label[contains(., 'Type of inquiry') or contains(., 'Tipo de consulta')]]//button[contains(@class, 'select-button')]"),
+                (By.XPATH, "//button[contains(@class, 'select-button') and .//div[contains(@class, 'elipsis') and (contains(., 'Select the type') or contains(., 'Selecciona el tipo'))]]"),
+                (By.XPATH, "//button[contains(@class, 'select-button') and (descendant::div[contains(., 'Select the type')] or descendant::div[contains(., 'Selecciona el tipo')])]"),
+            ]
+            self.logger.info("   Buscando dropdown 'Tipo de consulta' (espera hasta 25s)...")
+            type_dropdown = None
+            for by, selector in type_dropdown_selectors:
+                try:
+                    # Primero presencia, luego visibilidad (menos estricto que clickable; evita fallos por overlay)
+                    type_dropdown = type_wait.until(EC.presence_of_element_located((by, selector)))
+                    type_dropdown = type_wait.until(EC.visibility_of(type_dropdown))
+                    break
+                except Exception:
+                    continue
+            if not type_dropdown:
+                try:
+                    type_dropdown = type_wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".custom-select .select-button")))
+                except Exception:
+                    raise TimeoutException("Dropdown tipo de consulta no encontrado")
+            self.logger.info("   Dropdown encontrado; abriendo...")
             
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", type_dropdown)
-            time.sleep(1)
-            
+            time.sleep(0.8)
             try:
                 type_dropdown.click()
             except Exception:
                 self.driver.execute_script("arguments[0].click();", type_dropdown)
-            time.sleep(1)
+            time.sleep(1.2)
             
-            # Seleccionar "Transportadora" o "Carrier"
-            carrier_xpath = "//button[contains(@class, 'option') and (contains(., 'Transportadora') or contains(., 'Carrier'))]"
-            transportadora_option = self.wait.until(EC.element_to_be_clickable((By.XPATH, carrier_xpath)))
+            self.logger.info("   Buscando opción 'Transportadora/Carrier'...")
+            # Las opciones pueden abrirse en overlay (cdk-overlay); buscar en todo el documento
+            option_wait = WebDriverWait(self.driver, 15)
+            carrier_selectors = [
+                "//button[contains(@class, 'option') and (.//span[contains(., 'Carrier')] or .//span[contains(., 'Transportadora')])]",
+                "//button[contains(@class, 'option') and (contains(., 'Carrier') or contains(., 'Transportadora'))]",
+                "//*[contains(@class, 'option') and (contains(., 'Carrier') or contains(., 'Transportadora'))]",
+            ]
+            transportadora_option = None
+            for xpath in carrier_selectors:
+                try:
+                    transportadora_option = option_wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+                    break
+                except Exception:
+                    continue
+            if not transportadora_option:
+                raise TimeoutException("Opción Carrier/Transportadora no encontrada")
             
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", transportadora_option)
             time.sleep(0.5)
@@ -185,6 +223,14 @@ class ReportFormHandler:
             except Exception:
                 self.driver.execute_script("arguments[0].click();", transportadora_option)
             time.sleep(1)
+            self.logger.info("   Opción Transportadora/Carrier seleccionada.")
+            
+            # Nuevo en Dropi: al elegir Transportadora puede aparecer un popup
+            # "¡Oops! Aún no es posible" / "El estado actual de la orden no permite iniciar una conversación con la transportadora"
+            # Si aparece: Aceptar -> Cancel (cerrar formulario) y marcar orden como no reportable aún
+            self.logger.info("   Comprobando si aparece popup 'Aún no es posible'...")
+            if self._check_and_handle_carrier_not_allowed_alert():
+                return 'carrier_not_allowed'
             
             self.logger.info("✅ Tipo de consulta seleccionado: Transportadora/Carrier")
             return True
@@ -194,6 +240,94 @@ class ReportFormHandler:
             return False
         except Exception as e:
             self.logger.error(f"❌ Error al seleccionar tipo de consulta: {str(e)}")
+            return False
+    
+    def _check_and_handle_carrier_not_allowed_alert(self):
+        """
+        Detecta el popup de Dropi "Aún no es posible" / "Not possible yet" que dice que
+        el estado de la orden no permite iniciar conversación con la transportadora.
+        Si está visible: clic en Aceptar, luego en Cancel (cerrar formulario).
+        
+        Returns:
+            True si se detectó y se manejó el popup, False si no aparece
+        """
+        try:
+            time.sleep(1)
+            self.logger.info("   Revisando DOM en busca del modal de alerta...")
+            # Modal: dropi-alert-modal con contenido "Aún no es posible" / "Not possible yet" o "no permite iniciar una conversación"
+            alert_indicators = [
+                "//div[contains(@class, 'dropi-alert-modal')]//h2[contains(., 'Aún no es posible') or contains(., 'Not possible yet') or contains(., 'Oops')]",
+                "//div[contains(@class, 'content-alert')]//p[contains(., 'no permite iniciar una conversación') or contains(., 'does not allow') or contains(., 'carrier')]",
+                "//div[contains(@class, 'body-alert')]//h2[contains(., 'Oops') or contains(., 'Aún no')]",
+            ]
+            for xpath in alert_indicators:
+                try:
+                    el = self.driver.find_element(By.XPATH, xpath)
+                    if el.is_displayed():
+                        break
+                except NoSuchElementException:
+                    continue
+            else:
+                self.logger.info("   No se detectó popup 'Aún no es posible'; continuando con el flujo.")
+                return False
+            
+            self.logger.warning("⚠️ Popup detectado: 'Aún no es posible' (estado de orden no permite conversación con transportadora)")
+            
+            # 1) Clic en Aceptar (botón primary con span "Aceptar")
+            accept_selectors = [
+                "//div[contains(@class, 'dropi-alert-modal')]//button[contains(@class, 'btn') and contains(@class, 'primary')]//span[contains(text(), 'Aceptar')]",
+                "//div[contains(@class, 'dropi-alert-modal')]//button[.//span[contains(text(), 'Aceptar')]]",
+                "//button[contains(@class, 'btn') and contains(@class, 'primary') and .//span[normalize-space(text())='Aceptar']]",
+            ]
+            for xpath in accept_selectors:
+                try:
+                    btn = self.driver.find_element(By.XPATH, xpath)
+                    if btn.is_displayed():
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                        time.sleep(0.3)
+                        try:
+                            btn.click()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", btn)
+                        time.sleep(1)
+                        self.logger.info("   Clic en 'Aceptar' (cerrar popup)")
+                        break
+                except NoSuchElementException:
+                    continue
+            else:
+                self.logger.warning("   No se encontró botón Aceptar, intentando cerrar con X")
+                try:
+                    close_btn = self.driver.find_element(By.XPATH, "//div[contains(@class, 'dropi-alert-modal')]//button[@aria-label='Cerrar']")
+                    close_btn.click()
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+            
+            # 2) Clic en Cancel del formulario de nueva consulta (secondary, texto Cancel o Cancelar)
+            time.sleep(0.5)
+            cancel_selectors = [
+                "//button[contains(@class, 'btn') and contains(@class, 'secondary') and (.//span[contains(text(), 'Cancel')] or .//span[contains(text(), 'Cancelar')])]",
+                "//button[.//span[contains(text(), 'Cancel') or contains(text(), 'Cancelar')]]",
+            ]
+            for xpath in cancel_selectors:
+                try:
+                    cancel_btn = self.driver.find_element(By.XPATH, xpath)
+                    if cancel_btn.is_displayed():
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cancel_btn)
+                        time.sleep(0.3)
+                        try:
+                            cancel_btn.click()
+                        except Exception:
+                            self.driver.execute_script("arguments[0].click();", cancel_btn)
+                        time.sleep(1)
+                        self.logger.info("   Clic en 'Cancel' (cerrar formulario de nueva consulta)")
+                        return True
+                except NoSuchElementException:
+                    continue
+            self._close_modal()
+            return True
+        except Exception as e:
+            self.logger.debug("_check_and_handle_carrier_not_allowed_alert: %s", e)
             return False
     
     def select_consultation_reason(self):
@@ -206,13 +340,24 @@ class ReportFormHandler:
         self.logger.info("Seleccionando motivo: Ordenes sin movimiento...")
         
         try:
-            dropdown_xpath = "//button[contains(@class, 'select-button') and (descendant::div[contains(text(), 'Select the reason')] or descendant::div[contains(text(), 'Selecciona el motivo')])]"
-            dropdown_css = ".ticket-selector:nth-of-type(2) .select-button"
-            
-            try:
-                reason_dropdown = self.wait.until(EC.element_to_be_clickable((By.XPATH, dropdown_xpath)))
-            except Exception:
-                reason_dropdown = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, dropdown_css)))
+            # Dropi actual: div.ticket-selector con span.label "Reason for query", botón con div.elipsis "Select the reason for consultation"
+            reason_dropdown_selectors = [
+                "//div[contains(@class, 'ticket-selector')][.//span[contains(@class, 'label') and (contains(., 'Reason for query') or contains(., 'Motivo') or contains(., 'Reason'))]]//button[contains(@class, 'select-button')]",
+                "//button[contains(@class, 'select-button') and .//div[contains(@class, 'elipsis') and (contains(., 'Select the reason') or contains(., 'Selecciona el motivo') or contains(., 'reason for consultation'))]]",
+                "//button[contains(@class, 'select-button') and (descendant::div[contains(., 'Select the reason')] or descendant::div[contains(., 'Selecciona el motivo')])]",
+            ]
+            reason_dropdown = None
+            for xpath in reason_dropdown_selectors:
+                try:
+                    reason_dropdown = self.modal_wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+                    break
+                except Exception:
+                    continue
+            if not reason_dropdown:
+                try:
+                    reason_dropdown = self.modal_wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".ticket-selector .select-button")))
+                except Exception:
+                    raise TimeoutException("Dropdown motivo no encontrado")
             
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", reason_dropdown)
             time.sleep(0.5)
@@ -223,9 +368,20 @@ class ReportFormHandler:
                 self.driver.execute_script("arguments[0].click();", reason_dropdown)
             time.sleep(1)
             
-            # Seleccionar "Ordenes sin movimiento"
-            option_xpath = "//button[contains(@class, 'option') and (contains(., 'Ordenes sin movimiento') or contains(., 'No movement') or contains(., 'without movement'))]"
-            no_movement_option = self.wait.until(EC.element_to_be_clickable((By.XPATH, option_xpath)))
+            # Seleccionar "Ordenes sin movimiento" (opción: button.option con span "Ordenes sin movimiento")
+            no_movement_selectors = [
+                "//button[contains(@class, 'option') and .//span[contains(., 'Ordenes sin movimiento')]]",
+                "//button[contains(@class, 'option') and (contains(., 'Ordenes sin movimiento') or contains(., 'No movement') or contains(., 'without movement'))]",
+            ]
+            no_movement_option = None
+            for xpath in no_movement_selectors:
+                try:
+                    no_movement_option = self.modal_wait.until(EC.element_to_be_clickable((By.XPATH, xpath)))
+                    break
+                except Exception:
+                    continue
+            if not no_movement_option:
+                raise TimeoutException("Opción Ordenes sin movimiento no encontrada")
             
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", no_movement_option)
             time.sleep(0.5)
@@ -346,11 +502,11 @@ class ReportFormHandler:
             return False
     
     def _close_modal(self):
-        """Cierra el modal con Cancelar"""
+        """Cierra el modal con Cancel / Cancelar"""
         try:
             cancel_button = self.driver.find_element(
                 By.XPATH,
-                "//button[contains(@class, 'btn') and contains(@class, 'secondary') and .//span[contains(text(), 'Cancelar')]]"
+                "//button[contains(@class, 'btn') and contains(@class, 'secondary') and (.//span[contains(text(), 'Cancelar')] or .//span[contains(text(), 'Cancel')])]"
             )
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cancel_button)
             time.sleep(0.5)
@@ -400,23 +556,47 @@ class ReportFormHandler:
     
     def start_conversation(self):
         """
-        Click en el botón 'Iniciar una conversación'
+        Click en el botón 'Iniciar conversación' / 'Start conversation'.
+        Dropi: button.btn.primary.default.normal con span.text "Start conversation".
         
         Returns:
             True si fue exitoso, False en caso contrario
         """
         self.logger.info("Iniciando conversación...")
         
+        start_wait = WebDriverWait(self.driver, 20)
+        selectors = [
+            # Texto exacto que usa Dropi actual
+            (By.XPATH, "//button[contains(@class, 'btn') and contains(@class, 'primary')]//span[contains(., 'Start conversation')]/ancestor::button"),
+            (By.XPATH, "//span[contains(., 'Start conversation')]/ancestor::button[contains(@class, 'btn')]"),
+            (By.XPATH, "//button[.//span[contains(@class, 'text') and contains(., 'Start conversation')]]"),
+            (By.CSS_SELECTOR, "button.btn.primary.default.normal"),
+            (By.XPATH, "//button[contains(@class, 'btn') and (descendant::span[contains(., 'Iniciar un')] or descendant::span[contains(., 'Start a conversation')] or descendant::span[contains(., 'Start conversation')])]"),
+        ]
+        start_button = None
+        for by, selector in selectors:
+            try:
+                start_button = start_wait.until(EC.presence_of_element_located((by, selector)))
+                start_button = start_wait.until(EC.visibility_of(start_button))
+                break
+            except Exception:
+                continue
+        if not start_button:
+            try:
+                start_button = start_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@class, 'btn')]//span[contains(., 'Start')]")))
+            except Exception:
+                self.logger.error("✗ Botón 'Start conversation' no encontrado")
+                return False
         try:
-            start_xpath = "//button[contains(@class, 'btn') and (descendant::span[contains(text(), 'Iniciar un')] or descendant::span[contains(text(), 'Start a conversation')])]"
-            
-            start_button = self.wait.until(EC.element_to_be_clickable((By.XPATH, start_xpath)))
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", start_button)
+            time.sleep(0.5)
             start_button.click()
-            time.sleep(2)
-            
-            self.logger.info("✓ Conversación iniciada")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"✗ Error al iniciar conversación: {str(e)}")
-            return False
+        except Exception:
+            try:
+                self.driver.execute_script("arguments[0].click();", start_button)
+            except Exception as e:
+                self.logger.error(f"✗ Error al iniciar conversación: {str(e)}")
+                return False
+        time.sleep(2)
+        self.logger.info("✓ Conversación iniciada")
+        return True

@@ -174,3 +174,18 @@ La configuración del proxy está **COMPLETA y FUNCIONANDO**. El sistema:
 5. ✅ Compatible con Playwright y Selenium (según IPRoyal)
 
 **Próximo paso**: Ejecutar el reporter y verificar que todo funcione correctamente con el proxy en producción.
+
+---
+
+## Bright Data (alternativa)
+
+DropTools también soporta **Bright Data** como proveedor de proxy (ISP proxy). Mismo formato que ResiProx: `proxy_dev_config.json` o variables de entorno.
+
+- **Host**: `brd.superproxy.io`
+- **Puerto**: `33335`
+- **Usuario**: formato `brd-customer-<customer_id>-zone-<zone_name>-country-co` (sufijo `-country-co` = Colombia; para otro país usar `-country-us`, etc.)
+- **Contraseña**: la de tu zona en el panel de Bright Data
+
+Documentación oficial: [Bright Data - Send your first request](https://docs.brightdata.com/proxy-networks/isp/send-your-first-request).
+
+Para probar solo conectividad (sin Selenium): definir `BRIGHTDATA_PROXY_USER` y `BRIGHTDATA_PROXY_PASS` y ejecutar `python backend/scripts/test_brightdata_proxy.py`. Guía detallada en [CONFIGURACION_PROXY_BRIGHTDATA.md](CONFIGURACION_PROXY_BRIGHTDATA.md).

@@ -1035,27 +1035,32 @@ class ReporterStatusView(APIView):
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
         
         try:
+            from datetime import datetime, timedelta, time as dt_time
             from django.utils import timezone
             from core.models import WorkflowProgress
-            
-            print(f"DEBUG: Status check for user {user.username} ({user.id})")
 
-            # Contar reportes por estado (fechas en timezone del servidor: America/Bogota)
-            now = timezone.now()
+            # Hoy y mes en timezone configurado (America/Bogota)
+            now = timezone.localtime(timezone.now())
             today = now.date()
-            # Primer día del mes actual (inclusive) para total_reported_month
             first_of_month = today.replace(day=1)
+
+            # Rango explícito de "hoy" (inicio y fin del día local) para evitar desfase con BD en UTC
+            tz = timezone.get_current_timezone()
+            today_start = tz.localize(datetime.combine(today, dt_time.min))
+            today_end = today_start + timedelta(days=1)
+            month_start = tz.localize(datetime.combine(first_of_month, dt_time.min))
 
             total_reported = OrderReport.objects.filter(
                 user=user,
                 status='reportado',
-                updated_at__date=today
+                updated_at__gte=today_start,
+                updated_at__lt=today_end
             ).count()
 
             total_reported_month = OrderReport.objects.filter(
                 user=user,
                 status='reportado',
-                updated_at__date__gte=first_of_month
+                updated_at__gte=month_start
             ).count()
 
             pending_24h = OrderReport.objects.filter(
