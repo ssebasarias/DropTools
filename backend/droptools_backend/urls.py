@@ -7,6 +7,7 @@ The `urlpatterns` list routes URLs to views. For more information please see:
 from django.contrib import admin
 from django.urls import path
 from core.views import (
+    HealthView,
     DashboardStatsView,
     GoldMineView,
     GoldMineStatsView,
@@ -44,6 +45,8 @@ from core.views import (
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # Health (Docker / load balancers)
+    path('api/health/', HealthView.as_view(), name='api-health'),
     # Auth
     path('api/auth/login/', AuthLoginView.as_view(), name='auth-login'),
     path('api/auth/google/', GoogleAuthView.as_view(), name='google-auth'),

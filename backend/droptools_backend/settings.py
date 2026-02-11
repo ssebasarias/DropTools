@@ -41,9 +41,19 @@ GOOGLE_CLIENT_ID = os.getenv(
     '873344941573-7oqihc52h8mtp8gk80ebjakamtd81gi0.apps.googleusercontent.com'
 )
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:5173/auth/google/callback')
+# En producción usar GOOGLE_REDIRECT_URI=https://droptools.cloud (o la URL de callback) en .env.production
+GOOGLE_REDIRECT_URI = os.getenv(
+    'GOOGLE_REDIRECT_URI',
+    'http://localhost:5173/auth/google/callback' if DEBUG else 'https://droptools.cloud/'
+)
 
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['127.0.0.1', 'localhost', 'testserver', 'droptools.cloud', 'www.droptools.cloud'])
+
+# Orígenes permitidos para CSRF (formularios Django admin, etc.) cuando la petición viene de HTTPS
+CSRF_TRUSTED_ORIGINS = env.list(
+    'CSRF_TRUSTED_ORIGINS',
+    default=['https://droptools.cloud', 'https://www.droptools.cloud']
+)
 
 
 

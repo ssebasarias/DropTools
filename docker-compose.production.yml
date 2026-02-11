@@ -2,7 +2,7 @@
 # DOCKER COMPOSE - PRODUCCIÓN VPS
 # DropTools - Configuración Optimizada para 24/7
 # ============================================================================
-version: '3.8'
+# (version está obsoleto en Docker Compose v2+ y se ignora)
 
 services:
   # ========================================
@@ -105,7 +105,7 @@ services:
           cpus: '0.5'
           memory: 512M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -132,6 +132,7 @@ services:
       - "127.0.0.1:5173:5173"  # Solo accesible desde localhost (Nginx hará proxy)
     environment:
       - CHOKIDAR_USEPOLLING=true
+      - VITE_API_URL=https://droptools.cloud/api
     command: sh -c "npm install && npm run dev -- --host"
     networks:
       - droptools_net

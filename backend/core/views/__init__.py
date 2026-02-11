@@ -40,6 +40,7 @@ from .categories import CategoriesView
 
 # System views
 from .system import (
+    HealthView,
     SystemLogsView,
     ContainerStatsView,
     ContainerControlView,
@@ -99,6 +100,7 @@ __all__ = [
     # Categories
     'CategoriesView',
     # System
+    'HealthView',
     'SystemLogsView',
     'ContainerStatsView',
     'ContainerControlView',

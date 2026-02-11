@@ -2,9 +2,18 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import AllowAny
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..docker_utils import get_container_stats, control_container, get_docker_logs
 from ..permissions import IsAdminRole
+
+
+class HealthView(APIView):
+    """Endpoint para healthcheck (Docker, load balancers). Sin autenticación."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({"status": "ok"}, status=status.HTTP_200_OK)
 
 
 class SystemLogsView(APIView):
