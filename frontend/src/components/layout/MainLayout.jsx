@@ -35,6 +35,7 @@ const MainLayout = () => {
                 title="DropTools"
                 subtitle="Intelligence"
                 settingsPath="/admin/settings"
+                djangoAdminHref="/django-admin/"
                 userProfile={{
                     initials: (user?.full_name || user?.email || 'AD').slice(0, 2).toUpperCase(),
                     name: user?.full_name || user?.email || 'Admin',

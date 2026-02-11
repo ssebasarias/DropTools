@@ -9,7 +9,8 @@ const AppSidebar = ({
     title = "DropTools",
     subtitle = "Intelligence",
     settingsPath = "/settings",
-    userProfile = { initials: 'U', name: 'User', role: 'Guest' }
+    userProfile = { initials: 'U', name: 'User', role: 'Guest' },
+    djangoAdminHref,
 }) => {
     return (
         <aside className="sidebar glass-panel">
@@ -40,6 +41,17 @@ const AppSidebar = ({
             </nav>
 
             <div className="sidebar-footer">
+                {djangoAdminHref && (
+                    <a
+                        href={djangoAdminHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="nav-item"
+                        style={{ justifyContent: 'flex-start', border: 'none', textDecoration: 'none', color: 'inherit' }}
+                    >
+                        <span>Django Admin</span>
+                    </a>
+                )}
                 <NavLink
                     to={settingsPath}
                     className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
