@@ -95,13 +95,17 @@ class ReportResultManager:
                 except Exception:
                     pass
             
+            # DEBUG: Log antes de guardar para diagnosticar problemas de KPIs
+            self.logger.info(f"[ReportResultManager] Guardando OrderReport: Phone={phone} | UserID={user.id} | Status={result.get('status')} | State={order_state}")
+
             # Obtener o crear el reporte (guarda datos de valor: estado, días, producto, cliente)
-            OrderReport.objects.update_or_create(
+            status = result.get('status', 'error')
+            obj, created = OrderReport.objects.update_or_create(
                 user=user,
                 order_phone=phone,
                 defaults={
                     'order_id': order_id,
-                    'status': result.get('status', 'error'),
+                    'status': status,
                     'report_generated': result.get('report_generated', False),
                     'customer_name': customer_name,
                     'product_name': product_name,
@@ -110,6 +114,17 @@ class ReportResultManager:
                     'next_attempt_time': next_attempt_time,
                 }
             )
+            # Registrar fecha/hora del reporte exitoso (solo la primera vez)
+            reported_at_set = None
+            if status == 'reportado' and (created or not obj.reported_at):
+                reported_at_set = timezone.now()
+                OrderReport.objects.filter(pk=obj.pk).update(reported_at=reported_at_set)
+                obj.refresh_from_db()
+                self.logger.info(
+                    f"[ReportResultManager] ✅ Orden {phone} marcada como reportada: "
+                    f"OrderReport.reported_at={obj.reported_at} | OrderReport.id={obj.id}"
+                )
+            self.logger.info(f"[ReportResultManager] Resultado BD: {'Creado' if created else 'Actualizado'} ID={obj.id} | Status={status} | Timestamp={obj.updated_at}")
             
         except Exception as e:
             self.logger.error(f"[ERROR] Error al guardar resultado en BD: {str(e)}")
@@ -125,11 +140,18 @@ class ReportResultManager:
             resolution_note: Nota de resolución (opcional)
         """
         try:
+            resolved_at_now = timezone.now()
             OrderMovementReport.objects.filter(id=db_report_id).update(
                 is_resolved=True,
-                resolved_at=timezone.now(),
+                resolved_at=resolved_at_now,
                 resolution_note=resolution_note
             )
-            self.logger.info(f"   💾 Registro DB {db_report_id} marcado como RESUELTO.")
+            # Obtener datos para log
+            mov_report = OrderMovementReport.objects.filter(id=db_report_id).select_related('snapshot', 'batch').first()
+            phone = mov_report.snapshot.customer_phone if mov_report and mov_report.snapshot_id else "N/A"
+            self.logger.info(
+                f"   💾 OrderMovementReport.id={db_report_id} marcado como RESUELTO: "
+                f"resolved_at={resolved_at_now} | phone={phone} | user_id={mov_report.batch.user_id if mov_report else 'N/A'}"
+            )
         except Exception as e:
             self.logger.error(f"   ❌ Error actualizando OrderMovementReport: {e}")

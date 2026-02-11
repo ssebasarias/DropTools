@@ -15,10 +15,9 @@ import Register from './pages/auth/Register';
 
 // User Pages - Lazy load
 const UserLayout = lazy(() => import('./components/layout/UserLayout'));
-const ClientDashboard = lazy(() => import('./pages/user/ClientDashboard'));
+const AnalyticsDashboard = lazy(() => import('./pages/user/AnalyticsDashboard'));
 const WinnerProducts = lazy(() => import('./pages/user/WinnerProducts'));
 const ReporterConfig = lazy(() => import('./pages/user/ReporterConfig'));
-const ReportAnalysis = lazy(() => import('./pages/user/ReportAnalysis'));
 const Settings = lazy(() => import('./pages/Settings'));
 
 const Subscriptions = lazy(() => import('./pages/Subscriptions'));
@@ -27,7 +26,6 @@ const LandingPage = lazy(() => import('./pages/LandingPage'));
 import RequireAuth from './components/auth/RequireAuth';
 import RequireAdmin from './components/auth/RequireAdmin';
 import RequireUser from './components/auth/RequireUser';
-import RequireTier from './components/auth/RequireTier';
 
 // Loading component for Suspense fallback
 const LoadingSpinner = () => (
@@ -148,13 +146,14 @@ function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="/user/dashboard" replace />} />
+          <Route index element={<Navigate to="/user/analytics" replace />} />
+          <Route path="dashboard" element={<Navigate to="/user/analytics" replace />} />
           <Route 
-            path="dashboard" 
+            path="analytics" 
             element={
               <Suspense fallback={<LoadingSpinner />}>
                 <ErrorBoundary>
-                  <ClientDashboard />
+                  <AnalyticsDashboard />
                 </ErrorBoundary>
               </Suspense>
             } 
@@ -168,18 +167,6 @@ function App() {
                 </ErrorBoundary>
               </Suspense>
             } 
-          />
-          <Route
-            path="analysis"
-            element={
-              <RequireTier minTier="SILVER">
-                <Suspense fallback={<LoadingSpinner />}>
-                  <ErrorBoundary>
-                    <ReportAnalysis />
-                  </ErrorBoundary>
-                </Suspense>
-              </RequireTier>
-            }
           />
           <Route 
             path="winner-products" 

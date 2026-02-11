@@ -171,6 +171,24 @@ Para aislar: ejecutar **sin proxy** (quitar o vaciar `proxy_dev_config.json` o n
 
 **Captura de pantalla:** Cuando el login falla, el bot guarda automáticamente una captura en `backend/results/screenshots/login_fail_YYYYMMDD_HHMMSS_user{N}.png`. Así puedes ver si Dropi mostró captcha, “demasiados intentos” o otro contenido. En Docker la ruta dentro del contenedor es `/app/backend/results/screenshots/`; para verla en tu máquina asegúrate de tener montado `./backend:/app/backend` (el directorio `results/` está en `.gitignore`).
 
+## Flujo esperado: 1 worker Download+Compare → 6 workers Report (misma IP)
+
+Para **un solo usuario** (ej. user 2, martin) en un slot:
+
+1. **process_slot_task_dev** encola **1** `download_compare_task` (solo uno por usuario).
+2. **Un solo worker** ejecuta `download_compare_task`: login, descarga de reportes, comparación en BD. Los otros 5 workers permanecen libres.
+3. Al terminar Download+Compare, el comparador devuelve cuántas órdenes sin movimiento hay; se crean **lotes de 100** (rangos) y se encolan **N** tareas `report_range_task` (una por lote).
+4. **Hasta 6 workers** pueden ejecutar `report_range_task` en paralelo: cada uno hace login con la **misma cuenta y misma IP** (proxy por usuario), procesa su lote de 100 órdenes y libera. Así los 6 workers reparten todos los lotes del día.
+
+En logs deberías ver:
+
+- `Enqueued 1 download_compare_task for 1 users`
+- Un único `download_compare_task: user_id=2 run_id=X` (p. ej. en ForkPoolWorker-5)
+- Tras terminar: `Enqueued N report_range_task for user_id=2. Up to 6 workers will process ranges in parallel (same account, same IP).`
+- Varias líneas `report_range_task: run_id=X user_id=2 range=[1,100] (worker=celery@..., same IP as other ranges)` en **distintos** ForkPoolWorker-1 … ForkPoolWorker-6
+
+Configuración: `ReporterSlotConfig.max_active_selenium=6` y `range_size=100` (por defecto en BD). Flower: http://localhost:5555 para ver tareas activas y workers.
+
 ## Requisitos previos
 
 - **Reservas creadas** para la hora de prueba: `ensure_reporter_reservations --user-ids=2,3,4 --hour=10 --monthly-orders=6000` (peso 3 cada uno).

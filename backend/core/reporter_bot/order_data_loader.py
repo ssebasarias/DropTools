@@ -70,7 +70,7 @@ class OrderDataLoader:
             self.logger.info(f"   📅 Fecha: {latest_batch.created_at}")
             
             # 2. Buscar órdenes pendientes con filtros inteligentes
-            limit_date = timezone.now().date() - timedelta(days=3)
+            limit_date = timezone.now().date() - timedelta(days=2)
             
             # Buscar inhabilitados por tiempo (wait time alerts recientes)
             # Ordenes que tienen un reporte reciente diciendo 'cannot_generate_yet' y su tiempo no ha expirado

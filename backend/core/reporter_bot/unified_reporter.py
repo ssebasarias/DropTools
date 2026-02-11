@@ -103,9 +103,10 @@ class UnifiedReporter:
         self.workflow_progress = None
     
     def _get_proxy_config(self):
-        """Obtiene config de proxy para el usuario (para Selenium). Misma lógica que novedadreporter."""
+        """Obtiene config de proxy para el usuario (para Selenium). Usa el servicio de asignación."""
         import os
         from core.services.proxy_dev_loader import get_dev_proxy_config
+        from core.services.proxy_allocator_service import get_proxy_config_for_user
 
         # DROPI_NO_PROXY=1: sin proxy (útil cuando la IP del proxy recibe página en blanco de Google/Dropi)
         if os.environ.get("DROPI_NO_PROXY", "").strip().lower() in ("1", "true", "yes"):
@@ -120,14 +121,21 @@ class UnifiedReporter:
                 self.logger.info(f"🌐 Proxy (dev): {proxy_config.get('host')}:{proxy_config.get('port')}")
             return proxy_config
 
-        # Producción: variables de entorno o valores por defecto (ResiProx)
+        # Producción: usar servicio de asignación de proxies
+        proxy_config = get_proxy_config_for_user(self.user_id)
+        if proxy_config:
+            if self.logger:
+                self.logger.info(f"🌐 Proxy asignado: {proxy_config.get('host')}:{proxy_config.get('port')}")
+            return proxy_config
+
+        # Fallback: variables de entorno o valores por defecto (ResiProx)
         host = os.environ.get("DROPI_PROXY_HOST") or "gw.dataimpulse.com"
         port = int(os.environ.get("DROPI_PROXY_PORT", "823"))
         username = os.environ.get("DROPI_PROXY_USER") or "2b3a0e0b5c2e4_country-co_session-1"
         password = os.environ.get("DROPI_PROXY_PASS") or "bigotes2001"
         proxy_config = {"host": host, "port": port, "username": username, "password": password}
         if self.logger:
-            self.logger.info(f"🌐 Proxy: {host}:{port}")
+            self.logger.info(f"🌐 Proxy (fallback): {host}:{port}")
         return proxy_config
         
     def _init_progress(self):
@@ -190,6 +198,50 @@ class UnifiedReporter:
             pass
         msg = (getattr(e, 'msg', None) or getattr(e, 'args', [None])[0] or str(e)).lower()
         return any(k in msg for k in ('timeout', 'proxy', 'connection', 'refused', 'timed out', 'network'))
+    
+    def _is_automation_blocked_error(self, e):
+        """Indica si el error sugiere que el proxy fue bloqueado por detección de automatización."""
+        msg = (getattr(e, 'msg', None) or getattr(e, 'args', [None])[0] or str(e)).lower()
+        # Palabras clave que indican bloqueo de automatización
+        blocked_keywords = [
+            'automation', 'automated', 'bot', 'blocked', 'forbidden', '403',
+            'access denied', 'suspicious', 'detected', 'captcha', 'verification',
+            'unusual traffic', 'automated queries', 'robot', 'crawler'
+        ]
+        return any(kw in msg for kw in blocked_keywords)
+    
+    def _get_current_proxy_id(self):
+        """Obtiene el ID del proxy asignado al usuario actual."""
+        from core.models import UserProxyAssignment
+        try:
+            assignment = UserProxyAssignment.objects.select_related('proxy').get(user_id=self.user_id)
+            return assignment.proxy_id
+        except UserProxyAssignment.DoesNotExist:
+            return None
+    
+    def _handle_blocked_proxy(self, proxy_id, error):
+        """Marca un proxy como bloqueado cuando se detecta error de automatización."""
+        if not proxy_id:
+            return
+        
+        from core.services.proxy_allocator_service import mark_proxy_blocked
+        
+        error_msg = str(error)
+        reason = f"Bloqueo detectado automáticamente: {error_msg[:200]}"
+        
+        if self.logger:
+            self.logger.error(f"🚫 Detectado bloqueo de automatización en proxy id={proxy_id}. Marcando como bloqueado...")
+        
+        try:
+            migrated_count = mark_proxy_blocked(proxy_id, reason=reason)
+            if self.logger:
+                if migrated_count is not None:
+                    self.logger.info(f"✅ Proxy id={proxy_id} marcado como bloqueado. {migrated_count} usuarios migrados automáticamente.")
+                else:
+                    self.logger.warning(f"⚠️ No se pudo marcar proxy id={proxy_id} como bloqueado o ya estaba bloqueado.")
+        except Exception as e:
+            if self.logger:
+                self.logger.exception(f"❌ Error al marcar proxy id={proxy_id} como bloqueado: {e}")
 
     def run(self):
         """
@@ -206,11 +258,28 @@ class UnifiedReporter:
 
         self._init_progress()
         proxy_config = self._get_proxy_config()
+        current_proxy_id = self._get_current_proxy_id() if proxy_config else None
 
         try:
             return self._run_impl(proxy_config)
         except Exception as e:
-            if proxy_config and self._is_proxy_related_error(e):
+            # Detectar si es un error de bloqueo de automatización
+            if proxy_config and self._is_automation_blocked_error(e):
+                self.logger.error(f"🚫 Error de bloqueo de automatización detectado: {e}")
+                if current_proxy_id:
+                    self._handle_blocked_proxy(current_proxy_id, e)
+                # Intentar continuar sin proxy después de marcar como bloqueado
+                if self.driver_manager:
+                    try:
+                        self.driver_manager.close()
+                    except Exception:
+                        pass
+                    self.driver_manager = None
+                    self.driver = None
+                    DriverManager._driver = None
+                self._update_progress('step1_running', '⏳ Proxy bloqueado. Reintentando sin proxy (internet local)…')
+                return self._run_impl(None)
+            elif proxy_config and self._is_proxy_related_error(e):
                 self.logger.warning(f"⚠️ Error con proxy/timeout: {e}. Reintentando con internet local (sin proxy)...")
                 if self.driver_manager:
                     try:
@@ -480,14 +549,13 @@ class UnifiedReporter:
                 download_dir=download_dir
             )
             downloaded_files = downloader.run()
-            downloader_success = bool(downloaded_files)
+            files_count = len(downloaded_files) if downloaded_files else 0
             self.stats['downloader'] = {
-                'files_downloaded': len(downloaded_files) if downloaded_files else 0,
-                'success': downloader_success
+                'files_downloaded': files_count,
+                'success': True  # No error; puede ser 0 si ya existían batches
             }
-            if not downloader_success:
-                self.stats['comparer'] = {'success': False, 'total_detected': 0}
-                return self.stats
+            # Siempre ejecutar comparer: usa batches en BD (Ayer/Hoy), no depende de haber descargado en esta ejecución.
+            # Si no hubo descarga porque "hoy ya existe", el comparer igual encuentra órdenes sin movimiento.
             comparer = ReportComparer(user_id=self.user_id, logger=self.logger)
             comparison_success = comparer.run()
             self.stats['comparer'] = {

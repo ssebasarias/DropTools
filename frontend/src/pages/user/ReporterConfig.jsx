@@ -121,6 +121,14 @@ const ReporterConfigInner = () => {
         if (!silent) setStatusLoading(true);
         try {
             const statusData = await fetchReporterStatus();
+            console.log("📊 [ReporterConfig] Datos recibidos del backend:", statusData);
+
+            // Verificar si hay datos de debug en la respuesta
+            if (statusData.debug) {
+                console.log("🔍 [Debug] Reportes recientes:", statusData.debug.recent_reports);
+                console.log("🔍 [Debug] Desglose de estados hoy:", statusData.debug.status_breakdown_today);
+            }
+
             setStatus(statusData);
             if (statusData?.workflow_progress) {
                 setWorkflowProgress(statusData.workflow_progress);
@@ -389,7 +397,7 @@ const ReporterConfigInner = () => {
             `}</style>
             <div style={{ marginBottom: '2rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                    <h1 className="text-gradient" style={{ fontSize: '2.5rem', margin: 0 }}>Reporter Configuration</h1>
+                    <h1 className="text-gradient" style={{ fontSize: '2.5rem', margin: 0 }}>Report CAS</h1>
                     {reporterEnv && (
                         <span
                             title={reporterEnv.message || (reporterEnv.run_mode === 'development_docker' ? 'Reporter vía Celery en Docker (pruebas)' : reporterEnv.droptools_env === 'development' ? 'Reporter en proceso (navegador visible)' : 'Reporter vía Celery (producción)')}
@@ -473,21 +481,34 @@ const ReporterConfigInner = () => {
                                     const reportandoMatch = msg.match(/Reportando\s+(\d+)\s*\/\s*\d+/);
                                     const fromMessage = reportandoMatch ? safeNum(parseInt(reportandoMatch[1], 10)) : 0;
                                     return Math.max(0, fromDb, fromRun, fromMessage);
-                                })() : (statusLoading ? 'Cargando…' : '—')}
+                                })() : (statusLoading ? 'Cargando…' : 0)}
                             </p>
                         </div>
                         <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
                             <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.35rem' }}>Reportados mes</p>
                             <p style={{ fontSize: '1.5rem', margin: 0, fontWeight: 'bold', color: 'var(--success)' }}>
-                                {status != null ? (Number.isFinite(Number(status.total_reported_month)) ? Number(status.total_reported_month) : 0) : (statusLoading ? 'Cargando…' : '—')}
+                                {status != null ? (Number.isFinite(Number(status.total_reported_month)) ? Number(status.total_reported_month) : 0) : (statusLoading ? 'Cargando…' : 0)}
                             </p>
                         </div>
                         <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid var(--glass-border)' }}>
                             <p className="text-muted" style={{ fontSize: '0.8rem', margin: 0, marginBottom: '0.35rem' }}>Órdenes pendientes</p>
                             <p style={{ fontSize: '1.5rem', margin: 0, fontWeight: 'bold', color: 'var(--warning)' }}>
-                                {status != null
-                                    ? (Number.isFinite(Number(status.total_pending)) ? Number(status.total_pending) : 0)
-                                    : (lastRunProgress?.users?.[0]?.total_pending_orders != null ? lastRunProgress.users[0].total_pending_orders : (statusLoading ? 'Cargando…' : '—'))}
+                                {status != null ? (() => {
+                                    // Prioridad 1: total_pending_movement (órdenes sin movimiento del comparer, decrece en tiempo real)
+                                    if (status.total_pending_movement != null && Number.isFinite(Number(status.total_pending_movement))) {
+                                        return Number(status.total_pending_movement);
+                                    }
+                                    // Prioridad 2: total_pending_orders del último run (si está activo)
+                                    if (lastRunProgress?.users?.[0]?.total_pending_orders != null) {
+                                        return lastRunProgress.users[0].total_pending_orders;
+                                    }
+                                    // Prioridad 3: total_pending de OrderReport (fallback)
+                                    if (Number.isFinite(Number(status.total_pending))) {
+                                        return Number(status.total_pending);
+                                    }
+                                    // Si no hay datos, mostrar 0 en lugar de guiones
+                                    return 0;
+                                })() : (statusLoading ? 'Cargando…' : 0)}
                             </p>
                         </div>
                         <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', border: '1px solid var(--glass-border)', gridColumn: '1 / -1' }}>

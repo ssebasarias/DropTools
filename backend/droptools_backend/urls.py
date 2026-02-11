@@ -30,6 +30,8 @@ from core.views import (
     ReporterRunsView,
     ReporterRunProgressView,
     ClientDashboardAnalyticsView,
+    AnalyticsHistoricalView,
+    AnalyticsCarrierComparisonView,
     AuthLoginView,
     GoogleAuthView,
     AuthRegisterView,
@@ -79,6 +81,8 @@ urlpatterns = [
     path('api/reporter/runs/', ReporterRunsView.as_view(), name='reporter-runs'),
     path('api/reporter/runs/<int:run_id>/progress/', ReporterRunProgressView.as_view(), name='reporter-run-progress'),
     path('api/user/dashboard/analytics/', ClientDashboardAnalyticsView.as_view(), name='client-dashboard-analytics'),
+    path('api/user/analytics/historical/', AnalyticsHistoricalView.as_view(), name='analytics-historical'),
+    path('api/user/analytics/carrier-comparison/', AnalyticsCarrierComparisonView.as_view(), name='analytics-carrier-comparison'),
 
     # Admin (no payments): manage users & subscriptions
     path('api/admin/users/', AdminUsersView.as_view(), name='admin-users'),

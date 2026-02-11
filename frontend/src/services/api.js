@@ -307,7 +307,7 @@ export const fetchReporterRunProgress = async (runId) => {
     return await response.json();
 };
 
-export const fetchClientDashboardAnalytics = async (period = 'week') => {
+export const fetchClientDashboardAnalytics = async (period = 'month') => {
     try {
         const params = new URLSearchParams({ period });
         const response = await authFetch(`${API_URL}/user/dashboard/analytics/?${params.toString()}`);
@@ -315,6 +315,55 @@ export const fetchClientDashboardAnalytics = async (period = 'week') => {
         return await response.json();
     } catch (error) {
         console.error('Error fetching client dashboard analytics:', error);
+        throw error;
+    }
+};
+
+export const fetchAnalyticsHistorical = async (startDate, endDate, granularity = 'day') => {
+    try {
+        const params = new URLSearchParams({
+            start_date: startDate,
+            end_date: endDate,
+            granularity,
+        });
+        const response = await authFetch(`${API_URL}/user/analytics/historical/?${params.toString()}`);
+        if (!response.ok) throw new Error('Error al cargar datos históricos');
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching analytics historical:', error);
+        throw error;
+    }
+};
+
+export const fetchCarrierComparison = async (period = 'month') => {
+    try {
+        const params = new URLSearchParams({ period });
+        const response = await authFetch(`${API_URL}/user/analytics/carrier-comparison/?${params.toString()}`);
+        if (!response.ok) throw new Error('Error al cargar comparativa de transportadoras');
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching carrier comparison:', error);
+        throw error;
+    }
+};
+
+export const exportAnalyticsReport = async (period, format = 'csv') => {
+    try {
+        // Esta función puede implementarse más adelante para exportar a Excel/CSV
+        const params = new URLSearchParams({ period, format });
+        const response = await authFetch(`${API_URL}/user/dashboard/analytics/?${params.toString()}`);
+        if (!response.ok) throw new Error('Error al exportar reporte');
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `analytics-${period}-${new Date().toISOString().split('T')[0]}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    } catch (error) {
+        console.error('Error exporting analytics report:', error);
         throw error;
     }
 };

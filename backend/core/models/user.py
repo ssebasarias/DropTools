@@ -1,0 +1,80 @@
+from django.db import models
+from django.contrib.auth.models import AbstractUser
+from django.conf import settings
+
+
+class User(AbstractUser):
+    """
+    Modelo de usuario unificado que combina:
+    - auth_user (login del aplicativo) - heredado de AbstractUser
+    - user_profiles (perfil, rol, suscripción)
+    - dropi_accounts (credenciales Dropi)
+    
+    Esta es la única tabla de usuarios en el sistema.
+    """
+    
+    ROLE_ADMIN = "ADMIN"
+    ROLE_CLIENT = "CLIENT"
+    ROLE_CHOICES = [
+        (ROLE_ADMIN, "Admin"),
+        (ROLE_CLIENT, "Client"),
+    ]
+    
+    TIER_BRONZE = "BRONZE"
+    TIER_SILVER = "SILVER"
+    TIER_GOLD = "GOLD"
+    TIER_PLATINUM = "PLATINUM"
+    TIER_CHOICES = [
+        (TIER_BRONZE, "Bronze"),
+        (TIER_SILVER, "Silver"),
+        (TIER_GOLD, "Gold"),
+        (TIER_PLATINUM, "Platinum"),
+    ]
+    
+    # Campos de user_profiles (perfil y suscripción)
+    full_name = models.CharField(max_length=120, blank=True, default="")
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default=ROLE_CLIENT)
+    subscription_tier = models.CharField(max_length=10, choices=TIER_CHOICES, default=TIER_BRONZE)
+    subscription_active = models.BooleanField(default=False)
+    execution_time = models.TimeField(null=True, blank=True, help_text="Hora diaria para ejecutar el workflow de reportes (formato HH:MM)")
+    
+    # Campos de dropi_accounts (credenciales Dropi - cuenta principal)
+    dropi_email = models.EmailField(max_length=255, null=True, blank=True, help_text="Email de la cuenta Dropi principal")
+    dropi_password = models.CharField(max_length=255, null=True, blank=True, help_text="Password de la cuenta Dropi (string simple, no encriptado)")
+
+    # Estimación de carga (usado en reservas por hora)
+    monthly_orders_estimate = models.PositiveIntegerField(null=True, blank=True, help_text="Órdenes mensuales aproximadas")
+
+    # Timestamps adicionales
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = "users"
+        verbose_name = "user"
+        verbose_name_plural = "users"
+        indexes = [
+            models.Index(fields=["username"]),
+            models.Index(fields=["email"]),
+            models.Index(fields=["role", "subscription_tier"]),
+            models.Index(fields=["subscription_active"]),
+        ]
+    
+    def __str__(self) -> str:
+        return f"{self.username} ({self.role}/{self.subscription_tier})"
+    
+    def is_admin(self) -> bool:
+        """Retorna True si el usuario es admin"""
+        return self.role == self.ROLE_ADMIN or self.is_superuser
+    
+    def get_dropi_password_plain(self) -> str:
+        """
+        Retorna la contraseña Dropi sin encriptar (siempre como string simple)
+        """
+        return self.dropi_password or ""
+    
+    def set_dropi_password_plain(self, raw: str) -> None:
+        """
+        Guarda la contraseña Dropi como string simple (sin encriptar)
+        """
+        self.dropi_password = raw or ""

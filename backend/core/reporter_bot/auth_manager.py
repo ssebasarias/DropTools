@@ -321,6 +321,11 @@ class AuthManager:
         except Exception as e:
             self.session_active = False
             _screenshot_path = self._save_login_failure_screenshot()
+            
+            # Detectar si es un error de bloqueo de automatización
+            if self._is_automation_blocked_error(e):
+                self._handle_blocked_proxy_during_login(e)
+            
             if self.logger:
                 self.logger.error("="*60)
                 self.logger.error("❌ LOGIN FALLIDO")
@@ -341,6 +346,58 @@ class AuthManager:
                 import traceback
                 self.logger.error(traceback.format_exc())
             return False
+    
+    def _is_automation_blocked_error(self, e):
+        """Indica si el error sugiere que el proxy fue bloqueado por detección de automatización."""
+        msg = (getattr(e, 'msg', None) or getattr(e, 'args', [None])[0] or str(e)).lower()
+        # Palabras clave que indican bloqueo de automatización
+        blocked_keywords = [
+            'automation', 'automated', 'bot', 'blocked', 'forbidden', '403',
+            'access denied', 'suspicious', 'detected', 'captcha', 'verification',
+            'unusual traffic', 'automated queries', 'robot', 'crawler'
+        ]
+        # También verificar contenido de la página si es posible
+        try:
+            body_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+            if any(kw in body_text for kw in blocked_keywords):
+                return True
+        except Exception:
+            pass
+        return any(kw in msg for kw in blocked_keywords)
+    
+    def _get_current_proxy_id(self):
+        """Obtiene el ID del proxy asignado al usuario actual."""
+        from core.models import UserProxyAssignment
+        try:
+            assignment = UserProxyAssignment.objects.select_related('proxy').get(user_id=self.user_id)
+            return assignment.proxy_id
+        except UserProxyAssignment.DoesNotExist:
+            return None
+    
+    def _handle_blocked_proxy_during_login(self, error):
+        """Marca un proxy como bloqueado cuando se detecta error de automatización durante el login."""
+        proxy_id = self._get_current_proxy_id()
+        if not proxy_id:
+            return
+        
+        from core.services.proxy_allocator_service import mark_proxy_blocked
+        
+        error_msg = str(error)
+        reason = f"Bloqueo detectado durante login: {error_msg[:200]}"
+        
+        if self.logger:
+            self.logger.error(f"🚫 Detectado bloqueo de automatización durante login en proxy id={proxy_id}. Marcando como bloqueado...")
+        
+        try:
+            migrated_count = mark_proxy_blocked(proxy_id, reason=reason)
+            if self.logger:
+                if migrated_count is not None:
+                    self.logger.info(f"✅ Proxy id={proxy_id} marcado como bloqueado. {migrated_count} usuarios migrados automáticamente.")
+                else:
+                    self.logger.warning(f"⚠️ No se pudo marcar proxy id={proxy_id} como bloqueado o ya estaba bloqueado.")
+        except Exception as e:
+            if self.logger:
+                self.logger.exception(f"❌ Error al marcar proxy id={proxy_id} como bloqueado: {e}")
 
     def _save_login_failure_screenshot(self):
         """

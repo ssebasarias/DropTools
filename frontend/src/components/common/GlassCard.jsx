@@ -36,7 +36,7 @@ const GlassCard = ({ children, className = '', style = {}, padding = '1.25rem', 
             onClick={onClick}
         >
             {children}
-            <style jsx>{`
+            <style>{`
                 .glass-card-component {
                     transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
                 }

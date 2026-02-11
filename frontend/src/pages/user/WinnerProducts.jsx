@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { 
     Star, 
     ShoppingCart, 
@@ -431,6 +431,46 @@ const WinnerProducts = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* Banner Próximamente */}
+                <GlassCard
+                    style={{
+                        marginBottom: '2rem',
+                        border: '2px solid rgba(245, 158, 11, 0.35)',
+                        background: 'rgba(245, 158, 11, 0.08)',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '1rem',
+                    }}
+                >
+                    <div style={{
+                        padding: '0.75rem',
+                        background: 'rgba(245, 158, 11, 0.25)',
+                        borderRadius: '12px',
+                        flexShrink: 0,
+                    }}>
+                        <Zap size={28} style={{ color: 'var(--warning)' }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.35rem', color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            Próximamente
+                            <span style={{
+                                fontSize: '0.7rem',
+                                fontWeight: 600,
+                                padding: '2px 8px',
+                                borderRadius: '6px',
+                                backgroundColor: 'rgba(245, 158, 11, 0.25)',
+                                color: 'var(--warning)',
+                                border: '1px solid rgba(245, 158, 11, 0.4)',
+                            }}>
+                                En desarrollo
+                            </span>
+                        </h3>
+                        <p style={{ margin: 0, fontSize: '0.95rem', lineHeight: 1.6, color: 'var(--text-main)' }}>
+                            Estamos preparando una lista curada de productos ganadores para tu tienda. Mientras tanto, aquí puedes ver una vista previa de lo que vendrá.
+                        </p>
+                    </div>
+                </GlassCard>
 
                 {/* EstadÃ­sticas RÃ¡pidas - Estilo Dashboard */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
