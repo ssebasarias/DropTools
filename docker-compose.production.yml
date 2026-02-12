@@ -16,7 +16,7 @@ services:
       - .env.production
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./docs/droptools_db.sql:/docker-entrypoint-initdb.d/init.sql
+      # - ./docs/droptools_db.sql:/docker-entrypoint-initdb.d/init.sql
       - backups_data:/app/backups
     ports:
       - "127.0.0.1:5433:5432" # Solo accesible desde localhost
