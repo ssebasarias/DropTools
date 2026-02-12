@@ -91,7 +91,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "127.0.0.1:8000:8000"  # Solo accesible desde localhost (Nginx hará proxy)
-    command: python backend/manage.py runserver 0.0.0.0:8000
+    command: sh -c "python backend/manage.py migrate && python backend/manage.py runserver 0.0.0.0:8000"
     networks:
       - droptools_net
     depends_on:

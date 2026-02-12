@@ -36,7 +36,6 @@ from selenium.common.exceptions import (
 from django.core.management.base import BaseCommand
 from core.models import User
 from core.reporter_bot.driver_manager import DriverManager
-from core.services.proxy_dev_loader import get_dev_proxy_config
 
 
 def _configure_utf8_stdio():
@@ -90,7 +89,7 @@ class NovedadReporterBot:
         ]
     }
     
-    def __init__(self, headless=False, user_id=None, dropi_label="reporter", email=None, password=None, browser="edge", use_proxy=True):
+    def __init__(self, headless=False, user_id=None, dropi_label="reporter", email=None, password=None, browser="edge"):
         """
         Inicializa el bot
         
@@ -101,19 +100,16 @@ class NovedadReporterBot:
             email: Email de Dropi a usar directamente (sobrescribe user_id)
             password: Password de Dropi a usar directamente (sobrescribe user_id)
             browser: Navegador a usar: edge, chrome, brave, firefox (default edge)
-            use_proxy: Si True, usa proxy para evitar bloqueos (default True)
         """
         self.headless = headless
-        self.user_id = user_id or 2  # Default user_id 2 para proxy
+        self.user_id = user_id or 2
         self.browser = (browser or "edge").lower()
         self.dropi_label = dropi_label
         self.dropi_email_direct = email
         self.dropi_password_direct = password
-        self.use_proxy = use_proxy
         self.driver = None
         self.wait = None
         self.logger = self._setup_logger()
-        self.proxy_config = None
         self.stats = {
             'total_encontradas': 0,
             'procesadas': 0,
@@ -124,16 +120,6 @@ class NovedadReporterBot:
         # Las credenciales ya están hardcodeadas en la clase
         # No es necesario cargarlas desde BD
         self.logger.info(f"✅ Usando credenciales hardcodeadas: {self.DROPI_EMAIL}")
-        
-        # Cargar configuración de proxy si está habilitado
-        if self.use_proxy:
-            self.logger.info(f"🔄 Cargando configuración de proxy para user_id={self.user_id}...")
-            self.proxy_config = get_dev_proxy_config(self.user_id)
-            if self.proxy_config:
-                self.logger.info(f"✅ Proxy configurado: {self.proxy_config['host']}:{self.proxy_config['port']}")
-            else:
-                self.logger.warning("⚠️ No se pudo cargar configuración de proxy, continuando sin proxy")
-                self.use_proxy = False
     
     def _get_solution_message(self, novedad_type):
         """Obtiene un mensaje de solución aleatorio para el tipo de novedad dado"""
@@ -181,11 +167,9 @@ class NovedadReporterBot:
         pass
     
     def _init_driver(self):
-        """Inicializa el driver de Selenium usando DriverManager con soporte de proxy."""
+        """Inicializa el driver de Selenium usando DriverManager."""
         self.logger.info("="*60)
         self.logger.info(f"🚀 INICIALIZANDO NAVEGADOR {self.browser.upper()}")
-        if self.use_proxy and self.proxy_config:
-            self.logger.info("   🕵️ CON PROXY ACTIVADO")
         self.logger.info("="*60)
         
         try:
@@ -197,7 +181,7 @@ class NovedadReporterBot:
                 logger=self.logger,
                 download_dir=None,
                 browser=self.browser,
-                proxy_config=self.proxy_config if self.use_proxy else None,
+                proxy_config=None,
             )
             
             # Intentar inicializar con el navegador especificado
@@ -211,11 +195,6 @@ class NovedadReporterBot:
             
             if not self.driver:
                 raise Exception("No se pudo inicializar el driver")
-            
-            # Esperar a que la extensión del proxy se cargue si está habilitado
-            if self.use_proxy and self.proxy_config:
-                self.logger.info("   ⏳ Esperando 3 segundos para que la extensión del proxy se cargue...")
-                time.sleep(3)
             
             self.wait = WebDriverWait(self.driver, 15)
             self.logger.info("   ✅ Navegador inicializado correctamente")
