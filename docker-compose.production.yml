@@ -19,28 +19,14 @@ services:
       - ./docs/droptools_db.sql:/docker-entrypoint-initdb.d/init.sql
       - backups_data:/app/backups
     ports:
-      - "127.0.0.1:5433:5432"  # Solo accesible desde localhost
+      - "127.0.0.1:5433:5432" # Solo accesible desde localhost
     networks:
       - droptools_net
     # Optimizaciones PostgreSQL para 32GB RAM
     command: >
-      postgres
-      -c shared_buffers=8GB
-      -c effective_cache_size=24GB
-      -c maintenance_work_mem=2GB
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=16MB
-      -c default_statistics_target=100
-      -c random_page_cost=1.1
-      -c effective_io_concurrency=200
-      -c work_mem=64MB
-      -c min_wal_size=1GB
-      -c max_wal_size=4GB
-      -c max_worker_processes=8
-      -c max_parallel_workers_per_gather=4
-      -c max_parallel_workers=8
+      postgres -c shared_buffers=8GB -c effective_cache_size=24GB -c maintenance_work_mem=2GB -c checkpoint_completion_target=0.9 -c wal_buffers=16MB -c default_statistics_target=100 -c random_page_cost=1.1 -c effective_io_concurrency=200 -c work_mem=64MB -c min_wal_size=1GB -c max_wal_size=4GB -c max_worker_processes=8 -c max_parallel_workers_per_gather=4 -c max_parallel_workers=8
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U droptools_admin"]
+      test: [ "CMD-SHELL", "pg_isready -U droptools_admin" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -61,7 +47,7 @@ services:
     env_file:
       - .env.production
     ports:
-      - "127.0.0.1:5050:80"  # Solo accesible desde localhost
+      - "127.0.0.1:5050:80" # Solo accesible desde localhost
     depends_on:
       - db
     networks:
@@ -90,12 +76,13 @@ services:
       - ./cache_huggingface:/app/cache_huggingface
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - "127.0.0.1:8000:8000"  # Solo accesible desde localhost (Nginx hará proxy)
+      - "127.0.0.1:8000:8000" # Solo accesible desde localhost (Nginx hará proxy)
     command: sh -c "python backend/manage.py migrate && python backend/manage.py runserver 0.0.0.0:8000"
     networks:
       - droptools_net
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -105,7 +92,7 @@ services:
           cpus: '0.5'
           memory: 512M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health/" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -129,7 +116,7 @@ services:
       - ./frontend:/app
       - /app/node_modules
     ports:
-      - "127.0.0.1:5173:5173"  # Solo accesible desde localhost (Nginx hará proxy)
+      - "127.0.0.1:5173:5173" # Solo accesible desde localhost (Nginx hará proxy)
     environment:
       - CHOKIDAR_USEPOLLING=true
       - VITE_API_URL=https://droptools.cloud/api
@@ -184,7 +171,7 @@ services:
     container_name: droptools_portainer
     restart: always
     ports:
-      - "127.0.0.1:9000:9000"  # Solo accesible desde localhost
+      - "127.0.0.1:9000:9000" # Solo accesible desde localhost
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - portainer_data:/data
@@ -207,7 +194,7 @@ services:
       context: .
       target: selenium
     container_name: droptools_scraper
-    restart: unless-stopped  # Auto-reinicio continuo
+    restart: unless-stopped # Auto-reinicio continuo
     env_file:
       - .env.production
     volumes:
@@ -226,7 +213,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py scraper
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
     logging:
@@ -257,7 +244,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py loader
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
     logging:
@@ -294,7 +281,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py vectorizer
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
     logging:
@@ -310,7 +297,7 @@ services:
       context: .
       target: selenium
     container_name: droptools_clusterizer
-    restart: "no"  # Ejecución manual
+    restart: "no" # Ejecución manual
     env_file:
       - .env.production
     volumes:
@@ -324,7 +311,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py clusterizer
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
     logging:
@@ -340,7 +327,7 @@ services:
       context: .
       target: selenium
     container_name: droptools_classifier
-    restart: "no"  # Ejecución manual
+    restart: "no" # Ejecución manual
     env_file:
       - .env.production
     volumes:
@@ -354,7 +341,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py classifier
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
     logging:
@@ -370,7 +357,7 @@ services:
       context: .
       target: selenium
     container_name: droptools_classifier_2
-    restart: "no"  # Ejecución manual
+    restart: "no" # Ejecución manual
     env_file:
       - .env.production
     volumes:
@@ -384,7 +371,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py classifier
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
     logging:
@@ -400,7 +387,7 @@ services:
       context: .
       target: selenium
     container_name: droptools_market_trender
-    restart: "no"  # Ejecución manual
+    restart: "no" # Ejecución manual
     env_file:
       - .env.production
     volumes:
@@ -414,7 +401,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py market_trender
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
     logging:
@@ -430,7 +417,7 @@ services:
       context: .
       target: selenium
     container_name: droptools_meta_scholar
-    restart: "no"  # Ejecución manual
+    restart: "no" # Ejecución manual
     env_file:
       - .env.production
     volumes:
@@ -445,7 +432,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py meta_scholar
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
       - backend
@@ -462,7 +449,7 @@ services:
       context: .
       target: selenium
     container_name: droptools_shopify_auditor
-    restart: "no"  # Ejecución manual
+    restart: "no" # Ejecución manual
     env_file:
       - .env.production
     volumes:
@@ -477,7 +464,7 @@ services:
     networks:
       - droptools_net
     command: python backend/manage.py shopify_auditor
-    profiles: ["workers"]
+    profiles: [ "workers" ]
     depends_on:
       - db
     logging:
