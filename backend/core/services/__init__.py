@@ -13,6 +13,14 @@ from .proxy_allocator_service import (
     update_last_used,
 )
 from .proxy_health_checker import check_proxy_reachable, check_proxy_by_id
+from .auth_tokens import (
+    TokenValidationError,
+    create_auth_token,
+    validate_token,
+    get_token_record,
+    consume_token,
+)
+from .auth_email_service import send_verify_email, send_password_reset_email
 
 __all__ = [
     'GoldMineService',
@@ -23,4 +31,11 @@ __all__ = [
     'update_last_used',
     'check_proxy_reachable',
     'check_proxy_by_id',
+    'TokenValidationError',
+    'create_auth_token',
+    'validate_token',
+    'get_token_record',
+    'consume_token',
+    'send_verify_email',
+    'send_password_reset_email',
 ]

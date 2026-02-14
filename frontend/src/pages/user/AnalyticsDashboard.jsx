@@ -14,7 +14,7 @@ import {
     Download,
     RefreshCw,
 } from 'lucide-react';
-import { fetchClientDashboardAnalytics, fetchCarrierComparison, exportAnalyticsReport } from '../../services/api';
+import { fetchClientDashboardAnalytics, fetchCarrierComparison, exportAnalyticsReport, startReporterWorkflow } from '../../services/api';
 import GlassCard from '../../components/common/GlassCard';
 import ErrorState from '../../components/common/ErrorState';
 import ColombiaMap from '../../components/domain/market/ColombiaMap';
@@ -53,6 +53,8 @@ const AnalyticsDashboard = () => {
     const [error, setError] = useState(null);
     const [timeFilter, setTimeFilter] = useState('month');
     const [exporting, setExporting] = useState(false);
+    const [syncingSnapshots, setSyncingSnapshots] = useState(false);
+    const [syncMessage, setSyncMessage] = useState(null);
 
     const loadAnalytics = useCallback(async () => {
         setError(null);
@@ -103,6 +105,22 @@ const AnalyticsDashboard = () => {
         }
     };
 
+    const handleSyncSnapshots = async () => {
+        setSyncMessage(null);
+        setSyncingSnapshots(true);
+        try {
+            await startReporterWorkflow();
+            setSyncMessage('Sincronización iniciada. El proceso puede tardar unos minutos; luego actualiza este dashboard.');
+            setTimeout(() => {
+                loadAnalytics();
+            }, 3000);
+        } catch (err) {
+            setSyncMessage(err?.message || 'No se pudo iniciar la sincronización automática.');
+        } finally {
+            setSyncingSnapshots(false);
+        }
+    };
+
     if (error) {
         return (
             <ErrorState
@@ -137,6 +155,8 @@ const AnalyticsDashboard = () => {
         product_profitability = [],
         carrier_reports = [],
         last_updated,
+        data_message,
+        snapshot_sync_recommended,
     } = analytics || {};
     const topProduct = top_products?.[0] ?? null;
 
@@ -210,6 +230,37 @@ const AnalyticsDashboard = () => {
                     </button>
                 </div>
             </div>
+            {data_message && (
+                <GlassCard style={{ marginBottom: '1.5rem', border: '1px dashed rgba(245, 158, 11, 0.35)' }}>
+                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                        <p className="text-muted" style={{ margin: 0 }}>
+                            {data_message}
+                        </p>
+                        {snapshot_sync_recommended ? (
+                            <button
+                                onClick={handleSyncSnapshots}
+                                disabled={syncingSnapshots}
+                                style={{
+                                    padding: '0.5rem 0.9rem',
+                                    borderRadius: '8px',
+                                    background: 'rgba(99, 102, 241, 0.2)',
+                                    color: 'var(--primary)',
+                                    border: '1px solid rgba(99, 102, 241, 0.35)',
+                                    cursor: syncingSnapshots ? 'not-allowed' : 'pointer',
+                                    fontWeight: 600,
+                                }}
+                            >
+                                {syncingSnapshots ? 'Sincronizando...' : 'Sincronizar datos para mapa y finanzas'}
+                            </button>
+                        ) : null}
+                    </div>
+                    {syncMessage ? (
+                        <p className="text-muted" style={{ margin: '0.65rem 0 0' }}>
+                            {syncMessage}
+                        </p>
+                    ) : null}
+                </GlassCard>
+            )}
 
             {/* Sección 1: KPIs Principales */}
             <div style={{ marginBottom: '2rem' }}>
@@ -384,20 +435,22 @@ const AnalyticsDashboard = () => {
                     Zonas que más compran
                 </h2>
                 <GlassCard>
-                    <p className="text-muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>Por departamento — clic en zona para ver pedidos y facturación</p>
+                    <p className="text-muted" style={{ fontSize: '0.9rem', marginBottom: '1rem' }}>
+                        Colombia por departamento - clic en zona para ver pedidos, transportadora líder y flete promedio
+                    </p>
+                    <ColombiaMap byRegion={by_region} style={{ minHeight: '320px' }} />
                     {Array.isArray(by_region) && by_region.length > 0 ? (
-                        <>
-                            <ColombiaMap byRegion={by_region} style={{ minHeight: '320px' }} />
-                            <ul style={{ margin: '1rem 0 0', paddingLeft: '1.25rem', color: 'var(--text-muted)', fontSize: '0.85rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem' }}>
-                                {by_region.slice(0, 6).map((r, i) => (
-                                    <li key={i}>
-                                        <strong style={{ color: 'var(--text-main)' }}>{r.department ?? '—'}</strong>: {formatNumber(r.orders)} pedidos — {formatCurrency(r.revenue)}
-                                    </li>
-                                ))}
-                            </ul>
-                        </>
+                        <ul style={{ margin: '1rem 0 0', paddingLeft: '1.25rem', color: 'var(--text-muted)', fontSize: '0.85rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem' }}>
+                            {by_region.slice(0, 8).map((r, i) => (
+                                <li key={i}>
+                                    <strong style={{ color: 'var(--text-main)' }}>{r.department ?? '—'}</strong>: {formatNumber(r.orders)} pedidos - {formatCurrency(r.revenue)} - Top: {r.top_carrier ?? '—'} - Flete prom.: {formatCurrency(r.avg_shipping_price)}
+                                </li>
+                            ))}
+                        </ul>
                     ) : (
-                        <p className="text-muted" style={{ margin: 0 }}>Sin datos por región</p>
+                        <p className="text-muted" style={{ margin: '1rem 0 0' }}>
+                            Sin datos por región para el período seleccionado. El mapa igual se muestra para validar cobertura geográfica.
+                        </p>
                     )}
                 </GlassCard>
             </div>

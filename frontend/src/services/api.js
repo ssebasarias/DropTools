@@ -15,7 +15,7 @@ export const authFetch = async (url, options = {}) => {
         // Session expired/invalid: force logout.
         clearToken();
         if (window.location.pathname !== '/login') {
-            window.location.href = '/login';
+            window.location.replace('/login');
         }
     }
     return res;
@@ -206,11 +206,11 @@ export const startReporterWorkflow = async () => {
     }
 };
 
-/** Modo activo (desarrollo vs producción). Público, no requiere auth. */
+/** Modo activo (desarrollo vs producción). Requiere sesión activa. */
 export const fetchReporterEnv = async () => {
-    const response = await fetch(`${API_URL}/reporter/env/`);
+    const response = await authFetch(`${API_URL}/reporter/env/`);
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) return { droptools_env: 'production', reporter_use_celery: true };
+    if (!response.ok) return { droptools_env: 'production', reporter_use_celery: true, run_mode: 'production' };
     return data;
 };
 

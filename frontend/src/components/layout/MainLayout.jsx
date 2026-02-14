@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Pickaxe, Boxes, Server } from 'lucide-react';
+import { LayoutDashboard, Users, Pickaxe, Boxes, Server } from 'lucide-react';
 import AppSidebar from './AppSidebar';
 import DashboardHeader from './DashboardHeader';
 import './MainLayout.css';
@@ -12,6 +12,7 @@ const MainLayout = () => {
 
     const adminNavItems = [
         { path: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
+        { path: '/admin/users', label: 'Users & Plans', icon: Users },
         { path: '/admin/gold-mine', label: 'Gold Mine', icon: Pickaxe, glow: true },
         { path: '/admin/cluster-lab', label: 'Cluster Lab', icon: Boxes },
         { path: '/admin/system-status', label: 'System Status', icon: Server },
@@ -20,6 +21,7 @@ const MainLayout = () => {
     const getPageTitle = () => {
         switch (location.pathname) {
             case '/admin': return 'Dashboard';
+            case '/admin/users': return 'Users & Plans';
             case '/admin/gold-mine': return 'Gold Mine';
             case '/admin/cluster-lab': return 'Cluster Analysis';
             case '/admin/system-status': return 'System Control';
@@ -35,7 +37,6 @@ const MainLayout = () => {
                 title="DropTools"
                 subtitle="Intelligence"
                 settingsPath="/admin/settings"
-                djangoAdminHref="/django-admin/"
                 userProfile={{
                     initials: (user?.full_name || user?.email || 'AD').slice(0, 2).toUpperCase(),
                     name: user?.full_name || user?.email || 'Admin',

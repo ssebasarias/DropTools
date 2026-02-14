@@ -35,6 +35,18 @@ class OrderReport(models.Model):
     
     # Control de tiempos
     next_attempt_time = models.DateTimeField(null=True, blank=True, help_text="Próximo intento (para estados que requieren espera)")
+    last_movement_date = models.DateField(
+        null=True, blank=True, db_index=True,
+        help_text="Fecha del último movimiento informada por Dropi en el formulario de nueva consulta."
+    )
+    last_movement_status = models.CharField(
+        max_length=150, null=True, blank=True,
+        help_text="Estado de la orden reportado junto con la fecha del último movimiento."
+    )
+    inactivity_days_real = models.IntegerField(
+        null=True, blank=True,
+        help_text="Días reales de inactividad calculados desde la fecha de último movimiento."
+    )
     reported_at = models.DateTimeField(
         null=True, blank=True, db_index=True,
         help_text="Fecha y hora en que se generó el reporte exitosamente (status=reportado). Para control y KPIs."
@@ -210,6 +222,18 @@ class OrderMovementReport(models.Model):
     
     # Datos calculados en el momento
     days_since_order = models.IntegerField(default=0, help_text="Días desde que se creó la orden hasta hoy")
+    last_movement_date = models.DateField(
+        null=True, blank=True, db_index=True,
+        help_text="Fecha del último movimiento informada por Dropi durante el intento de reporte."
+    )
+    last_movement_status = models.CharField(
+        max_length=150, null=True, blank=True,
+        help_text="Estado de la orden mostrado por Dropi junto a la fecha de último movimiento."
+    )
+    inactivity_days_real = models.IntegerField(
+        null=True, blank=True,
+        help_text="Días reales de inactividad calculados desde last_movement_date."
+    )
     
     # Gestión de la incidencia
     is_resolved = models.BooleanField(default=False, db_index=True)

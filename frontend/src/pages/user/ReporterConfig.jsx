@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Save, Info, Clock, Mail, Key, CheckCircle2, XCircle, RefreshCw, FileText, Phone, User, Package, Square, BarChart3, Lock, AlertCircle } from 'lucide-react';
+import { Save, Info, Clock, Mail, Key, CheckCircle2, XCircle, RefreshCw, FileText, Phone, User, Package, Square, BarChart3, Lock } from 'lucide-react';
 import { createDropiAccount, fetchDropiAccounts, setDefaultDropiAccount, fetchReporterConfig, stopReporterProcesses, fetchReporterStatus, fetchReporterList, fetchReporterEnv, fetchReporterSlots, fetchMyReservation, createReservation, deleteReservation, fetchReporterRuns, fetchReporterRunProgress } from '../../services/api';
 import SubscriptionGate from '../../components/common/SubscriptionGate';
 import { getAuthUser } from '../../services/authService';
@@ -7,6 +7,9 @@ import { hasTier } from '../../utils/subscription';
 import EmptyState from '../../components/common/EmptyState';
 import ErrorAlert from '../../components/common/ErrorAlert';
 import SuccessAlert from '../../components/common/SuccessAlert';
+import ReporterCancelModal from '../../components/domain/reporter/ReporterCancelModal';
+import ReporterSuccessModal from '../../components/domain/reporter/ReporterSuccessModal';
+import ReporterReservationSummary from '../../components/domain/reporter/ReporterReservationSummary';
 
 const ReporterConfigInner = () => {
     // Función para validar formato de email
@@ -321,6 +324,7 @@ const ReporterConfigInner = () => {
         (lastRunProgress?.users?.length && (lastRunProgress.users || []).some(u =>
             u.total_ranges != null && (u.ranges_completed ?? 0) < u.total_ranges
         ));
+    const hasBronzeAccess = !!getAuthUser() && hasTier(getAuthUser(), 'BRONZE');
 
     // Auto-refresh: 3–5 s con run activo o workflow manual; 15 s con reserva en reposo; 30 s sin reserva
     useEffect(() => {
@@ -397,7 +401,7 @@ const ReporterConfigInner = () => {
             `}</style>
             <div style={{ marginBottom: '2rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                    <h1 className="text-gradient" style={{ fontSize: '2.5rem', margin: 0 }}>Report CAS</h1>
+                    <h1 className="text-gradient" style={{ fontSize: '2.5rem', margin: 0 }}>Reporter automatico</h1>
                     {reporterEnv && (
                         <span
                             title={reporterEnv.message || (reporterEnv.run_mode === 'development_docker' ? 'Reporter vía Celery en Docker (pruebas)' : reporterEnv.droptools_env === 'development' ? 'Reporter en proceso (navegador visible)' : 'Reporter vía Celery (producción)')}
@@ -415,50 +419,18 @@ const ReporterConfigInner = () => {
                         </span>
                     )}
                 </div>
-                <p className="text-muted" style={{ marginTop: '0.5rem' }}>Gestiona la generación de reportes de órdenes sin movimiento.</p>
+                <p className="text-muted" style={{ marginTop: '0.5rem' }}>Configura el reporter que procesa ordenes sin movimiento en Dropi.</p>
                 {proxyAssigned && (
-                    <p className="text-muted" style={{ marginTop: '0.25rem', fontSize: '0.9rem' }}>IP asignada: {proxyAssigned} (solo lectura)</p>
+                    <p className="text-muted" style={{ marginTop: '0.25rem', fontSize: '0.9rem' }}>Conexion asignada: {proxyAssigned} (solo lectura)</p>
                 )}
             </div>
 
-            {/* Pantalla con reserva: Panel 1 — Información de cuenta */}
-            {myReservation && (
-                <div
-                    className="glass-card"
-                    style={{
-                        marginBottom: '2rem',
-                        border: '2px solid rgba(16,185,129,0.25)',
-                        animation: 'fadeInUp 0.5s ease-out'
-                    }}
-                >
-                    <h3 style={{ marginBottom: '1rem', fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Mail size={22} style={{ color: 'var(--primary)' }} />
-                        Información de cuenta
-                    </h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                        <div>
-                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0 0 0.25rem 0' }}>Email Dropi</p>
-                            <p style={{ margin: 0, fontWeight: 600 }}>{accounts.length > 0 ? (accounts.find(a => a.is_default)?.email || accounts[0]?.email) || 'Cuenta vinculada' : 'Cuenta vinculada'}</p>
-                        </div>
-                        <div>
-                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0 0 0.25rem 0' }}>Hora asignada</p>
-                            <p style={{ margin: 0, fontWeight: 600 }}>{myReservation.slot?.hour_label ?? `${String(myReservation.slot?.hour ?? '').padStart(2, '0')}:00`}</p>
-                        </div>
-                        <div>
-                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0 0 0.25rem 0' }}>Estado de suscripción</p>
-                            <p style={{ margin: 0, fontWeight: 600 }}>{getAuthUser() ? (hasTier(getAuthUser(), 'BRONZE') ? 'Activa' : 'Revisar') : '—'}</p>
-                        </div>
-                        <div>
-                            <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0 0 0.25rem 0' }}>IP asignada</p>
-                            <p style={{ margin: 0, fontWeight: 600 }}>{proxyAssigned || 'Sin proxy asignado'}</p>
-                        </div>
-                    </div>
-                    <p style={{ margin: 0, marginTop: '1rem', fontSize: '1rem', color: 'var(--success)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <CheckCircle2 size={20} style={{ color: 'var(--success)' }} />
-                        ¡Todo listo! Tu reporte se ejecutará automáticamente todos los días a las {myReservation.slot?.hour_label ?? `${String(myReservation.slot?.hour ?? '').padStart(2, '0')}:00`} 🎉
-                    </p>
-                </div>
-            )}
+            <ReporterReservationSummary
+                accounts={accounts}
+                myReservation={myReservation}
+                proxyAssigned={proxyAssigned}
+                hasBronzeAccess={hasBronzeAccess}
+            />
 
             {/* Panel de proceso en tiempo real (siempre visible con reserva) */}
             {myReservation && (
@@ -894,7 +866,7 @@ const ReporterConfigInner = () => {
                                         )}
                                     </div>
                                     <div style={{ flex: 1, minWidth: 0 }}>
-                                        <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Progreso del Workflow</h3>
+                                        <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Progreso del reporte</h3>
                                         <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0 0 0' }}>
                                             {(workflowProgress.status === 'stopped' || (workflowProgress.status === 'failed' && workflowProgress.current_message && workflowProgress.current_message.includes('detenido')))
                                                 ? 'Detenido. No hay procesos en ejecución.'
@@ -1103,148 +1075,31 @@ const ReporterConfigInner = () => {
                 </>
             )}
 
-            {/* Modal de confirmación para cancelar reserva */}
-            {showCancelModal && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    background: 'rgba(0,0,0,0.7)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 9999,
-                    animation: 'fadeIn 0.2s ease-out'
-                }}>
-                    <div className="glass-card" style={{
-                        maxWidth: '500px',
-                        margin: '1rem',
-                        animation: 'slideIn 0.3s ease-out'
-                    }}>
-                        <h3 style={{ marginBottom: '1rem', fontSize: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <AlertCircle size={24} style={{ color: 'var(--warning)' }} />
-                            ¿Cancelar reserva?
-                        </h3>
-                        <p className="text-muted" style={{ marginBottom: '1.5rem', lineHeight: '1.6' }}>
-                            Si cancelas tu reserva, perderás tu hora asignada y tendrás que configurar todo nuevamente.
-                            Los reportes automáticos se detendrán hasta que reserves una nueva hora.
-                        </p>
-                        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
-                            <button
-                                type="button"
-                                className="btn-secondary"
-                                onClick={() => setShowCancelModal(false)}
-                            >
-                                No, mantener reserva
-                            </button>
-                            <button
-                                type="button"
-                                className="btn-primary"
-                                style={{
-                                    background: 'var(--danger)',
-                                    borderColor: 'var(--danger)'
-                                }}
-                                onClick={async () => {
-                                    setShowCancelModal(false);
-                                    await handleCancelReservation();
-                                }}
-                            >
-                                Sí, cancelar reserva
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <ReporterCancelModal
+                open={showCancelModal}
+                onClose={() => setShowCancelModal(false)}
+                onConfirm={async () => {
+                    setShowCancelModal(false);
+                    await handleCancelReservation();
+                }}
+            />
 
-            {/* Modal de Éxito al Confirmar Reserva */}
-            {showSuccessModal && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 10000,
-                    backdropFilter: 'blur(5px)',
-                    animation: 'fadeIn 0.3s ease-out'
-                }}>
-                    <div className="glass-card" style={{
-                        maxWidth: '500px',
-                        width: '90%',
-                        padding: '2.5rem',
-                        textAlign: 'center',
-                        border: '2px solid var(--success)',
-                        boxShadow: '0 0 40px rgba(16, 185, 129, 0.3)',
-                        animation: 'fadeInUp 0.4s ease-out',
-                        background: 'rgba(10, 10, 15, 0.95)'
-                    }}>
-                        <div style={{
-                            width: '80px',
-                            height: '80px',
-                            borderRadius: '50%',
-                            backgroundColor: 'rgba(16, 185, 129, 0.2)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            margin: '0 auto 1.5rem auto',
-                            border: '1px solid var(--success)'
-                        }}>
-                            <CheckCircle2 size={40} style={{ color: 'var(--success)' }} />
-                        </div>
-
-                        <h3 className="text-gradient" style={{
-                            fontSize: '1.75rem',
-                            marginBottom: '1rem',
-                            fontWeight: 'bold'
-                        }}>
-                            ¡Reserva Exitosa!
-                        </h3>
-
-                        <p className="text-muted" style={{
-                            fontSize: '1.1rem',
-                            marginBottom: '2rem',
-                            lineHeight: '1.6',
-                            color: 'var(--text-main)'
-                        }}>
-                            {successMessage || 'Tu configuración ha sido guardada correctamente.'}
-                        </p>
-
-                        <button
-                            className="btn-primary"
-                            style={{
-                                width: '100%',
-                                padding: '1rem',
-                                fontSize: '1.1rem',
-                                justifyContent: 'center',
-                                fontWeight: 600,
-                                background: 'linear-gradient(135deg, var(--success), #059669)',
-                                borderColor: 'var(--success)',
-                                boxShadow: '0 4px 15px rgba(16, 185, 129, 0.4)'
-                            }}
-                            onClick={async () => {
-                                setShowSuccessModal(false);
-                                setLoading(true);
-                                try {
-                                    await loadMyReservation();
-                                } catch (e) {
-                                    console.error(e);
-                                    setError('Error cargando la nueva reserva');
-                                } finally {
-                                    setLoading(false);
-                                }
-                            }}
-                        >
-                            Entendido, ver mi orden
-                        </button>
-                    </div>
-                </div>
-            )}
+            <ReporterSuccessModal
+                open={showSuccessModal}
+                message={successMessage}
+                onAcknowledge={async () => {
+                    setShowSuccessModal(false);
+                    setLoading(true);
+                    try {
+                        await loadMyReservation();
+                    } catch (e) {
+                        console.error(e);
+                        setError('Error cargando la nueva reserva');
+                    } finally {
+                        setLoading(false);
+                    }
+                }}
+            />
         </div >
     );
 };

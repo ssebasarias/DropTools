@@ -36,16 +36,21 @@ else:
     SECRET_KEY = env('SECRET_KEY')
 
 # Google OAuth Configuration (mismo Client ID que el frontend para verificar el ID token)
-GOOGLE_CLIENT_ID = os.getenv(
-    'GOOGLE_CLIENT_ID',
-    '873344941573-7oqihc52h8mtp8gk80ebjakamtd81gi0.apps.googleusercontent.com'
-)
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
 # En producción usar GOOGLE_REDIRECT_URI=https://droptools.cloud (o la URL de callback) en .env.production
 GOOGLE_REDIRECT_URI = os.getenv(
     'GOOGLE_REDIRECT_URI',
     'http://localhost:5173/auth/google/callback' if DEBUG else 'https://droptools.cloud/'
 )
+FRONTEND_BASE_URL = env('FRONTEND_BASE_URL', default='https://droptools.cloud')
+
+# Clave dedicada para cifrado reversible de credenciales Dropi.
+# En producción es obligatoria y NO debe reutilizar SECRET_KEY.
+if DEBUG:
+    DROPI_PASSWORD_ENCRYPTION_KEY = env('DROPI_PASSWORD_ENCRYPTION_KEY', default=SECRET_KEY)
+else:
+    DROPI_PASSWORD_ENCRYPTION_KEY = env('DROPI_PASSWORD_ENCRYPTION_KEY')
 
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['127.0.0.1', 'localhost', 'testserver', 'droptools.cloud', 'www.droptools.cloud'])
 
@@ -110,7 +115,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': env('POSTGRES_DB', default='droptools_db'),
         'USER': env('POSTGRES_USER', default='droptools_admin'),
-        'PASSWORD': env('POSTGRES_PASSWORD', default='secure_password_123'),
+        'PASSWORD': env('POSTGRES_PASSWORD', default='secure_password_123' if DEBUG else None),
         # When running under docker-compose the DB service hostname is usually 'db'
         'HOST': env('POSTGRES_HOST', default='db'),
         # The DB container listens on 5432 internally; host mapping may vary.
@@ -147,6 +152,20 @@ CORS_ALLOWED_ORIGINS = [
 ]
 CORS_ALLOW_ALL_ORIGINS = DEBUG
 
+# Email (SMTP)
+EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = env('EMAIL_HOST', default='')
+EMAIL_PORT = env.int('EMAIL_PORT', default=587)
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=True)
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='no-reply@droptools.cloud')
+SERVER_EMAIL = env('SERVER_EMAIL', default=DEFAULT_FROM_EMAIL)
+
+# Auth token flows
+VERIFY_EMAIL_EXPIRY_SECONDS = env.int('VERIFY_EMAIL_EXPIRY_SECONDS', default=86400)
+RESET_PASSWORD_EXPIRY_SECONDS = env.int('RESET_PASSWORD_EXPIRY_SECONDS', default=3600)
+
 # Basic security headers (safe for local; tighten further in production).
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
@@ -162,13 +181,22 @@ REST_FRAMEWORK = {
         # Secure-by-default: require auth unless explicitly opened.
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "register": env('THROTTLE_REGISTER_RATE', default='8/hour'),
+        "login": env('THROTTLE_LOGIN_RATE', default='20/hour'),
+        "verify_email": env('THROTTLE_VERIFY_EMAIL_RATE', default='30/hour'),
+        "password_reset_request": env('THROTTLE_PASSWORD_RESET_REQUEST_RATE', default='6/hour'),
+        "password_reset_confirm": env('THROTTLE_PASSWORD_RESET_CONFIRM_RATE', default='12/hour'),
+    },
 }
 
 # ============================================================================
 # CELERY CONFIGURATION
 # ============================================================================
-CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
-CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+REDIS_PASSWORD = env('REDIS_PASSWORD', default='')
+_default_redis_url = f"redis://:{REDIS_PASSWORD}@redis:6379/0" if REDIS_PASSWORD else 'redis://redis:6379/0'
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', _default_redis_url)
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', _default_redis_url)
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_RESULT_SERIALIZER = 'json'

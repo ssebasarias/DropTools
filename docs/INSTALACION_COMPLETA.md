@@ -114,14 +114,35 @@ Cuando los contenedores estén en ejecución:
 docker compose exec backend python manage.py migrate
 ```
 
-Para cargar los usuarios iniciales (admin + clientes con credenciales de aplicación y Dropi en la BD):
+Crear superusuario de administración:
 
 ```powershell
-docker compose exec backend python manage.py load_initial_users
+docker compose exec backend python manage.py createsuperuser
 ```
 
-Los datos están en el comando `load_initial_users` (tabla `users`); no se usan credenciales del `.env` para estos usuarios.  
-Si prefieres un solo superusuario manual: `docker compose exec backend python manage.py createsuperuser`.
+Si quieres usuarios de prueba desde `scripts/reporter_test_users.json`, puedes cargarlos con shell:
+
+```powershell
+docker compose exec backend python backend/manage.py shell -c "import json; from django.contrib.auth import get_user_model; U=get_user_model(); data=json.load(open('scripts/reporter_test_users.json',encoding='utf-8')); 
+for row in data:
+    email=(row.get('email') or '').strip().lower()
+    if not email: 
+        continue
+    user, created = U.objects.get_or_create(username=email, defaults={'email': email})
+    user.full_name = row.get('full_name') or row.get('name') or ''
+    user.role = row.get('role') or 'CLIENT'
+    user.subscription_tier = row.get('subscription_tier') or 'BRONZE'
+    user.subscription_active = bool(row.get('subscription_active', True))
+    user.dropi_email = row.get('dropi_email') or ''
+    pwd = (row.get('dropi_password') or '').strip()
+    if pwd:
+        user.set_dropi_password_plain(pwd)
+    app_pwd = (row.get('password') or '').strip()
+    if app_pwd:
+        user.set_password(app_pwd)
+    user.save()
+print('Usuarios de prueba cargados/actualizados')"
+```
 
 ---
 

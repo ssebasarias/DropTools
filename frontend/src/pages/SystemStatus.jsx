@@ -1,99 +1,92 @@
-import React from 'react';
-import { Server, Database, Activity, Cpu, CircuitBoard, Layers, ShoppingBag, Brain, Zap } from 'lucide-react';
-import { useSystemStatus } from '../hooks/useSystemStatus';
-import UnifiedWorkerCard from '../components/domain/system/UnifiedWorkerCard';
-import './Dashboard.css';
+import React from "react";
+import { Database, Server, Activity, Cpu } from "lucide-react";
+import UnifiedWorkerCard from "../components/domain/system/UnifiedWorkerCard";
+import ServiceCard from "../components/domain/system/ServiceCard";
+import { useSystemStatus } from "../hooks/useSystemStatus";
 
-const Section = ({ title, services, logs, stats }) => (
-    <div style={{ marginBottom: '3rem' }}>
-        <h2 style={{
-            marginBottom: '1.5rem',
-            color: '#fff',
-            fontSize: '1.5rem',
-            borderLeft: '4px solid #3b82f6',
-            paddingLeft: '1rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.75rem'
-        }}>
-            {title}
-            <div style={{ flex: 1, height: '1px', background: 'linear-gradient(90deg, rgba(59,130,246,0.3) 0%, transparent 100%)', marginLeft: '1rem' }}></div>
-        </h2>
-        <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
-            gap: '1.5rem'
-        }}>
-            {services.map(svc => (
-                <UnifiedWorkerCard
-                    key={svc.id}
-                    {...svc}
-                    logs={logs}
-                    displayParams={stats[svc.id]}
-                />
-            ))}
-        </div>
-    </div>
-);
+const servicesConfig = [
+  { id: "backend", name: "Backend API", icon: Server, actions: ["restart"] },
+  { id: "db", name: "PostgreSQL", icon: Database },
+  { id: "redis", name: "Redis", icon: Activity },
+  { id: "celery_worker", name: "Celery Worker", icon: Cpu, actions: ["restart"] },
+];
 
-const SystemStatus = () => {
-    const { logs, stats, loading } = useSystemStatus();
+const workersConfig = [
+  { id: "scraper", name: "Scraper", icon: Activity, color: "#38bdf8" },
+  { id: "loader", name: "Loader", icon: Activity, color: "#22c55e" },
+  { id: "vectorizer", name: "Vectorizer", icon: Activity, color: "#a78bfa" },
+  { id: "clusterizer", name: "Clusterizer", icon: Activity, color: "#f59e0b" },
+  { id: "classifier", name: "Classifier", icon: Activity, color: "#f97316" },
+  { id: "classifier_2", name: "Classifier 2", icon: Activity, color: "#ef4444" },
+  { id: "market_trender", name: "Market Trender", icon: Activity, color: "#14b8a6" },
+  { id: "meta_scholar", name: "Meta Scholar", icon: Activity, color: "#ec4899" },
+  { id: "shopify_auditor", name: "Shopify Auditor", icon: Activity, color: "#84cc16" },
+];
 
-    // Configuration of services divided by logic
-    const collectionServices = [
-        { id: 'scraper', name: 'Web Scraper', icon: Activity, actions: ['restart'], color: '#10b981' }, // Green
-        { id: 'shopify', name: 'Shopify Finder', icon: ShoppingBag, actions: ['restart'], color: '#84cc16' }, // Lime
-        { id: 'loader', name: 'Data Loader', icon: Database, actions: ['restart'], color: '#3b82f6' }, // Blue
-        { id: 'vectorizer', name: 'AI Vectorizer', icon: Cpu, actions: ['restart'], color: '#a855f7' }, // Purple
-    ];
+export default function SystemStatus() {
+  const { logs, stats, loading } = useSystemStatus();
 
-    const analysisServices = [
-        { id: 'classifier', name: 'Agent 1: Classifier', icon: Layers, actions: ['restart'], color: '#ec4899' }, // Pink
-        { id: 'clusterizer', name: 'Agent 2: Clusterizer', icon: Server, actions: ['restart'], color: '#14b8a6' }, // Teal
-        { id: 'ai_trainer', name: 'AI Trainer (Cerebro)', icon: Brain, actions: ['restart'], color: '#f59e0b' }, // Amber
-    ];
-
-    const workerServices = [
-        { id: 'celery_worker', name: 'Celery Worker (Reporter)', icon: Zap, actions: ['restart'], color: '#06b6d4' }, // Cyan
-    ];
-
-    if (loading && Object.keys(stats).length === 0) {
-        return (
-            <div style={{ padding: '2rem', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
-                <CircuitBoard className="spin" size={32} />
-                <span style={{ marginLeft: '1rem', fontSize: '1.2rem' }}>Initializing Control Center...</span>
-            </div>
-        );
-    }
-
+  if (loading) {
     return (
-        <div className="dashboard-container" style={{ maxWidth: '1800px', margin: '0 auto', padding: '2rem' }}>
-            {/* Header */}
-            <div className="header-greeting" style={{ textAlign: 'center', marginBottom: '4rem', position: 'relative' }}>
-                <div style={{
-                    position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                    width: '600px', height: '100px', background: '#3b82f6', filter: 'blur(100px)', opacity: 0.1, zIndex: -1
-                }}></div>
-                <h1 style={{
-                    fontSize: '3rem',
-                    background: 'linear-gradient(to right, #fff, #94a3b8)',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                    marginBottom: '0.5rem',
-                    letterSpacing: '-1px'
-                }}>
-                    System Control
-                </h1>
-                <p style={{ color: '#64748b', fontSize: '1.1rem' }}>Real-time Infrastructure Operations & Telemetry</p>
-            </div>
-
-            {/* SECTIONS */}
-            <Section title="Recolección" services={collectionServices} logs={logs} stats={stats} />
-            <Section title="Análisis" services={analysisServices} logs={logs} stats={stats} />
-            <Section title="Workers" services={workerServices} logs={logs} stats={stats} />
-
-        </div>
+      <div className="glass-card" style={{ padding: "1.5rem", color: "#94a3b8" }}>
+        Cargando estado del sistema...
+      </div>
     );
-};
+  }
 
-export default SystemStatus;
+  return (
+    <div style={{ display: "grid", gap: "1rem" }}>
+      <section className="glass-card" style={{ padding: "1.25rem" }}>
+        <h3 style={{ margin: 0, color: "#e2e8f0" }}>Core Services</h3>
+        <p style={{ margin: "0.5rem 0 1rem", color: "#94a3b8" }}>
+          Estado operativo de servicios base y controles rápidos.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            gap: "1rem",
+          }}
+        >
+          {servicesConfig.map((svc) => (
+            <ServiceCard
+              key={svc.id}
+              id={svc.id}
+              name={svc.name}
+              icon={svc.icon}
+              actions={svc.actions || []}
+              displayParams={stats?.[svc.id] || { status: "unknown", cpu: 0, ram_mb: 0 }}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="glass-card" style={{ padding: "1.25rem" }}>
+        <h3 style={{ margin: 0, color: "#e2e8f0" }}>Workers 24/7</h3>
+        <p style={{ margin: "0.5rem 0 1rem", color: "#94a3b8" }}>
+          Monitoreo en vivo y terminal embebida por worker.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+            gap: "1rem",
+          }}
+        >
+          {workersConfig.map((worker) => (
+            <UnifiedWorkerCard
+              key={worker.id}
+              id={worker.id}
+              name={worker.name}
+              icon={worker.icon}
+              color={worker.color}
+              logs={logs || {}}
+              actions={["restart"]}
+              displayParams={stats?.[worker.id] || { status: "unknown", cpu: 0, ram_mb: 0 }}
+            />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}

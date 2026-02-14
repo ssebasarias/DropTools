@@ -25,10 +25,10 @@ export const PAGINATION = {
 // Routes
 export const ROUTES = {
     HOME: '/',
-    DASHBOARD: '/',
-    GOLD_MINE: '/gold-mine',
-    CLUSTER_LAB: '/cluster-lab',
-    SYSTEM_STATUS: '/system-status',
+    DASHBOARD: '/admin',
+    GOLD_MINE: '/admin/gold-mine',
+    CLUSTER_LAB: '/admin/cluster-lab',
+    SYSTEM_STATUS: '/admin/system-status',
 };
 
 // API Endpoints
@@ -43,9 +43,9 @@ export const API_ENDPOINTS = {
 
     // Cluster Lab
     CLUSTER_LAB_STATS: '/cluster-lab/stats/',
-    CLUSTER_AUDIT: '/cluster-audit/',
-    CLUSTER_ORPHANS: '/cluster-orphans/',
-    CLUSTER_FEEDBACK: '/cluster-feedback/',
+    CLUSTER_AUDIT: '/cluster-lab/audit-logs/',
+    CLUSTER_ORPHANS: '/cluster-lab/orphans/',
+    CLUSTER_FEEDBACK: '/cluster-lab/feedback/',
 
     // System
     SYSTEM_LOGS: '/system-logs/',
@@ -73,10 +73,12 @@ export const DOCKER_SERVICES = {
     LOADER: 'loader',
     VECTORIZER: 'vectorizer',
     CLASSIFIER: 'classifier',
+    CLASSIFIER_2: 'classifier_2',
     CLUSTERIZER: 'clusterizer',
-    AI_TRAINER: 'ai_trainer',
-    MARKET_AGENT: 'market_agent',
-    AMAZON_EXPLORER: 'amazon_explorer',
+    SHOPIFY_AUDITOR: 'shopify_auditor',
+    MARKET_TRENDER: 'market_trender',
+    META_SCHOLAR: 'meta_scholar',
+    CELERY_WORKER: 'celery_worker',
 };
 
 // Container Actions

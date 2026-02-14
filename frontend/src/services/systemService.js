@@ -2,7 +2,7 @@
  * System Service - DropTools Frontend
  * Servicios para System Status y control de contenedores
  */
-import { API_BASE_URL, API_ENDPOINTS } from '../config/constants';
+import { API_BASE_URL } from '../config/constants';
 import { authFetch } from './api';
 
 // URL Base del Backend

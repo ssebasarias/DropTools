@@ -8,7 +8,7 @@ Este módulo se encarga de:
 4. Gestionar estados y transiciones
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from django.utils import timezone
 from core.models import User, OrderReport, OrderMovementReport
 
@@ -29,13 +29,14 @@ class ReportResultManager:
         self.user_id = user_id
         self.logger = logger
     
-    def calculate_next_attempt_time(self, status, retry_count=0):
+    def calculate_next_attempt_time(self, status, retry_count=0, last_movement_date=None):
         """
         Calcula el tiempo del próximo intento según el estado.
         
         Args:
             status: Estado del reporte
             retry_count: Número de reintentos
+            last_movement_date: date opcional capturada desde Dropi
             
         Returns:
             datetime o None si no se requiere reintento
@@ -43,7 +44,17 @@ class ReportResultManager:
         now = timezone.now()
         
         if status == 'cannot_generate_yet':
-            # 24 horas para órdenes que aún no cumplen el tiempo requerido
+            # Si Dropi muestra fecha de último movimiento, usar ese dato para
+            # calcular un próximo intento más real (inicio del día siguiente).
+            if isinstance(last_movement_date, date):
+                next_date = last_movement_date + timedelta(days=1)
+                next_attempt = timezone.make_aware(
+                    datetime.combine(next_date, dt_time.min),
+                    timezone.get_current_timezone()
+                )
+                if next_attempt > now:
+                    return next_attempt
+            # Fallback: 24 horas para órdenes que aún no cumplen el tiempo requerido
             return now + timedelta(hours=24)
         else:
             # Para otros estados, no se calcula (None = puede reintentar inmediatamente)
@@ -71,6 +82,21 @@ class ReportResultManager:
             order_id = order_info.get('order_id') or result.get('order_id', '')
             order_state = result.get('order_state')
             days_since_order = result.get('days_since_order')
+            last_movement_date = result.get('last_movement_date')
+            if isinstance(last_movement_date, datetime):
+                last_movement_date = last_movement_date.date()
+            elif isinstance(last_movement_date, str):
+                try:
+                    last_movement_date = datetime.strptime(last_movement_date, '%Y-%m-%d').date()
+                except ValueError:
+                    last_movement_date = None
+            last_movement_status = result.get('last_movement_status')
+            inactivity_days_real = result.get('inactivity_days_real')
+            if inactivity_days_real is not None:
+                try:
+                    inactivity_days_real = int(inactivity_days_real)
+                except (TypeError, ValueError):
+                    inactivity_days_real = None
 
             if row_data is not None:
                 customer_name = customer_name or row_data.get('Cliente')
@@ -111,6 +137,9 @@ class ReportResultManager:
                     'product_name': product_name,
                     'order_state': order_state,
                     'days_since_order': days_since_order,
+                    'last_movement_date': last_movement_date,
+                    'last_movement_status': last_movement_status,
+                    'inactivity_days_real': inactivity_days_real,
                     'next_attempt_time': next_attempt_time,
                 }
             )
@@ -125,6 +154,21 @@ class ReportResultManager:
                     f"OrderReport.reported_at={obj.reported_at} | OrderReport.id={obj.id}"
                 )
             self.logger.info(f"[ReportResultManager] Resultado BD: {'Creado' if created else 'Actualizado'} ID={obj.id} | Status={status} | Timestamp={obj.updated_at}")
+
+            # Mantener sincronizado el registro de cola (OrderMovementReport) para análisis posterior
+            db_report_id = result.get('db_report_id')
+            if not db_report_id and row_data is not None:
+                db_report_id = row_data.get('_db_report_id')
+            if db_report_id:
+                movement_updates = {}
+                if last_movement_date is not None:
+                    movement_updates['last_movement_date'] = last_movement_date
+                if last_movement_status:
+                    movement_updates['last_movement_status'] = last_movement_status
+                if inactivity_days_real is not None:
+                    movement_updates['inactivity_days_real'] = inactivity_days_real
+                if movement_updates:
+                    OrderMovementReport.objects.filter(id=db_report_id).update(**movement_updates)
             
         except Exception as e:
             self.logger.error(f"[ERROR] Error al guardar resultado en BD: {str(e)}")

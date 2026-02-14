@@ -5,7 +5,10 @@ const ErrorAlert = ({ error, onClose }) => {
     if (!error) return null;
     
     return (
-        <div style={{
+        <div
+            role="alert"
+            aria-live="assertive"
+            style={{
             padding: '12px 16px',
             backgroundColor: 'rgba(239, 68, 68, 0.1)',
             border: '1px solid rgba(239, 68, 68, 0.3)',

@@ -63,16 +63,29 @@ docker compose exec backend python backend/manage.py fix_users_pk_for_migrations
 docker compose exec backend python backend/manage.py migrate --noinput
 ```
 
-### 1.4 Cargar los 4 usuarios de prueba desde el JSON
+### 1.4 Cargar/actualizar los 4 usuarios de prueba desde el JSON
 
 ```powershell
-docker compose exec backend python backend/manage.py load_reporter_test_users --file=scripts/reporter_test_users.json
-```
-
-Si quieres forzar los IDs 1–4 al crear (BD vacía o de prueba):
-
-```powershell
-docker compose exec backend python backend/manage.py load_reporter_test_users --file=scripts/reporter_test_users.json --force-id
+docker compose exec backend python backend/manage.py shell -c "import json; from django.contrib.auth import get_user_model; U=get_user_model(); data=json.load(open('scripts/reporter_test_users.json',encoding='utf-8'));
+for row in data:
+    email=(row.get('email') or '').strip().lower()
+    if not email:
+        continue
+    user, _ = U.objects.get_or_create(username=email, defaults={'email': email})
+    user.email = email
+    user.full_name = row.get('full_name') or row.get('name') or ''
+    user.role = row.get('role') or 'CLIENT'
+    user.subscription_tier = row.get('subscription_tier') or 'BRONZE'
+    user.subscription_active = bool(row.get('subscription_active', True))
+    user.dropi_email = row.get('dropi_email') or ''
+    app_pwd = (row.get('password') or '').strip()
+    if app_pwd:
+        user.set_password(app_pwd)
+    dropi_pwd = (row.get('dropi_password') or '').strip()
+    if dropi_pwd:
+        user.set_dropi_password_plain(dropi_pwd)
+    user.save()
+print('Usuarios cargados/actualizados')"
 ```
 
 ### 1.5 Comprobar que los usuarios existen
@@ -284,8 +297,8 @@ Start-Sleep -Seconds 10
 # 3. Migraciones
 docker compose exec backend python backend/manage.py migrate --noinput
 
-# 4. Cargar usuarios de prueba
-docker compose exec backend python backend/manage.py load_reporter_test_users --file=scripts/reporter_test_users.json
+# 4. Cargar usuarios de prueba desde JSON
+docker compose exec backend python backend/manage.py shell -c "import json; from django.contrib.auth import get_user_model; U=get_user_model(); data=json.load(open('scripts/reporter_test_users.json',encoding='utf-8')); [U.objects.get_or_create(username=(r.get('email') or '').strip().lower(), defaults={'email':(r.get('email') or '').strip().lower()}) for r in data if (r.get('email') or '').strip()]"
 
 # 5. Replicar datos usuario 2 → 3 y 4
 docker compose exec backend python backend/manage.py replicate_reporter_user_data --source-user=2 --target-users=3,4

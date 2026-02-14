@@ -3,26 +3,45 @@ import { API_BASE_URL } from "../config/constants";
 const API_URL = API_BASE_URL;
 
 export function getToken() {
-  return sessionStorage.getItem("auth_token");
+  const local = localStorage.getItem("auth_token");
+  if (local) return local;
+  const legacy = sessionStorage.getItem("auth_token");
+  if (legacy) {
+    localStorage.setItem("auth_token", legacy);
+    sessionStorage.removeItem("auth_token");
+    return legacy;
+  }
+  return null;
 }
 
 export function setToken(token) {
-  sessionStorage.setItem("auth_token", token);
+  localStorage.setItem("auth_token", token);
 }
 
 export function clearToken() {
+  localStorage.removeItem("auth_token");
+  localStorage.removeItem("auth_user");
   sessionStorage.removeItem("auth_token");
   sessionStorage.removeItem("auth_user");
 }
 
 export function logout() {
   clearToken();
-  window.location.href = "/login";
+  window.location.replace("/login");
 }
 
 export function getAuthUser() {
-  const raw = sessionStorage.getItem("auth_user");
-  return raw ? JSON.parse(raw) : null;
+  const raw = localStorage.getItem("auth_user") || sessionStorage.getItem("auth_user");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    localStorage.setItem("auth_user", raw);
+    sessionStorage.removeItem("auth_user");
+    return parsed;
+  } catch {
+    clearToken();
+    return null;
+  }
 }
 
 export async function login(email, password) {
@@ -38,7 +57,7 @@ export async function login(email, password) {
   }
 
   setToken(data.token);
-  sessionStorage.setItem("auth_user", JSON.stringify(data.user));
+  localStorage.setItem("auth_user", JSON.stringify(data.user));
   return data;
 }
 
@@ -49,9 +68,40 @@ export async function register({ full_name, name, email, password }) {
     body: JSON.stringify({ full_name: full_name || name || "", email, password }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Registro falló");
-  setToken(data.token);
-  sessionStorage.setItem("auth_user", JSON.stringify(data.user));
+  if (!res.ok) throw new Error(data.error || data.detail || "Registro falló");
+  return data;
+}
+
+export async function verifyEmail(token) {
+  const res = await fetch(`${API_URL}/auth/verify-email/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "No se pudo verificar el email");
+  return data;
+}
+
+export async function passwordResetRequest(email) {
+  const res = await fetch(`${API_URL}/auth/password-reset/request/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "No se pudo procesar la solicitud");
+  return data;
+}
+
+export async function passwordResetConfirm(token, new_password) {
+  const res = await fetch(`${API_URL}/auth/password-reset/confirm/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, new_password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "No se pudo actualizar la contraseña");
   return data;
 }
 
@@ -76,9 +126,9 @@ export async function loginWithGoogle(googleToken) {
       throw new Error(msg);
     }
 
-    // Guardar token y usuario en sessionStorage (consistente con el resto de la app)
+    // Guardar token y usuario en localStorage para persistir entre sesiones.
     setToken(data.token);
-    sessionStorage.setItem("auth_user", JSON.stringify(data.user));
+    localStorage.setItem("auth_user", JSON.stringify(data.user));
     
     return data;
   } catch (error) {
@@ -102,7 +152,7 @@ export async function me() {
     throw new Error("Sesión expirada");
   }
   if (!res.ok) throw new Error(data.error || "No se pudo cargar el usuario");
-  sessionStorage.setItem("auth_user", JSON.stringify(data.user));
+  localStorage.setItem("auth_user", JSON.stringify(data.user));
   return data.user;
 }
 

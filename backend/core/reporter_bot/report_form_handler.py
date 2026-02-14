@@ -11,10 +11,12 @@ Este módulo se encarga de:
 """
 
 import random
+import re
 import time
+from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
@@ -45,6 +47,14 @@ class ReportFormHandler:
         "Orden sin movimiento, necesitamos envío con prioridad.",
         "Pedido estancado, favor gestionar salida a reparto urgente."
     ]
+    MONTHS_EN = {
+        "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+        "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
+    }
+    MONTHS_ES = {
+        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+        "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+    }
     
     def __init__(self, driver, logger):
         """
@@ -143,6 +153,188 @@ class ReportFormHandler:
             
         except Exception as e:
             self.logger.error(f"❌ Error al hacer click en 'Nueva consulta': {str(e)}")
+            return False
+
+    def capture_status_history_snapshot(self, order_row=None, order_id=None, phone=None):
+        """
+        Paso previo obligatorio:
+        1) Click en "Información de la Orden" (ícono lupa)
+        2) Scroll hasta "Status History"
+        3) Captura screenshot temporal con esa sección visible
+        4) Cierre del modal con click fuera (incluye fallback JS)
+
+        Returns:
+            dict: {'success': bool, 'screenshot_path': str|None}
+        """
+        self.logger.info("Abriendo 'Información de la Orden' para capturar Status History...")
+        response = {"success": False, "screenshot_path": None}
+        try:
+            row = order_row or self.driver.find_element(By.CSS_SELECTOR, "tbody.list tr:first-child")
+            info_btn = self._find_info_order_button(row)
+            if not info_btn:
+                raise NoSuchElementException("No se encontró botón 'Información de la Orden' (lupa)")
+
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", info_btn)
+            time.sleep(0.5)
+            try:
+                info_btn.click()
+            except Exception:
+                self.driver.execute_script("arguments[0].click();", info_btn)
+
+            modal = self._wait_info_modal()
+            if not modal:
+                raise TimeoutException("No apareció el modal de información de orden")
+
+            status_header = self.modal_wait.until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    "//ngb-modal-window//h3[contains(normalize-space(.), 'Status History')]"
+                ))
+            )
+            status_table = self.modal_wait.until(
+                EC.presence_of_element_located((
+                    By.XPATH,
+                    "//ngb-modal-window//h3[contains(normalize-space(.), 'Status History')]/following::table[1]"
+                ))
+            )
+
+            self._scroll_modal_to_element(status_header)
+            time.sleep(0.8)
+
+            if not status_table.is_displayed():
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'nearest'});", status_table)
+                time.sleep(0.5)
+
+            screenshot_path = self._save_status_history_screenshot(modal, order_id=order_id, phone=phone)
+            response["screenshot_path"] = screenshot_path
+
+            if not self._close_info_modal_clicking_outside():
+                raise TimeoutException("No fue posible cerrar el modal de información con click fuera")
+
+            self.logger.info("✅ Captura de Status History completada: %s", screenshot_path)
+            response["success"] = True
+            return response
+        except Exception as e:
+            self.logger.error("❌ Error en captura de Status History: %s", e)
+            try:
+                self._close_info_modal_clicking_outside()
+            except Exception:
+                pass
+            return response
+
+    def _find_info_order_button(self, row):
+        """Encuentra el botón/ícono de 'Información de la Orden' (lupa) dentro de la fila."""
+        selectors = [
+            "a[title='Información de la Orden'] i.fa-search",
+            "a[title='Informacion de la Orden'] i.fa-search",
+            "a[title='Order information'] i.fa-search",
+            "a[title='Información de la Orden']",
+            "a[title='Informacion de la Orden']",
+            "a[title='Order information']",
+            "a i.fa-search",
+        ]
+        for selector in selectors:
+            try:
+                btn = row.find_element(By.CSS_SELECTOR, selector)
+                if btn:
+                    if btn.tag_name == "i":
+                        try:
+                            return btn.find_element(By.XPATH, "..")
+                        except Exception:
+                            return btn
+                    return btn
+            except Exception:
+                continue
+        return None
+
+    def _wait_info_modal(self):
+        """Espera el modal de información de orden visible."""
+        candidates = [
+            (By.CSS_SELECTOR, "ngb-modal-window.d-block.show"),
+            (By.CSS_SELECTOR, "ngb-modal-window.modal.show"),
+            (By.XPATH, "//ngb-modal-window[contains(@class, 'show')]"),
+        ]
+        for by, selector in candidates:
+            try:
+                modal = self.modal_wait.until(EC.presence_of_element_located((by, selector)))
+                if modal.is_displayed():
+                    return modal
+            except Exception:
+                continue
+        return None
+
+    def _scroll_modal_to_element(self, element):
+        """Hace scroll dentro del contenedor del modal para llevar el elemento al centro."""
+        self.driver.execute_script(
+            """
+            const el = arguments[0];
+            const modalBody = el.closest('ngb-modal-window')?.querySelector('.modal-body');
+            if (modalBody) {
+                const bodyRect = modalBody.getBoundingClientRect();
+                const elRect = el.getBoundingClientRect();
+                modalBody.scrollTop += (elRect.top - bodyRect.top) - (bodyRect.height * 0.25);
+            } else {
+                el.scrollIntoView({block: 'center'});
+            }
+            """,
+            element
+        )
+
+    def _save_status_history_screenshot(self, modal_element, order_id=None, phone=None):
+        """Guarda captura temporal del modal con la sección Status History visible."""
+        from django.conf import settings
+        screenshots_dir = Path(settings.BASE_DIR) / "results" / "temp" / "status_history"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        safe_order = re.sub(r"[^A-Za-z0-9_-]", "_", str(order_id or "sin_id"))
+        safe_phone = re.sub(r"[^A-Za-z0-9_-]", "_", str(phone or "sin_phone"))
+        path = screenshots_dir / f"status_history_{safe_order}_{safe_phone}_{ts}.png"
+
+        try:
+            modal_element.screenshot(str(path))
+        except Exception:
+            self.driver.save_screenshot(str(path))
+        return str(path)
+
+    def _close_info_modal_clicking_outside(self):
+        """
+        Cierra modal de info haciendo click fuera del diálogo.
+        Incluye fallback con inyección JS para asegurar cierre rápido.
+        """
+        try:
+            self.driver.execute_script(
+                """
+                const modalWindow = document.querySelector('ngb-modal-window.show, ngb-modal-window.d-block.show');
+                if (!modalWindow) return true;
+                const dialog = modalWindow.querySelector('.modal-dialog');
+                if (!dialog) return false;
+                const rect = dialog.getBoundingClientRect();
+                const x = Math.max(5, rect.left - 12);
+                const y = Math.max(5, rect.top - 12);
+                const target = document.elementFromPoint(x, y) || modalWindow;
+                ['mousedown', 'mouseup', 'click'].forEach(type => {
+                    target.dispatchEvent(new MouseEvent(type, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        clientX: x,
+                        clientY: y
+                    }));
+                });
+                return true;
+                """
+            )
+        except Exception:
+            pass
+
+        # Esperar que desaparezca
+        try:
+            WebDriverWait(self.driver, 5).until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, "ngb-modal-window.show, ngb-modal-window.d-block.show"))
+            )
+            return True
+        except Exception:
             return False
     
     def select_consultation_type(self):
@@ -517,6 +709,159 @@ class ReportFormHandler:
             time.sleep(1)
         except Exception:
             pass
+
+    def _extract_last_movement_info(self):
+        """
+        Lee el bloque informativo de Dropi y extrae:
+        - estado actual de la orden
+        - fecha del último movimiento
+        - días reales de inactividad (según fecha capturada)
+        """
+        info = {
+            "last_movement_status": None,
+            "last_movement_date": None,
+            "inactivity_days_real": None,
+            "last_movement_raw_text": None,
+        }
+        selectors = [
+            "//p[contains(@class, 'alert-message') and "
+            "(contains(., 'Date of the last movement') or contains(., 'Fecha del último movimiento'))]",
+            "//div[contains(@class,'alert-container')]//p[contains(@class, 'alert-message')]",
+        ]
+        alert_text = None
+        for xpath in selectors:
+            try:
+                el = self.driver.find_element(By.XPATH, xpath)
+                if el.is_displayed():
+                    text = (el.text or "").strip()
+                    if text:
+                        alert_text = text
+                        break
+            except Exception:
+                continue
+
+        if not alert_text:
+            return info
+
+        info["last_movement_raw_text"] = alert_text
+        normalized = re.sub(r"\s+", " ", alert_text).strip()
+
+        status_match = re.search(
+            r"(?:Order status|Estado de la orden)\s*:\s*([^.\\n]+)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if status_match:
+            info["last_movement_status"] = status_match.group(1).strip().strip(".")
+
+        date_match = re.search(
+            r"(?:Date of the last movement|Fecha del último movimiento)\s*:\s*([^\\n]+)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if date_match:
+            parsed = self._parse_human_date(date_match.group(1).strip())
+            if parsed:
+                info["last_movement_date"] = parsed
+                info["inactivity_days_real"] = (date.today() - parsed).days
+        return info
+
+    def _parse_human_date(self, raw_text):
+        """Parsea fechas tipo '11 of February of 2026' o '11 de febrero de 2026'."""
+        text = (raw_text or "").strip().lower()
+        text = re.sub(r"[,\.]", "", text)
+        text = re.sub(r"\s+", " ", text)
+
+        en_match = re.search(r"(\d{1,2})\s+of\s+([a-z]+)\s+of\s+(\d{4})", text)
+        if en_match:
+            day = int(en_match.group(1))
+            month = self.MONTHS_EN.get(en_match.group(2))
+            year = int(en_match.group(3))
+            if month:
+                return date(year, month, day)
+
+        es_match = re.search(r"(\d{1,2})\s+de\s+([a-záéíóú]+)\s+de\s+(\d{4})", text)
+        if es_match:
+            day = int(es_match.group(1))
+            month_name = (
+                es_match.group(2)
+                .replace("á", "a")
+                .replace("é", "e")
+                .replace("í", "i")
+                .replace("ó", "o")
+                .replace("ú", "u")
+            )
+            month = self.MONTHS_ES.get(month_name)
+            year = int(es_match.group(3))
+            if month:
+                return date(year, month, day)
+
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(text, fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    def select_no_movement_option_and_capture_details(self):
+        """
+        Flujo actualizado de Dropi:
+        - Ya no existen dropdowns de tipo/motivo.
+        - Solo se selecciona la opción "Ordenes sin movimiento".
+        - Captura información de último movimiento cuando esté disponible.
+        """
+        self.logger.info("Seleccionando opción única: 'Ordenes sin movimiento'...")
+        result = {
+            "selected": False,
+            "last_movement_status": None,
+            "last_movement_date": None,
+            "inactivity_days_real": None,
+            "last_movement_raw_text": None,
+        }
+        try:
+            option_selectors = [
+                "//div[contains(@class, 'option-container') and (contains(., 'Ordenes sin movimiento') or contains(., 'Órdenes sin movimiento'))]",
+                "//div[contains(@class, 'option-container') and contains(@id, 'option-') and .//p[contains(., '24 horas')]]",
+                "//*[contains(@class, 'selection') and contains(., 'Ordenes sin movimiento')]",
+            ]
+            option = None
+            for xpath in option_selectors:
+                try:
+                    option = self.modal_wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
+                    if option and option.is_displayed():
+                        break
+                except Exception:
+                    option = None
+                    continue
+
+            if not option:
+                raise TimeoutException("No se encontró la opción 'Ordenes sin movimiento'")
+
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", option)
+            time.sleep(0.4)
+            try:
+                option.click()
+            except Exception:
+                self.driver.execute_script("arguments[0].click();", option)
+            time.sleep(0.8)
+
+            result["selected"] = True
+            movement_info = self._extract_last_movement_info()
+            result.update(movement_info)
+
+            if movement_info.get("last_movement_date"):
+                self.logger.info(
+                    "✅ Opción seleccionada. Último movimiento: %s | Estado: %s | Inactividad real: %s días",
+                    movement_info.get("last_movement_date"),
+                    movement_info.get("last_movement_status") or "N/D",
+                    movement_info.get("inactivity_days_real"),
+                )
+            else:
+                self.logger.info("✅ Opción seleccionada (sin dato de último movimiento visible)")
+            return result
+        except Exception as e:
+            self.logger.error(f"❌ Error al seleccionar opción única: {str(e)}")
+            return result
     
     def get_random_observation_text(self):
         """Selecciona un texto de observación aleatorio"""
@@ -538,7 +883,7 @@ class ReportFormHandler:
             textarea = self.wait.until(
                 EC.presence_of_element_located((
                     By.CSS_SELECTOR,
-                    "textarea[id='description'], textarea[placeholder*='Tell the conveyor'], textarea[placeholder*='transportadora']"
+                    "textarea#Description, textarea#description, textarea[placeholder*='Cuéntale a la transportadora'], textarea[placeholder*='Tell the conveyor'], textarea[placeholder*='transportadora']"
                 ))
             )
             
@@ -600,3 +945,139 @@ class ReportFormHandler:
         time.sleep(2)
         self.logger.info("✓ Conversación iniciada")
         return True
+
+    def upload_status_history_image(self, image_path):
+        """
+        Sube la captura previa usando el botón 'Seleccionar Imagen' del formulario de CAS.
+
+        Args:
+            image_path: ruta absoluta del archivo a subir
+
+        Returns:
+            True si se logró adjuntar, False en caso contrario
+        """
+        self.logger.info("Adjuntando captura de Status History en el formulario...")
+        try:
+            if not image_path:
+                self.logger.error("✗ No hay ruta de imagen para adjuntar")
+                return False
+
+            path_obj = Path(image_path)
+            if not path_obj.exists():
+                self.logger.error(f"✗ Archivo de imagen no existe: {image_path}")
+                return False
+
+            # Abrir selector (opcional, ayuda a que Angular renderice el input correcto)
+            select_image_btn = None
+            selectors = [
+                (By.XPATH, "//button[contains(@class,'btn') and contains(@class,'small') and (.//span[contains(., 'Seleccionar Imagen')] or .//span[contains(., 'Select image')])]"),
+                (By.XPATH, "//span[contains(., 'Seleccionar Imagen') or contains(., 'Select image')]/ancestor::button"),
+            ]
+            for by, selector in selectors:
+                try:
+                    select_image_btn = self.short_wait.until(EC.presence_of_element_located((by, selector)))
+                    if select_image_btn.is_displayed():
+                        break
+                except Exception:
+                    select_image_btn = None
+                    continue
+
+            if select_image_btn:
+                try:
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", select_image_btn)
+                    time.sleep(0.3)
+                    try:
+                        select_image_btn.click()
+                    except Exception:
+                        self.driver.execute_script("arguments[0].click();", select_image_btn)
+                except Exception:
+                    pass
+
+            # Buscar input file y cargar la imagen
+            file_input = None
+            input_selectors = [
+                (By.CSS_SELECTOR, "input[type='file']"),
+                (By.XPATH, "//input[@type='file']"),
+            ]
+            for by, selector in input_selectors:
+                try:
+                    candidates = self.driver.find_elements(by, selector)
+                    for el in candidates:
+                        if el:
+                            file_input = el
+                            break
+                    if file_input:
+                        break
+                except Exception:
+                    continue
+
+            if not file_input:
+                self.logger.error("✗ No se encontró input[type='file'] para adjuntar imagen")
+                return False
+
+            try:
+                self.driver.execute_script(
+                    "arguments[0].style.display='block'; arguments[0].style.visibility='visible'; arguments[0].removeAttribute('hidden');",
+                    file_input
+                )
+            except Exception:
+                pass
+
+            file_input.send_keys(str(path_obj.resolve()))
+            time.sleep(1.2)
+            self.logger.info("✓ Imagen adjuntada exitosamente")
+            return True
+        except Exception as e:
+            self.logger.error(f"✗ Error al adjuntar imagen: {str(e)}")
+            return False
+
+    def wait_for_chat_redirect(self, timeout_sec=20):
+        """
+        Verifica redirección a chat CAS tras iniciar conversación.
+
+        Returns:
+            dict: {'success': bool, 'chat_url': str|None, 'cas_chat_id': str|None}
+        """
+        result = {"success": False, "chat_url": None, "cas_chat_id": None}
+        try:
+            wait = WebDriverWait(self.driver, timeout_sec)
+            wait.until(EC.url_contains("/dashboard/cas/tray"))
+            time.sleep(1)
+            current_url = self.driver.current_url
+            result["chat_url"] = current_url
+
+            parsed = urlparse(current_url)
+            query = parse_qs(parsed.query or "")
+            cas_chat_id = (query.get("cas_chat_id") or [None])[0]
+            result["cas_chat_id"] = cas_chat_id
+
+            if "/dashboard/cas/tray" in current_url and cas_chat_id:
+                self.logger.info("✅ Chat CAS abierto como comprobante. cas_chat_id=%s", cas_chat_id)
+                result["success"] = True
+                return result
+
+            self.logger.warning("⚠️ Redirección detectada pero sin cas_chat_id válido: %s", current_url)
+            return result
+        except Exception as e:
+            self.logger.error("✗ No se confirmó redirección a chat CAS: %s", e)
+            return result
+
+    def delete_temp_screenshot(self, image_path):
+        """
+        Elimina una captura temporal del disco.
+
+        Returns:
+            True si se eliminó o no existía, False si falló.
+        """
+        try:
+            if not image_path:
+                return True
+            path_obj = Path(image_path)
+            if not path_obj.exists():
+                return True
+            path_obj.unlink()
+            self.logger.info("🧹 Captura temporal eliminada: %s", image_path)
+            return True
+        except Exception as e:
+            self.logger.warning("⚠️ No se pudo eliminar captura temporal '%s': %s", image_path, e)
+            return False

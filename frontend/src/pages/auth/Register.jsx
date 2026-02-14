@@ -5,7 +5,9 @@ import { GoogleLogin } from '@react-oauth/google';
 
 import PublicNavbar from '../../components/layout/PublicNavbar';
 import { register as apiRegister, loginWithGoogle } from '../../services/authService';
+import { getUserHomePath } from '../../utils/subscription';
 import ErrorAlert from '../../components/common/ErrorAlert';
+import SuccessAlert from '../../components/common/SuccessAlert';
 
 const Register = () => {
     const navigate = useNavigate();
@@ -17,6 +19,7 @@ const Register = () => {
     });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [success, setSuccess] = useState('');
     const [googleLoading, setGoogleLoading] = useState(false);
     const [passwordStrength, setPasswordStrength] = useState({ strength: 0, label: '', color: '' });
 
@@ -76,7 +79,7 @@ const Register = () => {
             if (user?.is_admin) {
                 navigate('/admin', { replace: true });
             } else {
-                navigate('/user/reporter-setup', { replace: true });
+                navigate(getUserHomePath(user), { replace: true });
             }
         } catch (err) {
             setError(err.message || 'Error al registrarse con Google');
@@ -92,6 +95,7 @@ const Register = () => {
     const handleSubmit = (e) => {
         e.preventDefault();
         setError('');
+        setSuccess('');
         if (formData.password !== formData.confirmPassword) {
             setError('Las contraseñas no coinciden');
             return;
@@ -102,9 +106,10 @@ const Register = () => {
             email: formData.email,
             password: formData.password
         }).then((res) => {
-            const user = res?.user;
-            if (user?.is_admin) navigate('/admin', { replace: true });
-            else navigate('/user/reporter-setup', { replace: true });
+            setSuccess(res?.detail || 'Te enviamos un correo de verificación. Revisa tu bandeja.');
+            setFormData({ name: '', email: '', password: '', confirmPassword: '' });
+            setPasswordStrength({ strength: 0, label: '', color: '' });
+            setTimeout(() => navigate('/login', { replace: true }), 2200);
         }).catch((err) => {
             setError(err.message || 'Error al registrarse');
         }).finally(() => setLoading(false));
@@ -119,11 +124,12 @@ const Register = () => {
                         <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/20 text-primary mb-4">
                             <Zap size={32} fill="#6366f1" color="#6366f1" />
                         </div>
-                        <h2 className="text-2xl font-bold text-main mb-2">Create Account</h2>
-                        <p className="text-muted">Start using DropTools today</p>
+                        <h2 className="text-2xl font-bold text-main mb-2">Crear cuenta</h2>
+                        <p className="text-muted">Empieza a usar DropTools hoy</p>
                     </div>
 
                     <ErrorAlert error={error} onClose={() => setError('')} />
+                    <SuccessAlert message={success} onClose={() => setSuccess('')} duration={2500} />
 
                     {/* Botón de Google OAuth */}
                     <div style={{ marginBottom: '1.5rem' }}>
@@ -154,14 +160,14 @@ const Register = () => {
 
                     <form onSubmit={handleSubmit}>
                         <div className="form-group">
-                            <label className="form-label">Full Name</label>
+                            <label className="form-label">Nombre completo</label>
                             <div style={{ position: 'relative' }}>
                                 <User size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                                 <input
                                     type="text"
                                     className="glass-input"
                                     style={{ paddingLeft: '38px' }}
-                                    placeholder="John Doe"
+                                    placeholder="Ej. Maria Garcia"
                                     value={formData.name}
                                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                                     disabled={loading}
@@ -171,14 +177,14 @@ const Register = () => {
                         </div>
 
                         <div className="form-group">
-                            <label className="form-label">Email Address</label>
+                            <label className="form-label">Correo electronico</label>
                             <div style={{ position: 'relative' }}>
                                 <Mail size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                                 <input
                                     type="email"
                                     className="glass-input"
                                     style={{ paddingLeft: '38px' }}
-                                    placeholder="name@company.com"
+                                    placeholder="tu@correo.com"
                                     value={formData.email}
                                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                                     disabled={loading || googleLoading}
@@ -188,14 +194,14 @@ const Register = () => {
                         </div>
 
                         <div className="form-group">
-                            <label className="form-label">Password</label>
+                            <label className="form-label">Contrasena</label>
                             <div style={{ position: 'relative' }}>
                                 <Lock size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                                 <input
                                     type="password"
                                     className="glass-input"
                                     style={{ paddingLeft: '38px' }}
-                                    placeholder="Create a password"
+                                    placeholder="Crea una contrasena"
                                     value={formData.password}
                                     onChange={(e) => {
                                         setFormData({ ...formData, password: e.target.value });
@@ -233,14 +239,14 @@ const Register = () => {
                         </div>
 
                         <div className="form-group">
-                            <label className="form-label">Confirm Password</label>
+                            <label className="form-label">Confirmar contrasena</label>
                             <div style={{ position: 'relative' }}>
                                 <Lock size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                                 <input
                                     type="password"
                                     className="glass-input"
                                     style={{ paddingLeft: '38px' }}
-                                    placeholder="Confirm your password"
+                                    placeholder="Repite tu contrasena"
                                     value={formData.confirmPassword}
                                     onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
                                     disabled={loading || googleLoading}
@@ -255,13 +261,13 @@ const Register = () => {
                             style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', opacity: (loading || googleLoading) ? 0.7 : 1 }}
                             disabled={loading || googleLoading}
                         >
-                            {loading ? 'Creando...' : 'Create Account'} {!loading && <ArrowRight size={18} />}
+                            {loading ? 'Creando cuenta...' : 'Crear cuenta'} {!loading && <ArrowRight size={18} />}
                         </button>
                     </form>
 
                     <div className="text-center mt-6">
                         <p className="text-muted" style={{ fontSize: '0.875rem' }}>
-                            Already have an account? <NavLink to="/login" style={{ color: 'var(--primary)', fontWeight: '500', textDecoration: 'none' }}>Sign in</NavLink>
+                            ¿Ya tienes cuenta? <NavLink to="/login" style={{ color: 'var(--primary)', fontWeight: '500', textDecoration: 'none' }}>Iniciar sesion</NavLink>
                         </p>
                     </div>
                 </div>

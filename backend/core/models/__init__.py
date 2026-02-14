@@ -44,6 +44,7 @@ from .market_intelligence import (
 
 # User
 from .user import User
+from .auth_token import AuthToken
 
 # Orders
 from .orders import (
@@ -111,6 +112,7 @@ __all__ = [
     'CompetitorFinding',
     # User
     'User',
+    'AuthToken',
     # Orders
     'OrderReport',
     'WorkflowProgress',

@@ -8,10 +8,10 @@ import GlassCard from './GlassCard';
  * @param {Object} props
  * @param {Error|string} props.error - Error object or error message
  * @param {function} props.onRetry - Callback function to retry the operation
- * @param {string} props.title - Custom error title (default: "Something went wrong")
+ * @param {string} props.title - Título personalizado (default: "Algo salió mal")
  */
-export default function ErrorState({ error, onRetry, title = 'Something went wrong' }) {
-  const errorMessage = error?.message || error || 'An unexpected error occurred';
+export default function ErrorState({ error, onRetry, title = 'Algo salió mal' }) {
+  const errorMessage = error?.message || error || 'Ocurrió un error inesperado';
 
   return (
     <GlassCard style={{ textAlign: 'center', padding: '2rem' }}>
@@ -45,7 +45,7 @@ export default function ErrorState({ error, onRetry, title = 'Something went wro
           }}
         >
           <RefreshCw size={18} />
-          Try Again
+          Reintentar
         </button>
       )}
     </GlassCard>

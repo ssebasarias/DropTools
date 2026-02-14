@@ -3,9 +3,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
 from django.db.models import Count, Q
 from datetime import datetime, timedelta, time as dt_time
 from django.utils import timezone
+import logging
+import traceback
 from ..models import (
     User,
     WorkflowProgress,
@@ -13,12 +16,25 @@ from ..models import (
     ReportBatch,
     OrderMovementReport,
 )
+from ..permissions import MinSubscriptionTier
+
+logger = logging.getLogger(__name__)
+
+
+def _error_payload(message, exc=None, **extra):
+    payload = {"error": message}
+    payload.update(extra)
+    if settings.DEBUG and exc is not None:
+        payload["traceback"] = traceback.format_exc()
+    return payload
 
 
 class ReporterConfigView(APIView):
     """
     Gestiona la configuración del Reporter (Credenciales de Dropi).
     """
+    
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
     
     def get(self, request):
         # Require authentication (no insecure fallbacks)
@@ -92,7 +108,11 @@ class ReporterConfigView(APIView):
                 }
             )
         except Exception as e:
-            return Response({"error": str(e)}, status=500)
+            logger.exception("Error actualizando configuración reporter: user_id=%s", user.id if user else None)
+            return Response(
+                _error_payload("No se pudo actualizar la configuración del reporter.", exc=e),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class ReporterStartView(APIView):
@@ -101,6 +121,8 @@ class ReporterStartView(APIView):
     - DROPTOOLS_ENV=development: ejecuta el reporter en proceso (Windows/local, Edge, sin Celery).
     - DROPTOOLS_ENV=production: encola la tarea en Celery (Docker/Linux).
     """
+    
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
     
     def post(self, request):
         user = request.user
@@ -138,9 +160,9 @@ class ReporterStartView(APIView):
             return self._enqueue_reporter_celery(user, workflow_progress)
 
         except Exception as e:
-            import traceback
+            logger.exception("Error iniciando workflow reporter: user_id=%s", user.id if user else None)
             return Response(
-                {"error": f"Error al iniciar workflow: {str(e)}", "traceback": traceback.format_exc()},
+                _error_payload("Error al iniciar workflow.", exc=e),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -180,14 +202,12 @@ class ReporterStartView(APIView):
                 "stats": stats,
             })
         except Exception as e:
-            import traceback
             workflow_progress.status = 'failed'
             workflow_progress.current_message = str(e)[:200]
             workflow_progress.save(update_fields=['status', 'current_message'])
             logger.exception("[DESARROLLO] Error en reporter en proceso")
             return Response({
-                "error": str(e),
-                "traceback": traceback.format_exc(),
+                **_error_payload("Error ejecutando reporter en desarrollo.", exc=e),
                 "environment": "development",
                 "workflow_progress_id": workflow_progress.id,
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -210,13 +230,11 @@ class ReporterStartView(APIView):
                 "workflow_progress_id": workflow_progress.id
             })
         except Exception as celery_error:
-            import traceback
             workflow_progress.status = 'failed'
             workflow_progress.current_message = f'Error al encolar: {str(celery_error)}'
             workflow_progress.save(update_fields=['status', 'current_message'])
             return Response({
-                "error": f"No se pudo encolar la tarea: {str(celery_error)}",
-                "traceback": traceback.format_exc()
+                **_error_payload("No se pudo encolar la tarea.", exc=celery_error)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -225,8 +243,7 @@ class ReporterEnvView(APIView):
     Devuelve el modo activo para que el frontend muestre certeza.
     run_mode: development | development_docker | production
     """
-    permission_classes = []
-    authentication_classes = []
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         from django.conf import settings
@@ -253,6 +270,8 @@ class ReporterStopView(APIView):
     Solo disponible en modo desarrollo (development o development_docker) para evitar zombies
     y colisiones al volver a pulsar "Iniciar a Reportar".
     """
+    
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
     
     def post(self, request):
         user = request.user
@@ -308,9 +327,14 @@ class ReporterStopView(APIView):
                 "message": msg,
             })
         except Exception as e:
-            import traceback
+            logger.exception("Error deteniendo reporter: user_id=%s", user.id if user else None)
             return Response(
-                {"error": str(e), "traceback": traceback.format_exc(), "revoked_ids": revoked_ids, "purged": purged},
+                _error_payload(
+                    "No se pudieron detener los procesos del reporter.",
+                    exc=e,
+                    revoked_ids=revoked_ids,
+                    purged=purged,
+                ),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -320,17 +344,15 @@ class ReporterStatusView(APIView):
     Obtiene el estado actual de los reportes (contadores y estadísticas) y progreso del workflow
     """
     
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
+    
     def get(self, request):
         user = request.user
         if not user or not user.is_authenticated:
             return Response({"error": "No autenticado"}, status=status.HTTP_401_UNAUTHORIZED)
         
         try:
-            import logging
-            logger = logging.getLogger(__name__)
-            
-            # DEBUG: Log del usuario que hace la petición
-            logger.info(f"[ReporterStatusView] Usuario: {user.id} - {user.username} ({user.email})")
+            logger.info("[ReporterStatusView] user_id=%s solicitó estado", user.id)
 
             # Hoy y mes en timezone configurado (America/Bogota)
             tz = timezone.get_current_timezone()
@@ -397,7 +419,7 @@ class ReporterStatusView(APIView):
                 ).count()
                 logger.info(f"[ReporterStatusView] latest_batch: {latest_batch.id}, total_pending_movement: {total_pending_movement}")
             else:
-                logger.warning(f"[ReporterStatusView] No hay batches SUCCESS para el usuario {user.id}")
+                logger.warning("[ReporterStatusView] No hay batches SUCCESS para user_id=%s", user.id)
             
             # Obtener última actualización
             last_report = OrderReport.objects.filter(user=user).order_by('-updated_at').first()
@@ -439,26 +461,28 @@ class ReporterStatusView(APIView):
                     "user_id": r.user_id
                 })
 
-            debug_info = {
-                "has_batches": latest_batch is not None,
-                "latest_batch_id": latest_batch.id if latest_batch else None,
-                "latest_batch_date": latest_batch.created_at.isoformat() if latest_batch else None,
-                "total_batches": ReportBatch.objects.filter(user=user, status='SUCCESS').count(),
-                "total_order_reports": OrderReport.objects.filter(user=user).count(),
-                "timezone": str(tz),
-                "today_start": today_start.isoformat(),
-                "month_start": month_start.isoformat(),
-                "recent_reports": reports_debug,
-                "status_breakdown_today": breakdown_dict,
-                "server_time": timezone.now().isoformat(),
-                "total_historical": total_historical,
-                "global_reports_today_count": OrderReport.objects.filter(updated_at__gte=last_24h).count(),
-                "global_reports_all_time": OrderReport.objects.count()
-            }
+            debug_info = None
+            if settings.DEBUG:
+                debug_info = {
+                    "has_batches": latest_batch is not None,
+                    "latest_batch_id": latest_batch.id if latest_batch else None,
+                    "latest_batch_date": latest_batch.created_at.isoformat() if latest_batch else None,
+                    "total_batches": ReportBatch.objects.filter(user=user, status='SUCCESS').count(),
+                    "total_order_reports": OrderReport.objects.filter(user=user).count(),
+                    "timezone": str(tz),
+                    "today_start": today_start.isoformat(),
+                    "month_start": month_start.isoformat(),
+                    "recent_reports": reports_debug,
+                    "status_breakdown_today": breakdown_dict,
+                    "server_time": timezone.now().isoformat(),
+                    "total_historical": total_historical,
+                    "global_reports_today_count": OrderReport.objects.filter(updated_at__gte=last_24h).count(),
+                    "global_reports_all_time": OrderReport.objects.count()
+                }
             
             logger.info(f"[ReporterStatusView] Enviando response - reported:{total_reported}, month:{total_reported_month}, pending:{total_pending}, movement:{total_pending_movement}")
             
-            return Response({
+            payload = {
                 "total_reported": total_reported,
                 "total_reported_month": total_reported_month,
                 "pending_24h": pending_24h,
@@ -466,12 +490,15 @@ class ReporterStatusView(APIView):
                 "total_pending_movement": total_pending_movement,  # Órdenes sin movimiento del comparer
                 "last_updated": last_updated,
                 "workflow_progress": workflow_status,
-                "debug": debug_info
-            })
+            }
+            if debug_info is not None:
+                payload["debug"] = debug_info
+            return Response(payload)
             
         except Exception as e:
+            logger.exception("Error obteniendo estado reporter: user_id=%s", user.id if user else None)
             return Response(
-                {"error": f"Error al obtener estado: {str(e)}"},
+                _error_payload("Error al obtener estado del reporter.", exc=e),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -480,6 +507,8 @@ class ReporterListView(APIView):
     """
     Obtiene la lista de órdenes reportadas con información detallada
     """
+    
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
     
     def get(self, request):
         user = request.user
@@ -520,9 +549,11 @@ class ReporterListView(APIView):
             results = []
             now = timezone.now()
             for report in reports:
-                # Calcular días sin movimiento basado en created_at (cuando se detectó la orden)
-                days_without_movement = None
-                if report.created_at:
+                # Preferir cálculo real desde último movimiento capturado en Dropi.
+                days_without_movement = report.inactivity_days_real
+                if days_without_movement is None and report.last_movement_date:
+                    days_without_movement = (now.date() - report.last_movement_date).days
+                if days_without_movement is None and report.created_at:
                     created_at = report.created_at
                     if timezone.is_naive(created_at):
                         created_at = timezone.make_aware(created_at, timezone.get_current_timezone())
@@ -538,6 +569,8 @@ class ReporterListView(APIView):
                     "status": report.status,
                     "report_generated": report.report_generated,
                     "order_state": fix_encoding(report.order_state or ""),
+                    "last_movement_status": fix_encoding(report.last_movement_status or ""),
+                    "last_movement_date": report.last_movement_date.isoformat() if report.last_movement_date else None,
                     "created_at": report.created_at.isoformat(),
                     "updated_at": report.updated_at.isoformat(),
                     "next_attempt_time": report.next_attempt_time.isoformat() if report.next_attempt_time else None,

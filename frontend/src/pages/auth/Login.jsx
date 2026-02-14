@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { Zap, Mail, Lock, ArrowRight, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { GoogleLogin } from '@react-oauth/google';
 
 import PublicNavbar from '../../components/layout/PublicNavbar';
 import { login as apiLogin, loginWithGoogle } from '../../services/authService';
+import { getUserHomePath } from '../../utils/subscription';
 
 const Login = () => {
+    const navigate = useNavigate();
     const [credentials, setCredentials] = useState({ email: '', password: '' });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -21,9 +23,8 @@ const Login = () => {
         try {
             const result = await loginWithGoogle(credentialResponse.credential);
             const user = result?.user;
-            const path = user?.is_admin ? '/admin' : '/user/dashboard';
-            // Redirección con recarga completa: evita pantalla en blanco en navegador embebido (Cursor/Brave)
-            window.location.href = path;
+            const path = user?.is_admin ? '/admin' : getUserHomePath(user);
+            navigate(path, { replace: true });
             return;
         } catch (err) {
             setError(err.message || 'Error al iniciar sesión con Google');
@@ -43,8 +44,8 @@ const Login = () => {
         try {
             const res = await apiLogin(credentials.email, credentials.password);
             const user = res?.user;
-            const path = user?.is_admin ? '/admin' : '/user/reporter-setup';
-            window.location.href = path;
+            const path = user?.is_admin ? '/admin' : getUserHomePath(user);
+            navigate(path, { replace: true });
             return;
         } catch (err) {
             setError(err.message || 'Error al iniciar sesión');
@@ -62,8 +63,8 @@ const Login = () => {
                         <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/20 text-primary mb-4">
                             <Zap size={32} fill="#6366f1" color="#6366f1" />
                         </div>
-                        <h2 className="text-2xl font-bold text-main mb-2">Welcome Back</h2>
-                        <p className="text-muted">Sign in to access your dashboard</p>
+                        <h2 className="text-2xl font-bold text-main mb-2">Bienvenido de vuelta</h2>
+                        <p className="text-muted">Inicia sesión para acceder a tu panel</p>
                     </div>
 
                     {error && (
@@ -112,14 +113,14 @@ const Login = () => {
 
                     <form onSubmit={handleSubmit}>
                         <div className="form-group">
-                            <label className="form-label">Email or Username</label>
+                            <label className="form-label">Correo o usuario</label>
                             <div style={{ position: 'relative' }}>
                                 <Mail size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                                 <input
                                     type="text"
                                     className="glass-input"
                                     style={{ paddingLeft: '38px' }}
-                                    placeholder="email or username"
+                                    placeholder="tu@correo.com o tu_usuario"
                                     value={credentials.email}
                                     onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
                                     disabled={loading || googleLoading}
@@ -129,7 +130,7 @@ const Login = () => {
                         </div>
 
                         <div className="form-group">
-                            <label className="form-label">Password</label>
+                            <label className="form-label">Contraseña</label>
                             <div style={{ position: 'relative' }}>
                                 <Lock size={18} className="text-muted" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', zIndex: 1 }} />
                                 <input
@@ -169,9 +170,9 @@ const Login = () => {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', fontSize: '0.875rem' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
                                 <input type="checkbox" style={{ accentColor: 'var(--primary)' }} />
-                                Remember me
+                                Recordarme
                             </label>
-                            <a href="#" style={{ color: 'var(--primary)', textDecoration: 'none' }}>Forgot password?</a>
+                            <NavLink to="/forgot-password" style={{ color: 'var(--primary)', textDecoration: 'none' }}>¿Olvidaste tu contraseña?</NavLink>
                         </div>
 
                         <button
@@ -188,13 +189,13 @@ const Login = () => {
                             }}
                             disabled={loading || googleLoading}
                         >
-                            {loading ? 'Iniciando...' : 'Sign In'} {!loading && <ArrowRight size={18} />}
+                            {loading ? 'Iniciando sesión...' : 'Iniciar sesión'} {!loading && <ArrowRight size={18} />}
                         </button>
                     </form>
 
                     <div className="text-center mt-6">
                         <p className="text-muted" style={{ fontSize: '0.875rem' }}>
-                            Don't have an account? <NavLink to="/register" style={{ color: 'var(--primary)', fontWeight: '500', textDecoration: 'none' }}>Create account</NavLink>
+                            ¿No tienes cuenta? <NavLink to="/register" style={{ color: 'var(--primary)', fontWeight: '500', textDecoration: 'none' }}>Crear cuenta</NavLink>
                         </p>
                     </div>
                 </div>

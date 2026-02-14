@@ -128,15 +128,26 @@ class UnifiedReporter:
                 self.logger.info(f"🌐 Proxy asignado: {proxy_config.get('host')}:{proxy_config.get('port')}")
             return proxy_config
 
-        # Fallback: variables de entorno o valores por defecto (ResiProx)
-        host = os.environ.get("DROPI_PROXY_HOST") or "gw.dataimpulse.com"
-        port = int(os.environ.get("DROPI_PROXY_PORT", "823"))
-        username = os.environ.get("DROPI_PROXY_USER") or "2b3a0e0b5c2e4_country-co_session-1"
-        password = os.environ.get("DROPI_PROXY_PASS") or "bigotes2001"
-        proxy_config = {"host": host, "port": port, "username": username, "password": password}
+        # Fallback seguro: solo variables de entorno explícitas (sin credenciales hardcodeadas)
+        host = (os.environ.get("DROPI_PROXY_HOST") or "").strip()
+        port_raw = (os.environ.get("DROPI_PROXY_PORT") or "").strip()
+        username = (os.environ.get("DROPI_PROXY_USER") or "").strip()
+        password = (os.environ.get("DROPI_PROXY_PASS") or "").strip()
+
+        if host and port_raw and username and password:
+            proxy_config = {
+                "host": host,
+                "port": int(port_raw),
+                "username": username,
+                "password": password,
+            }
+            if self.logger:
+                self.logger.info(f"🌐 Proxy (env): {host}:{port_raw}")
+            return proxy_config
+
         if self.logger:
-            self.logger.info(f"🌐 Proxy (fallback): {host}:{port}")
-        return proxy_config
+            self.logger.warning("⚠️ No hay proxy configurado (sin asignación ni variables DROPI_PROXY_* completas).")
+        return None
         
     def _init_progress(self):
         """Initialize or retrieve WorkflowProgress for user."""
@@ -186,6 +197,35 @@ class UnifiedReporter:
             self.workflow_progress.save()
         except Exception as e:
             self.logger.warning(f"Failed to update progress: {e}")
+
+    def _refresh_daily_analytics(self, target_date=None):
+        """
+        Recalcula analytics del usuario para reflejar datos recientes en dashboard.
+        """
+        try:
+            from core.services.analytics_service import AnalyticsService
+
+            user = User.objects.get(id=self.user_id)
+            service = AnalyticsService(user)
+            snapshot = service.calculate_daily_snapshot(target_date)
+            service.calculate_carrier_metrics(target_date)
+            service.calculate_product_metrics(target_date)
+            service.calculate_status_breakdown(target_date)
+            service.calculate_carrier_reports(target_date)
+
+            if snapshot:
+                self.logger.info(
+                    f"📊 Analytics actualizados ({target_date}) user_id={self.user_id}: "
+                    f"{snapshot.total_orders} órdenes"
+                )
+            else:
+                self.logger.info(
+                    f"📊 Analytics recalculados ({target_date}) user_id={self.user_id} "
+                    "(sin snapshot por falta de batch SUCCESS en fecha)"
+                )
+        except Exception as analytics_error:
+            # No interrumpir el flujo principal del reporter por fallos de analytics.
+            self.logger.warning(f"⚠️ No se pudieron refrescar analytics diarios: {analytics_error}")
     
     def _is_proxy_related_error(self, e):
         """Indica si el error puede deberse a proxy/timeout para reintentar sin proxy."""
@@ -453,6 +493,7 @@ class UnifiedReporter:
             reporter_stats = reporter.run()
             
             self.stats['reporter'] = reporter_stats
+            self._refresh_daily_analytics(target_date=timezone.localdate())
             
             self._update_progress('step3_completed', f"Reporte completado: {reporter_stats.get('procesados', 0)} órdenes reportadas.")
             self._update_progress('completed', '✅ Proceso finalizado.')
@@ -562,6 +603,7 @@ class UnifiedReporter:
                 'success': comparison_success,
                 'total_detected': comparer.stats.get('total_detected', 0)
             }
+            self._refresh_daily_analytics(target_date=timezone.localdate())
             return self.stats
         except Exception as e:
             self.logger.exception(f"Error en run_download_compare_only: {e}")

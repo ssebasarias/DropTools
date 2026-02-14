@@ -45,6 +45,7 @@ staticfiles/
 .env.docker
 .env.*
 !.env.example
+!.env.production.example
 # JSON de credenciales OAuth de Google (contiene client_secret)
 client_secret_*.json
 
@@ -178,3 +179,8 @@ scripts/reporter_test_users.json
 
 # --- Proxy DEV (no subir credenciales) ---
 backend/proxy_dev_config.json
+
+# --- Nginx secretos y TLS ---
+nginx/.htpasswd
+nginx/ssl/
+nginx/ssl/*.pem

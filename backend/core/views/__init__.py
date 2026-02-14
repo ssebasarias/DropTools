@@ -9,6 +9,9 @@ from .auth import (
     GoogleAuthView,
     AuthRegisterView,
     AuthMeView,
+    VerifyEmailView,
+    PasswordResetRequestView,
+    PasswordResetConfirmView,
 )
 
 # Admin views
@@ -83,6 +86,9 @@ __all__ = [
     'GoogleAuthView',
     'AuthRegisterView',
     'AuthMeView',
+    'VerifyEmailView',
+    'PasswordResetRequestView',
+    'PasswordResetConfirmView',
     # Admin
     'AdminUsersView',
     'AdminSetUserSubscriptionView',

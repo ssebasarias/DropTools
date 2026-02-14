@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Shield, Bot, Eye, Bell, CreditCard, Users } from 'lucide-react';
+import { User, Shield, Bot, Eye, Bell, CreditCard } from 'lucide-react';
 import Subscriptions from './Subscriptions';
 
 import ProfileTab from '../components/domain/settings/ProfileTab';
@@ -7,32 +7,27 @@ import SecurityTab from '../components/domain/settings/SecurityTab';
 import ReportersTab from '../components/domain/settings/ReportersTab';
 import PreferencesTab from '../components/domain/settings/PreferencesTab';
 import NotificationsTab from '../components/domain/settings/NotificationsTab';
-import AdminUsersTab from '../components/domain/settings/AdminUsersTab';
 
 const Settings = ({ type = 'admin' }) => {
     const [activeTab, setActiveTab] = useState('profile');
 
     const tabs = [
-        { id: 'profile', label: 'Profile', icon: User },
-        { id: 'security', label: 'Security', icon: Shield },
-        { id: 'reporters', label: 'Worker Accounts', icon: Bot },
-        { id: 'preferences', label: 'Preferences', icon: Eye },
-        { id: 'notifications', label: 'Notifications', icon: Bell },
+        { id: 'profile', label: 'Perfil', icon: User },
+        { id: 'security', label: 'Seguridad', icon: Shield },
+        { id: 'reporters', label: 'Cuentas de reporter', icon: Bot },
+        { id: 'preferences', label: 'Preferencias', icon: Eye },
+        { id: 'notifications', label: 'Notificaciones', icon: Bell },
     ];
 
-    if (type === 'admin') {
-        tabs.splice(1, 0, { id: 'users', label: 'Users & Plans', icon: Users });
-    }
-
     if (type === 'user') {
-        tabs.splice(2, 0, { id: 'billing', label: 'Plan & Billing', icon: CreditCard });
+        tabs.splice(2, 0, { id: 'billing', label: 'Plan y facturacion', icon: CreditCard });
     }
 
     return (
         <div style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
             <div style={{ marginBottom: '2rem' }}>
-                <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>Settings</h1>
-                <p className="text-muted">Manage your account settings and preferences.</p>
+                <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>Configuracion</h1>
+                <p className="text-muted">Administra la configuracion y preferencias de tu cuenta.</p>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }} className="settings-layout">
@@ -80,7 +75,6 @@ const Settings = ({ type = 'admin' }) => {
                     {/* Content Area */}
                     <div style={{ flex: 1, minWidth: '320px' }}>
                         {activeTab === 'profile' && <ProfileTab />}
-                        {activeTab === 'users' && <AdminUsersTab />}
                         {activeTab === 'security' && <SecurityTab isUser={type === 'user'} />}
                         {activeTab === 'reporters' && <ReportersTab />}
                         {activeTab === 'billing' && <div className="fade-in"><Subscriptions /></div>}

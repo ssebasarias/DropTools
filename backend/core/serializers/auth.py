@@ -3,6 +3,7 @@
 Serializers para autenticación
 """
 from rest_framework import serializers
+from django.utils import timezone
 from ..models import User
 
 
@@ -69,6 +70,8 @@ class GoogleAuthSerializer(serializers.Serializer):
                 'username': email,  # Usar email como username
                 'full_name': google_info.get('name', ''),
                 'is_active': True,
+                'email_verified': True,
+                'email_verified_at': timezone.now(),
                 'subscription_tier': User.TIER_BRONZE,
                 'subscription_active': True,
             }
@@ -78,8 +81,16 @@ class GoogleAuthSerializer(serializers.Serializer):
             user.save(update_fields=['password'])
 
         # Si el usuario ya existía, actualizar su nombre si está vacío
-        if not created and not user.full_name:
-            user.full_name = google_info.get('name', '')
-            user.save()
+        if not created:
+            changed = False
+            if not user.full_name:
+                user.full_name = google_info.get('name', '')
+                changed = True
+            if not user.email_verified:
+                user.email_verified = True
+                user.email_verified_at = timezone.now()
+                changed = True
+            if changed:
+                user.save(update_fields=['full_name', 'email_verified', 'email_verified_at'])
 
         return user

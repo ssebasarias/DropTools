@@ -8,10 +8,14 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const GoldMine = lazy(() => import('./pages/GoldMine'));
 const ClusterLab = lazy(() => import('./pages/ClusterLab'));
 const SystemStatus = lazy(() => import('./pages/SystemStatus'));
+const AdminUsersPage = lazy(() => import('./pages/AdminUsersPage'));
 
 // Auth Pages - Keep synchronous for faster initial load
 import Login from './pages/auth/Login';
 import Register from './pages/auth/Register';
+import VerifyEmail from './pages/auth/VerifyEmail';
+import ForgotPassword from './pages/auth/ForgotPassword';
+import ResetPassword from './pages/auth/ResetPassword';
 
 // User Pages - Lazy load
 const UserLayout = lazy(() => import('./components/layout/UserLayout'));
@@ -22,10 +26,14 @@ const Settings = lazy(() => import('./pages/Settings'));
 
 const Subscriptions = lazy(() => import('./pages/Subscriptions'));
 const LandingPage = lazy(() => import('./pages/LandingPage'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 import RequireAuth from './components/auth/RequireAuth';
 import RequireAdmin from './components/auth/RequireAdmin';
 import RequireUser from './components/auth/RequireUser';
+import RequireTier from './components/auth/RequireTier';
+import { getAuthUser } from './services/authService';
+import { getUserHomePath } from './utils/subscription';
 
 // Loading component for Suspense fallback
 const LoadingSpinner = () => (
@@ -54,6 +62,11 @@ const LoadingSpinner = () => (
   </div>
 );
 
+const UserHomeRedirect = () => {
+  const user = getAuthUser();
+  return <Navigate to={getUserHomePath(user)} replace />;
+};
+
 function App() {
   return (
     <ErrorBoundary>
@@ -69,6 +82,9 @@ function App() {
         />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
 
         {/* Admin Routes */}
         <Route
@@ -87,6 +103,16 @@ function App() {
               <Suspense fallback={<LoadingSpinner />}>
                 <ErrorBoundary>
                   <Dashboard />
+                </ErrorBoundary>
+              </Suspense>
+            } 
+          />
+          <Route 
+            path="users" 
+            element={
+              <Suspense fallback={<LoadingSpinner />}>
+                <ErrorBoundary>
+                  <AdminUsersPage />
                 </ErrorBoundary>
               </Suspense>
             } 
@@ -146,16 +172,18 @@ function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="/user/analytics" replace />} />
-          <Route path="dashboard" element={<Navigate to="/user/analytics" replace />} />
+          <Route index element={<UserHomeRedirect />} />
+          <Route path="dashboard" element={<UserHomeRedirect />} />
           <Route 
             path="analytics" 
             element={
-              <Suspense fallback={<LoadingSpinner />}>
-                <ErrorBoundary>
-                  <AnalyticsDashboard />
-                </ErrorBoundary>
-              </Suspense>
+              <RequireTier minTier="SILVER" fallbackPath="/user/reporter-setup">
+                <Suspense fallback={<LoadingSpinner />}>
+                  <ErrorBoundary>
+                    <AnalyticsDashboard />
+                  </ErrorBoundary>
+                </Suspense>
+              </RequireTier>
             } 
           />
           <Route 
@@ -171,11 +199,13 @@ function App() {
           <Route 
             path="winner-products" 
             element={
-              <Suspense fallback={<LoadingSpinner />}>
-                <ErrorBoundary>
-                  <WinnerProducts />
-                </ErrorBoundary>
-              </Suspense>
+              <RequireTier minTier="GOLD" fallbackPath="/user/analytics">
+                <Suspense fallback={<LoadingSpinner />}>
+                  <ErrorBoundary>
+                    <WinnerProducts />
+                  </ErrorBoundary>
+                </Suspense>
+              </RequireTier>
             } 
           />
           <Route 
@@ -199,6 +229,15 @@ function App() {
             } 
           />
         </Route>
+
+        <Route
+          path="*"
+          element={
+            <Suspense fallback={<LoadingSpinner />}>
+              <NotFound />
+            </Suspense>
+          }
+        />
       </Routes>
     </ErrorBoundary>
   );

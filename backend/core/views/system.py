@@ -30,9 +30,12 @@ class SystemLogsView(APIView):
             "loader": "droptools_loader",
             "vectorizer": "droptools_vectorizer",
             "classifier": "droptools_classifier",
+            "classifier_2": "droptools_classifier_2",
             "clusterizer": "droptools_clusterizer",
-            "shopify": "droptools_shopify", 
-            "ai_trainer": "droptools_ai_trainer"
+            "shopify_auditor": "droptools_shopify_auditor",
+            "market_trender": "droptools_market_trender",
+            "meta_scholar": "droptools_meta_scholar",
+            "celery_worker": "droptools_celery_worker",
         }
         
         results = {}
@@ -69,10 +72,11 @@ class ContainerStatsView(APIView):
             "loader": "droptools_loader",
             "vectorizer": "droptools_vectorizer",
             "classifier": "droptools_classifier",
+            "classifier_2": "droptools_classifier_2",
             "clusterizer": "droptools_clusterizer",
-            "market_agent": "droptools_market_agent",
-            "amazon_explorer": "droptools_amazon_explorer",
-            "ai_trainer": "droptools_ai_trainer",
+            "market_trender": "droptools_market_trender",
+            "meta_scholar": "droptools_meta_scholar",
+            "shopify_auditor": "droptools_shopify_auditor",
             "celery_worker": "droptools_celery_worker",
             "db": "droptools_db"
         }
@@ -100,9 +104,9 @@ class ContainerControlView(APIView):
             # For 'classifier' we intentionally map to BOTH classifier containers
             "classifier": ["droptools_classifier", "droptools_classifier_2"],
             "clusterizer": ["droptools_clusterizer"],
-            "market_agent": ["droptools_market_agent"],
-            "amazon_explorer": ["droptools_amazon_explorer"],
-            "ai_trainer": ["droptools_ai_trainer"],
+            "market_trender": ["droptools_market_trender"],
+            "meta_scholar": ["droptools_meta_scholar"],
+            "shopify_auditor": ["droptools_shopify_auditor"],
             "celery_worker": ["droptools_celery_worker"]
         }
 

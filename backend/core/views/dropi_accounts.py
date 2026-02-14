@@ -2,6 +2,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from ..permissions import MinSubscriptionTier
 
 
@@ -10,7 +11,7 @@ class DropiAccountsView(APIView):
     Gestiona la cuenta Dropi del usuario (ahora está en la tabla users)
     Nota: Ahora cada usuario tiene solo UNA cuenta Dropi (dropi_email y dropi_password)
     """
-    permission_classes = [MinSubscriptionTier("BRONZE")]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
 
     def get(self, request):
         """Retorna la cuenta Dropi del usuario actual"""
@@ -63,7 +64,7 @@ class DropiAccountSetDefaultView(APIView):
     Marca una cuenta Dropi como default (ahora es un no-op porque solo hay una cuenta)
     Se mantiene por compatibilidad con el frontend
     """
-    permission_classes = [MinSubscriptionTier("BRONZE")]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
 
     def post(self, request, account_id: int):
         """

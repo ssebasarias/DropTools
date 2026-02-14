@@ -52,9 +52,9 @@ def _configure_utf8_stdio():
 class NovedadReporterBot:
     """Bot para automatizar solución de novedades en Dropi"""
     
-    # Credenciales hardcodeadas para uso local
-    DROPI_EMAIL = "dahellonline@gmail.com"
-    DROPI_PASSWORD = "Bigotes2001@"
+    # Credenciales por entorno (nunca hardcodeadas)
+    DROPI_EMAIL = os.getenv("NOVEDAD_DROPI_EMAIL", "")
+    DROPI_PASSWORD = os.getenv("NOVEDAD_DROPI_PASSWORD", "")
     DROPI_URL = "https://app.dropi.co/login"
     NOVELTIES_URL = "https://app.dropi.co/dashboard/novelties"
     
@@ -117,9 +117,11 @@ class NovedadReporterBot:
             'saltadas': 0
         }
         
-        # Las credenciales ya están hardcodeadas en la clase
-        # No es necesario cargarlas desde BD
-        self.logger.info(f"✅ Usando credenciales hardcodeadas: {self.DROPI_EMAIL}")
+        if not self.DROPI_EMAIL or not self.DROPI_PASSWORD:
+            raise ValueError(
+                "Faltan credenciales de Novedades. Define NOVEDAD_DROPI_EMAIL y NOVEDAD_DROPI_PASSWORD."
+            )
+        self.logger.info("✅ Credenciales de novedades cargadas desde variables de entorno")
     
     def _get_solution_message(self, novedad_type):
         """Obtiene un mensaje de solución aleatorio para el tipo de novedad dado"""
@@ -161,8 +163,7 @@ class NovedadReporterBot:
 
     def _load_dropi_credentials(self):
         """
-        MODO LOCAL: Las credenciales están hardcodeadas en la clase.
-        Este método se mantiene por compatibilidad pero no hace nada.
+        Compatibilidad. Las credenciales se resuelven al inicializar desde variables de entorno.
         """
         pass
     

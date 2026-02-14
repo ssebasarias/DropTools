@@ -23,6 +23,55 @@ def _is_run_capacity_aware(run_id):
         return False
 
 
+def _is_run_user_fully_done(run_user):
+    """
+    Determina si un ReporterRunUser ya terminó su participación en la run.
+    """
+    from ..models import ReporterRunUser
+
+    if run_user.download_compare_status in (ReporterRunUser.DC_PENDING, ReporterRunUser.DC_RUNNING):
+        return False
+    if run_user.download_compare_status == ReporterRunUser.DC_FAILED:
+        return True
+    total_ranges = run_user.total_ranges or 0
+    return run_user.ranges_completed >= total_ranges
+
+
+def _finalize_run_if_done(run_id):
+    """
+    Cierra la run cuando todos los usuarios terminaron:
+    - completed: sin fallos
+    - failed: al menos un fallo en download/compare o rangos
+    """
+    from ..models import ReporterRun, ReporterRunUser, ReporterRange
+
+    run = ReporterRun.objects.filter(id=run_id).first()
+    if not run:
+        return None
+    if run.status in (ReporterRun.STATUS_COMPLETED, ReporterRun.STATUS_FAILED):
+        return run.status
+
+    run_users = list(ReporterRunUser.objects.filter(run_id=run_id))
+    if not run_users:
+        return None
+
+    if not all(_is_run_user_fully_done(ru) for ru in run_users):
+        return None
+
+    has_failures = any(ru.download_compare_status == ReporterRunUser.DC_FAILED for ru in run_users)
+    if not has_failures:
+        has_failures = ReporterRange.objects.filter(
+            run_id=run_id,
+            status=ReporterRange.STATUS_FAILED
+        ).exists()
+
+    run.status = ReporterRun.STATUS_FAILED if has_failures else ReporterRun.STATUS_COMPLETED
+    run.finished_at = tz.now()
+    run.save(update_fields=['status', 'finished_at'])
+    logger.info(f"Run {run_id} finalized with status={run.status}")
+    return run.status
+
+
 @shared_task(bind=True)
 def process_slot_task(self, slot_time_iso=None):
     """
@@ -72,15 +121,13 @@ def process_slot_task(self, slot_time_iso=None):
         run.save()
         return {'success': True, 'run_id': run.id, 'user_count': 0}
 
-        # Usar import absoluto para evitar import circular
-        from core.tasks.reporter_slots import download_compare_task as download_compare_task_func
-        for uid in user_ids:
-            ReporterRunUser.objects.create(
-                run=run,
-                user_id=uid,
-                download_compare_status=ReporterRunUser.DC_PENDING
-            )
-            download_compare_task_func.delay(uid, run.id)
+    for uid in user_ids:
+        ReporterRunUser.objects.create(
+            run=run,
+            user_id=uid,
+            download_compare_status=ReporterRunUser.DC_PENDING
+        )
+        download_compare_task_func.delay(uid, run.id)
 
     logger.info(f"   Enqueued {len(user_ids)} download_compare_task for run_id={run.id}")
     return {'success': True, 'run_id': run.id, 'user_count': len(user_ids)}
@@ -325,6 +372,7 @@ def download_compare_task(self, user_id, run_id):
         logger.warning("Selenium semaphore acquire timeout, retrying...")
         raise self.retry(countdown=120)
 
+    released = False
     try:
         run_user.download_compare_status = ReporterRunUser.DC_RUNNING
         run_user.save(update_fields=['download_compare_status', 'updated_at'])
@@ -347,6 +395,7 @@ def download_compare_task(self, user_id, run_id):
         )
         stats = unified.run_download_compare_only()
         release()
+        released = True
 
         total_detected = (stats.get('comparer') or {}).get('total_detected', 0)
         run_user.download_compare_status = ReporterRunUser.DC_COMPLETED
@@ -360,6 +409,7 @@ def download_compare_task(self, user_id, run_id):
         if total_detected <= 0:
             run_user.total_ranges = 0
             run_user.save(update_fields=['total_ranges', 'updated_at'])
+            _finalize_run_if_done(run_id)
             return {'success': True, 'run_id': run_id, 'user_id': user_id, 'total_detected': 0}
 
         ranges_created = create_ranges_for_user(run_id, user_id, total_detected)
@@ -377,13 +427,17 @@ def download_compare_task(self, user_id, run_id):
         )
         if _is_run_capacity_aware(run_id):
             enqueue_next_pending_for_run.delay(run_id)
+        _finalize_run_if_done(run_id)
         return {'success': True, 'run_id': run_id, 'user_id': user_id, 'total_detected': total_detected, 'ranges': len(ranges_created)}
     except Exception as e:
-        release()
         run_user.download_compare_status = ReporterRunUser.DC_FAILED
         run_user.save(update_fields=['download_compare_status', 'updated_at'])
+        _finalize_run_if_done(run_id)
         logger.exception(f"download_compare_task failed: {e}")
         raise self.retry(exc=e, countdown=120)
+    finally:
+        if not released:
+            release()
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
@@ -416,17 +470,25 @@ def report_range_task(self, run_id, user_id, range_start, range_end):
     if not acquire(timeout_seconds=3300):
         raise self.retry(countdown=60)
 
+    released = False
+    lock_acquired = False
+
     if not acquire_range_lock(run_id, user_id, range_start, task_id):
         release()
+        released = True
         logger.warning(f"Range lock not acquired for run={run_id} user={user_id} range_start={range_start}, skipping")
         return {'success': False, 'skipped': True, 'reason': 'lock_not_acquired'}
+    lock_acquired = True
 
     range_obj = ReporterRange.objects.filter(
         run_id=run_id, user_id=user_id, range_start=range_start
     ).first()
     if not range_obj:
-        release_range_lock(run_id, user_id, range_start)
+        if lock_acquired:
+            release_range_lock(run_id, user_id, range_start)
+            lock_acquired = False
         release()
+        released = True
         return {'success': False, 'error': 'Range not found'}
 
     try:
@@ -443,7 +505,10 @@ def report_range_task(self, run_id, user_id, range_start, range_end):
             range_obj.status = ReporterRange.STATUS_FAILED
             range_obj.save(update_fields=['status'])
             release_range_lock(run_id, user_id, range_start)
+            lock_acquired = False
             release()
+            released = True
+            _finalize_run_if_done(run_id)
             return {'success': False, 'error': 'User or credentials missing'}
 
         download_dir = get_download_dir()
@@ -458,6 +523,7 @@ def report_range_task(self, run_id, user_id, range_start, range_end):
         )
         stats = unified.run_report_orders_only(range_start, range_end)
         release()
+        released = True
 
         with transaction.atomic():
             range_obj.status = ReporterRange.STATUS_COMPLETED
@@ -471,12 +537,14 @@ def report_range_task(self, run_id, user_id, range_start, range_end):
             )
 
         release_range_lock(run_id, user_id, range_start)
+        lock_acquired = False
         procesados = (stats.get('reporter') or {}).get('procesados', 0)
         logger.info(f"   Range [{range_start},{range_end}] completed: {procesados} reportados")
         
         # Verificar si el usuario tiene más rangos pendientes
         run_user_after = ReporterRunUser.objects.filter(run_id=run_id, user_id=user_id).first()
         if not run_user_after:
+            _finalize_run_if_done(run_id)
             return {'success': True, 'run_id': run_id, 'user_id': user_id, 'range_start': range_start, 'procesados': procesados}
         
         # Verificar si el usuario completó todos sus rangos
@@ -488,11 +556,19 @@ def report_range_task(self, run_id, user_id, range_start, range_end):
         # encolados en download_compare_task (una tarea por rango). Cualquier worker libre tomará
         # la siguiente tarea de la cola y el trabajo se reparte entre los 6 workers.
         
+        _finalize_run_if_done(run_id)
         return {'success': True, 'run_id': run_id, 'user_id': user_id, 'range_start': range_start, 'procesados': procesados}
     except Exception as e:
-        release()
-        release_range_lock(run_id, user_id, range_start)
+        if lock_acquired:
+            release_range_lock(run_id, user_id, range_start)
+            lock_acquired = False
         range_obj.status = ReporterRange.STATUS_FAILED
         range_obj.save(update_fields=['status'])
+        _finalize_run_if_done(run_id)
         logger.exception(f"report_range_task failed: {e}")
         raise self.retry(exc=e, countdown=60)
+    finally:
+        if not released:
+            release()
+        if lock_acquired:
+            release_range_lock(run_id, user_id, range_start)

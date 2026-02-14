@@ -41,9 +41,9 @@ const PublicNavbar = () => {
             </Link>
 
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                <Link to="/login" style={{ color: 'var(--text-main)', textDecoration: 'none', fontWeight: '500' }}>Log In</Link>
+                <Link to="/login" style={{ color: 'var(--text-main)', textDecoration: 'none', fontWeight: '500' }}>Iniciar sesi&oacute;n</Link>
                 <Link to="/register" className="btn-primary" style={{ padding: '0.6rem 1.5rem', borderRadius: '50px', textDecoration: 'none' }}>
-                    Get Started
+                    Crear cuenta
                 </Link>
             </div>
         </nav>

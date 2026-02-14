@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet';
+import { MapContainer, GeoJSON, useMap } from 'react-leaflet';
+import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 const COLOMBIA_CENTER = [4.6, -74];
@@ -22,7 +23,13 @@ function buildRegionLookup(byRegion) {
     for (const r of byRegion) {
         const key = normalizeName(r.department);
         if (!key) continue;
-        lookup.set(key, { orders: r.orders ?? 0, revenue: r.revenue ?? 0 });
+        lookup.set(key, {
+            orders: r.orders ?? 0,
+            revenue: r.revenue ?? 0,
+            avgShippingPrice: r.avg_shipping_price ?? 0,
+            topCarrier: r.top_carrier ?? 'Sin transportadora',
+            topCarrierOrders: r.top_carrier_orders ?? 0,
+        });
     }
     return lookup;
 }
@@ -42,12 +49,12 @@ function FitBounds({ geojson }) {
     const map = useMap();
     useEffect(() => {
         if (!geojson?.features?.length) return;
-        import('leaflet').then((module) => {
-            const L = module.default ?? module;
-            const layer = L.geoJSON(geojson);
-            const bounds = layer.getBounds();
-            if (bounds.isValid()) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 7 });
-        });
+        const layer = L.geoJSON(geojson);
+        const bounds = layer.getBounds();
+        if (!bounds.isValid()) return;
+        map.fitBounds(bounds, { padding: [20, 20], maxZoom: 7 });
+        map.setMaxBounds(bounds.pad(0.08));
+        map.setMinZoom(map.getZoom());
     }, [map, geojson]);
     return null;
 }
@@ -104,12 +111,17 @@ export default function ColombiaMap({ byRegion, style: containerStyle }) {
             const stats = regionLookup.get(key);
             const orders = stats?.orders ?? 0;
             const revenue = stats?.revenue ?? 0;
+            const avgShippingPrice = stats?.avgShippingPrice ?? 0;
+            const topCarrier = stats?.topCarrier ?? 'Sin transportadora';
+            const topCarrierOrders = stats?.topCarrierOrders ?? 0;
             const fmt = (n) => (n == null || Number.isNaN(n)) ? '—' : new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
             layer.bindPopup(
                 `<div style="min-width:140px;font-family:inherit;">
                   <strong>${name}</strong><br/>
                   Pedidos: ${orders}<br/>
-                  Facturación: ${fmt(revenue)}
+                  Facturación: ${fmt(revenue)}<br/>
+                  Flete prom.: ${fmt(avgShippingPrice)}<br/>
+                  Top transportadora: ${topCarrier} (${topCarrierOrders})
                 </div>`
             );
         };
@@ -138,12 +150,10 @@ export default function ColombiaMap({ byRegion, style: containerStyle }) {
                 zoom={COLOMBIA_ZOOM}
                 style={{ height: '100%', minHeight: '280px', background: 'var(--glass-bg)' }}
                 zoomControl={true}
-                scrollWheelZoom={true}
+                scrollWheelZoom={false}
+                maxBoundsViscosity={1.0}
+                attributionControl={false}
             >
-                <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-                />
                 <GeoJSON data={geojson} style={geoJsonStyle} onEachFeature={onEachFeature} />
                 <FitBounds geojson={geojson} />
             </MapContainer>

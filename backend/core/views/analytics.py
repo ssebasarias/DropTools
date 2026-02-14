@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.db.models import Count, Sum, Avg, Case, When, F, Value, DecimalField
 from django.db.models.functions import Coalesce
 from datetime import datetime, timedelta, time as dt_time
+import unicodedata
 from ..models import (
     AnalyticsDailySnapshot,
     AnalyticsCarrierDaily,
@@ -15,6 +16,60 @@ from ..models import (
     RawOrderSnapshot,
     OrderReport,
 )
+from ..permissions import MinSubscriptionTier
+
+
+COLOMBIA_DEPARTMENT_ALIASES = {
+    "amazonas": "Amazonas",
+    "antioquia": "Antioquia",
+    "arauca": "Arauca",
+    "atlantico": "Atlántico",
+    "bogota dc": "Bogotá D.C.",
+    "bogota d c": "Bogotá D.C.",
+    "bogota": "Bogotá D.C.",
+    "bolivar": "Bolívar",
+    "boyaca": "Boyacá",
+    "caldas": "Caldas",
+    "caqueta": "Caquetá",
+    "casanare": "Casanare",
+    "cauca": "Cauca",
+    "cesar": "Cesar",
+    "choco": "Chocó",
+    "cordoba": "Córdoba",
+    "cundinamarca": "Cundinamarca",
+    "guainia": "Guainía",
+    "guaviare": "Guaviare",
+    "huila": "Huila",
+    "la guajira": "La Guajira",
+    "magdalena": "Magdalena",
+    "meta": "Meta",
+    "narino": "Nariño",
+    "norte de santander": "Norte de Santander",
+    "putumayo": "Putumayo",
+    "quindio": "Quindío",
+    "risaralda": "Risaralda",
+    "san andres y providencia": "San Andrés y Providencia",
+    "san andres y providencia y santa catalina": "San Andrés y Providencia",
+    "santander": "Santander",
+    "sucre": "Sucre",
+    "tolima": "Tolima",
+    "valle del cauca": "Valle del Cauca",
+    "vaupes": "Vaupés",
+    "vichada": "Vichada",
+}
+
+
+def _normalize_location_name(value):
+    if not value or not isinstance(value, str):
+        return ""
+    cleaned = unicodedata.normalize("NFD", value.strip().lower())
+    cleaned = "".join(ch for ch in cleaned if unicodedata.category(ch) != "Mn")
+    return " ".join(cleaned.replace(".", " ").replace(",", " ").split())
+
+
+def _canonical_colombia_department(raw_department):
+    key = _normalize_location_name(raw_department)
+    return COLOMBIA_DEPARTMENT_ALIASES.get(key)
 
 
 class ClientDashboardAnalyticsView(APIView):
@@ -22,7 +77,7 @@ class ClientDashboardAnalyticsView(APIView):
     Analytics completo para el dashboard del cliente: KPIs, finanzas, transportadoras,
     productos, estados y todas las métricas analíticas derivadas de RawOrderSnapshot.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("SILVER")]
 
     def get(self, request):
         user = request.user
@@ -38,6 +93,12 @@ class ClientDashboardAnalyticsView(APIView):
         now = timezone.now()
         now_local = timezone.localtime(now)
         target_date = now_local.date()
+        current_tz = timezone.get_current_timezone()
+
+        def _start_of_day(day):
+            return timezone.make_aware(datetime.combine(day, dt_time.min), current_tz)
+        day_start = _start_of_day(target_date)
+        day_end = _start_of_day(target_date + timedelta(days=1))
         # Para carrier_reports (OrderReport) usamos últimos 30 días
         since = now - timedelta(days=30)
 
@@ -82,6 +143,8 @@ class ClientDashboardAnalyticsView(APIView):
             "last_updated": None,
             "period_used": period,
             "period_label": period_label,
+            "data_message": "No hay datos disponibles para el período seleccionado.",
+            "snapshot_sync_recommended": False,
         }
 
         try:
@@ -106,12 +169,22 @@ class ClientDashboardAnalyticsView(APIView):
                     user=user, id=batch_id, status="SUCCESS"
                 )[:1]
             else:
-                # Número de batches a usar según período (el más reciente = "reporte actual" como el comparer)
-                limit = {"day": 1, "week": 7, "fortnight": 15, "month": 30}.get(period, 30)
-                batches = ReportBatch.objects.filter(
-                    user=user,
-                    status="SUCCESS",
-                ).order_by("-created_at")[:limit]
+                # Usar ventanas de tiempo reales para que el período represente datos del rango esperado.
+                if period == "day":
+                    batches = ReportBatch.objects.filter(
+                        user=user,
+                        status="SUCCESS",
+                        created_at__gte=day_start,
+                        created_at__lt=day_end,
+                    ).order_by("-created_at")
+                else:
+                    days_back = {"week": 7, "fortnight": 15, "month": 365}.get(period, 365)
+                    cutoff = now - timedelta(days=days_back)
+                    batches = ReportBatch.objects.filter(
+                        user=user,
+                        status="SUCCESS",
+                        created_at__gte=cutoff,
+                    ).order_by("-created_at")
 
             batch_ids = list(batches.values_list("id", flat=True))
             if not batch_ids:
@@ -134,9 +207,79 @@ class ClientDashboardAnalyticsView(APIView):
             snapshots = RawOrderSnapshot.objects.filter(batch_id__in=batch_ids)
             total_orders = snapshots.count()
             if total_orders == 0:
+                # Si los lotes del período no tienen snapshots, usar el último lote con snapshots.
+                fallback_batches = (
+                    ReportBatch.objects.filter(user=user)
+                    .annotate(snap_count=Count("snapshots"))
+                    .filter(snap_count__gt=0)
+                    .order_by("-created_at")[:10]
+                )
+                fallback_batch_ids = list(fallback_batches.values_list("id", flat=True))
+                if fallback_batch_ids:
+                    snapshots = RawOrderSnapshot.objects.filter(batch_id__in=fallback_batch_ids)
+                    total_orders = snapshots.count()
+                    if total_orders > 0:
+                        batches = fallback_batches
+                        batch_ids = fallback_batch_ids
+                        period_label = period_label + " (últimos datos disponibles)"
+                        last_batch = batches.first()
+                        last_updated = last_batch.created_at.isoformat() if last_batch else last_updated
+
+            if total_orders == 0:
+                # Fallback de consistencia: si hay actividad en OrderReport para el período,
+                # devolver KPIs básicos para no mostrar dashboard en cero injustificadamente.
+                order_reports_qs = OrderReport.objects.filter(user=user)
+                if period == "day":
+                    order_reports_qs = order_reports_qs.filter(updated_at__gte=day_start, updated_at__lt=day_end)
+                else:
+                    reports_days_back = {"week": 7, "fortnight": 15, "month": 365}.get(period, 365)
+                    reports_cutoff = now - timedelta(days=reports_days_back)
+                    order_reports_qs = order_reports_qs.filter(updated_at__gte=reports_cutoff)
+
+                fallback_total_reports = order_reports_qs.count()
+                if fallback_total_reports > 0:
+                    fallback_status_breakdown = []
+                    for item in (
+                        order_reports_qs.values("status")
+                        .annotate(orders_count=Count("id"))
+                        .order_by("-orders_count")
+                    ):
+                        fallback_status_breakdown.append({
+                            "status": item.get("status") or "Sin estado",
+                            "orders_count": item.get("orders_count") or 0,
+                            "total_value": 0.0,
+                        })
+
+                    fallback_reported = order_reports_qs.filter(
+                        Q(status="reportado") | Q(report_generated=True)
+                    ).count()
+                    fallback_confirmation_pct = round(
+                        (fallback_reported / fallback_total_reports) * 100, 1
+                    ) if fallback_total_reports else 0.0
+
+                    last_report = order_reports_qs.order_by("-updated_at").first()
+                    return Response({
+                        **empty_response,
+                        "kpis": {
+                            **empty_response["kpis"],
+                            "total_orders": int(fallback_total_reports),
+                            "confirmation_pct": float(fallback_confirmation_pct),
+                            "cancellation_pct": float(round(100 - fallback_confirmation_pct, 1)),
+                        },
+                        "status_breakdown": fallback_status_breakdown,
+                        "last_updated": last_report.updated_at.isoformat() if last_report else last_updated,
+                        "period_label": period_label + " (resumen desde reporter)",
+                        "data_message": (
+                            "Hay actividad de reporter, pero no hay snapshots de pedidos para calcular "
+                            "finanzas/mapa. Ejecuta nuevamente descarga/comparer para poblar analytics detallado."
+                        ),
+                        "snapshot_sync_recommended": True,
+                    }, status=status.HTTP_200_OK)
+
                 return Response({
                     **empty_response,
                     "last_updated": last_updated,
+                    "data_message": "No se encontraron reportes cargados para este usuario.",
                 }, status=status.HTTP_200_OK)
 
             # KPIs Principales
@@ -196,22 +339,88 @@ class ClientDashboardAnalyticsView(APIView):
                     "total_value": float(status_item["total_value"] or 0),
                 })
 
-            # Por Región
+            # Por Región (solo departamentos de Colombia)
+            by_region_dict = {}
             by_region_qs = (
-                snapshots.values("department")
-                .annotate(orders=Count("id"), revenue=Coalesce(Sum("total_amount"), 0))
-                .order_by("-orders")
+                snapshots.exclude(department__isnull=True).exclude(department="")
+                .values("department")
+                .annotate(
+                    orders=Count("id"),
+                    revenue=Coalesce(Sum("total_amount"), 0),
+                    avg_shipping_price=Coalesce(Avg("shipping_price"), 0),
+                    freight_total=Coalesce(Sum("shipping_price"), 0),
+                    city_count=Count("city", distinct=True),
+                )
             )
-            by_region = []
             for x in by_region_qs:
+                canonical_department = _canonical_colombia_department(x.get("department"))
+                if not canonical_department:
+                    continue
+                data = by_region_dict.setdefault(
+                    canonical_department,
+                    {
+                        "department": canonical_department,
+                        "orders": 0,
+                        "revenue": 0.0,
+                        "avg_shipping_price": 0.0,
+                        "freight_total": 0.0,
+                        "city_count": 0,
+                    },
+                )
                 try:
-                    by_region.append({
-                        "department": (x.get("department") or "Sin departamento").strip() or "Sin departamento",
-                        "orders": x.get("orders") or 0,
-                        "revenue": float(x.get("revenue") or 0),
-                    })
+                    orders = int(x.get("orders") or 0)
+                    revenue = float(x.get("revenue") or 0)
+                    freight_total = float(x.get("freight_total") or 0)
+                    city_count = int(x.get("city_count") or 0)
+                    data["orders"] += orders
+                    data["revenue"] += revenue
+                    data["freight_total"] += freight_total
+                    data["city_count"] = max(data["city_count"], city_count)
                 except (TypeError, ValueError):
                     continue
+
+            # Transportadora líder por región
+            region_top_carrier = {}
+            by_region_carrier_qs = (
+                snapshots.exclude(department__isnull=True).exclude(department="")
+                .exclude(carrier__isnull=True).exclude(carrier="")
+                .values("department", "carrier")
+                .annotate(
+                    orders=Count("id"),
+                    avg_shipping_price=Coalesce(Avg("shipping_price"), 0),
+                )
+                .order_by("-orders")
+            )
+            for row in by_region_carrier_qs:
+                canonical_department = _canonical_colombia_department(row.get("department"))
+                if not canonical_department:
+                    continue
+                existing = region_top_carrier.get(canonical_department)
+                row_orders = int(row.get("orders") or 0)
+                if existing is None or row_orders > existing["orders"]:
+                    region_top_carrier[canonical_department] = {
+                        "carrier": (row.get("carrier") or "").strip() or "Sin transportadora",
+                        "orders": row_orders,
+                        "avg_shipping_price": float(row.get("avg_shipping_price") or 0),
+                    }
+
+            by_region = []
+            for department, region_data in by_region_dict.items():
+                orders = region_data["orders"]
+                avg_shipping_price = (region_data["freight_total"] / orders) if orders > 0 else 0.0
+                leader = region_top_carrier.get(department)
+                by_region.append({
+                    "department": department,
+                    "orders": orders,
+                    "revenue": round(region_data["revenue"], 2),
+                    "avg_shipping_price": round(avg_shipping_price, 2),
+                    "freight_total": round(region_data["freight_total"], 2),
+                    "city_count": region_data["city_count"],
+                    "top_carrier": leader["carrier"] if leader else "Sin transportadora",
+                    "top_carrier_orders": leader["orders"] if leader else 0,
+                    "top_carrier_avg_shipping_price": round(leader["avg_shipping_price"], 2) if leader else 0.0,
+                })
+            by_region.sort(key=lambda item: item["orders"], reverse=True)
 
             # Top Productos (ventas)
             top_products_qs = (
@@ -374,6 +583,7 @@ class ClientDashboardAnalyticsView(APIView):
                 "last_updated": last_updated,
                 "period_used": period,
                 "period_label": period_label,
+                "snapshot_sync_recommended": False,
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -393,7 +603,7 @@ class AnalyticsHistoricalView(APIView):
     Endpoint para obtener datos históricos agregados.
     Retorna series temporales de métricas para análisis temporal.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("SILVER")]
 
     def get(self, request):
         user = request.user
@@ -466,7 +676,7 @@ class AnalyticsCarrierComparisonView(APIView):
     Endpoint para comparativa de transportadoras.
     Retorna datos para gráfico de barras comparativo.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("SILVER")]
 
     def get(self, request):
         user = request.user

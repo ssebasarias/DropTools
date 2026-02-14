@@ -16,6 +16,7 @@ from ..models import (
     assign_best_available_slot,
 )
 from ..serializers import ReporterSlotSerializer, ReporterReservationSerializer, ReporterRunSerializer
+from ..permissions import MinSubscriptionTier
 
 
 class ReporterSlotsView(APIView):
@@ -23,7 +24,7 @@ class ReporterSlotsView(APIView):
     GET /api/reporter/slots/ — Lista horas reservables (ventana reporter) con capacidad por peso.
     Muestra conteos de usuarios por peso y disponibilidad según límites independientes.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
 
     def get(self, request):
         try:
@@ -74,7 +75,7 @@ class ReporterReservationsView(APIView):
     GET /api/reporter/reservations/me — Reserva del usuario actual.
     DELETE /api/reporter/reservations/me — Cancelar reserva.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
 
     def get(self, request):
         user = request.user
@@ -160,7 +161,7 @@ class ReporterRunsView(APIView):
     """
     GET /api/reporter/runs/ — Lista runs recientes (por usuario o por slot).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
 
     def get(self, request):
         try:
@@ -188,7 +189,7 @@ class ReporterRunProgressView(APIView):
     """
     GET /api/reporter/runs/<run_id>/progress/ — Progreso detallado de una Run (por usuario).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, MinSubscriptionTier("BRONZE")]
 
     def get(self, request, run_id):
         user = request.user

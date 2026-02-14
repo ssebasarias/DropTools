@@ -14,7 +14,10 @@ const SuccessAlert = ({ message, onClose, duration = 3000 }) => {
     if (!message) return null;
     
     return (
-        <div style={{
+        <div
+            role="status"
+            aria-live="polite"
+            style={{
             padding: '12px 16px',
             backgroundColor: 'rgba(16, 185, 129, 0.1)',
             border: '1px solid rgba(16, 185, 129, 0.3)',

@@ -31,7 +31,7 @@ const PlanCard = ({ plan, billingCycle, onSelect }) => {
                     letterSpacing: '0.05em',
                     boxShadow: '0 4px 15px rgba(99, 102, 241, 0.4)'
                 }}>
-                    Most Popular
+                    Mas popular
                 </div>
             )}
 
@@ -59,11 +59,11 @@ const PlanCard = ({ plan, billingCycle, onSelect }) => {
                     <span style={{ fontSize: '3.5rem', fontWeight: '800', lineHeight: '1', color: 'var(--text-main)' }}>
                         {billingCycle === 'monthly' ? plan.priceMonthly : plan.priceYearly}
                     </span>
-                    <span className="text-muted" style={{ marginBottom: '6px' }}>/mo</span>
+                    <span className="text-muted" style={{ marginBottom: '6px' }}>/mes</span>
                 </div>
                 {billingCycle === 'yearly' && (
                     <p style={{ fontSize: '0.8rem', color: 'var(--success)', marginTop: '0.5rem' }}>
-                        Billed ${plan.priceYearly * 12} yearly
+                        Facturado ${plan.priceYearly * 12} anual
                     </p>
                 )}
             </div>
@@ -215,7 +215,7 @@ const Subscriptions = () => {
         <div style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
                 <h1 style={{ fontSize: '2.5rem', marginBottom: '1rem', background: 'linear-gradient(135deg, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                    Choose Your Plan
+                    Elige tu plan
                 </h1>
                 <p className="text-muted" style={{ fontSize: '1.1rem', maxWidth: '600px', margin: '0 auto' }}>
                     Planes por suscripción. El pago aún no está habilitado, pero ya puedes ver qué desbloquea cada tier.
@@ -259,7 +259,7 @@ const Subscriptions = () => {
                             transition: 'all 0.2s'
                         }}
                     >
-                        Monthly
+                        Mensual
                     </button>
                     <button
                         onClick={() => setBillingCycle('yearly')}
@@ -277,7 +277,7 @@ const Subscriptions = () => {
                             gap: '0.5rem'
                         }}
                     >
-                        Yearly <span style={{ fontSize: '0.7em', background: 'var(--primary)', color: 'white', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>-20%</span>
+                        Anual <span style={{ fontSize: '0.7em', background: 'var(--primary)', color: 'white', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>-20%</span>
                     </button>
                 </div>
             </div>
@@ -299,19 +299,19 @@ const Subscriptions = () => {
             </div>
 
             <div style={{ marginTop: '4rem', textAlign: 'center', padding: '2rem', background: 'rgba(255,255,255,0.02)', borderRadius: '16px' }}>
-                <h3 style={{ marginBottom: '1rem' }}>Frequently Asked Questions</h3>
+                <h3 style={{ marginBottom: '1rem' }}>Preguntas frecuentes</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2rem', textAlign: 'left', marginTop: '2rem' }}>
                     <div>
-                        <h4 style={{ fontWeight: '600', marginBottom: '0.5rem' }}>Can I switch plans later?</h4>
-                        <p className="text-muted" style={{ fontSize: '0.9rem' }}>Yes, you can upgrade or downgrade your plan at any time. Changes take effect on your next billing cycle.</p>
+                        <h4 style={{ fontWeight: '600', marginBottom: '0.5rem' }}>¿Puedo cambiar de plan despues?</h4>
+                        <p className="text-muted" style={{ fontSize: '0.9rem' }}>Si. Puedes subir o bajar de plan cuando quieras. El cambio se aplica en tu siguiente ciclo.</p>
                     </div>
                     <div>
-                        <h4 style={{ fontWeight: '600', marginBottom: '0.5rem' }}>Do I need a secondary account?</h4>
-                        <p className="text-muted" style={{ fontSize: '0.9rem' }}>For the Automated Reporter and Chatbot features, a secondary "worker" account is highly recommended for security.</p>
+                        <h4 style={{ fontWeight: '600', marginBottom: '0.5rem' }}>¿Necesito una cuenta secundaria?</h4>
+                        <p className="text-muted" style={{ fontSize: '0.9rem' }}>Para el reporter automatico se recomienda usar una cuenta de Dropi secundaria por seguridad.</p>
                     </div>
                     <div>
-                        <h4 style={{ fontWeight: '600', marginBottom: '0.5rem' }}>Is support included?</h4>
-                        <p className="text-muted" style={{ fontSize: '0.9rem' }}>Yes, all plans come with support. Priority support is exclusive to Operator and Elite tiers.</p>
+                        <h4 style={{ fontWeight: '600', marginBottom: '0.5rem' }}>¿Incluye soporte?</h4>
+                        <p className="text-muted" style={{ fontSize: '0.9rem' }}>Si, todos los planes incluyen soporte. El soporte prioritario se habilitara en planes superiores.</p>
                     </div>
                 </div>
             </div>

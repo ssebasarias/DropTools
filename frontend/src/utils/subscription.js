@@ -15,3 +15,10 @@ export function hasTier(user, required) {
   return have >= need;
 }
 
+export function getUserHomePath(user) {
+  if (hasTier(user, "GOLD")) return "/user/winner-products";
+  if (hasTier(user, "SILVER")) return "/user/analytics";
+  if (hasTier(user, "BRONZE")) return "/user/reporter-setup";
+  return "/user/subscriptions";
+}
+

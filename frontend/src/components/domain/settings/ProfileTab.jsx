@@ -3,7 +3,7 @@ import { Save } from 'lucide-react';
 
 const ProfileTab = () => (
     <div className="glass-card fade-in">
-        <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: '600' }}>Profile Information</h3>
+        <h3 style={{ marginBottom: '1.5rem', fontSize: '1.25rem', fontWeight: '600' }}>Informacion del perfil</h3>
         <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
             <div style={{ position: 'relative', cursor: 'pointer' }}>
                 <div style={{
@@ -24,27 +24,27 @@ const ProfileTab = () => (
             <div style={{ flex: 1, minWidth: '300px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
                     <div className="form-group">
-                        <label className="form-label">Full Name</label>
+                        <label className="form-label">Nombre completo</label>
                         <input type="text" className="glass-input" defaultValue="Admin User" />
                     </div>
                     <div className="form-group">
-                        <label className="form-label">Username</label>
+                        <label className="form-label">Usuario</label>
                         <input type="text" className="glass-input" defaultValue="@admin_droptools" />
                     </div>
                     <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                        <label className="form-label">Email Address</label>
+                        <label className="form-label">Correo electronico</label>
                         <input type="email" className="glass-input" defaultValue="admin@droptools.com" />
                     </div>
                     <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                         <label className="form-label">Bio</label>
-                        <textarea className="glass-input" style={{ height: '100px', resize: 'none' }} defaultValue="Superuser account for system administration and monitoring." />
+                        <textarea className="glass-input" style={{ height: '100px', resize: 'none' }} defaultValue="Cuenta administradora para gestionar y monitorear el sistema." />
                     </div>
                 </div>
             </div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid var(--glass-border)' }}>
             <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Save size={18} /> Save Changes
+                <Save size={18} /> Guardar cambios
             </button>
         </div>
     </div>

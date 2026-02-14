@@ -166,7 +166,7 @@ class DropiReporter:
                 # Procesar orden
                 result = self._process_single_order(
                     phone, expected_state, idx, order_id=order_id,
-                    is_first_order=(idx == 0), retry_count=retry_count
+                    is_first_order=(idx == 0), retry_count=retry_count, db_report_id=db_report_id
                 )
                 
                 # Actualizar DB (OrderMovementReport)
@@ -234,7 +234,7 @@ class DropiReporter:
         except Exception:
             return True
     
-    def _process_single_order(self, phone, expected_state, line_number, order_id=None, is_first_order=False, retry_count=0):
+    def _process_single_order(self, phone, expected_state, line_number, order_id=None, is_first_order=False, retry_count=0, db_report_id=None):
         """
         Procesa una sola orden con manejo completo del flujo.
         
@@ -245,6 +245,7 @@ class DropiReporter:
             order_id: ID de la orden (opcional, preferido para búsqueda)
             is_first_order: Si es la primera orden
             retry_count: Número de reintentos
+            db_report_id: ID del OrderMovementReport en la cola de trabajo
             
         Returns:
             dict con el resultado del procesamiento
@@ -253,11 +254,19 @@ class DropiReporter:
             'line_number': line_number,
             'phone': str(phone),
             'order_id': str(order_id) if order_id else '',
+            'db_report_id': db_report_id,
+            'status_history_screenshot_path': None,
+            'cas_chat_url': None,
+            'cas_chat_id': None,
             'status': 'error',
             'report_generated': False,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'next_attempt_time': None,
-            'retry_count': retry_count
+            'retry_count': retry_count,
+            'last_movement_date': None,
+            'last_movement_status': None,
+            'inactivity_days_real': None,
+            'last_movement_raw_text': None,
         }
         
         try:
@@ -277,7 +286,7 @@ class DropiReporter:
             
             # Buscar orden por teléfono (Dropi ya no muestra ID/guía en búsqueda, solo teléfono)
             if not self.searcher.search_order(str(phone).strip()):
-                result['status'] = 'not_found'
+                result['status'] = 'no_encontrado'
                 self.stats['no_encontrados'] += 1
                 return result
             
@@ -289,6 +298,22 @@ class DropiReporter:
             
             # Obtener fila de la orden
             order_row = self.searcher.get_current_order_row()
+
+            # Paso previo obligatorio: capturar Status History desde Información de la Orden
+            history_capture = self.form_handler.capture_status_history_snapshot(
+                order_row=order_row,
+                order_id=order_id,
+                phone=phone,
+            )
+            result['status_history_screenshot_path'] = history_capture.get('screenshot_path')
+            if not history_capture.get('success'):
+                self._handle_unexpected_error(
+                    phone,
+                    result,
+                    retry_count,
+                    "No se pudo capturar Status History (Información de la Orden)"
+                )
+                return result
             
             # Click en Nueva Consulta
             if not self.form_handler.click_new_consultation(order_row):
@@ -307,45 +332,48 @@ class DropiReporter:
                     result['report_generated'] = True
                     result['next_attempt_time'] = None
                     self.stats['ya_tienen_caso'] += 1
+                    self.form_handler.delete_temp_screenshot(result.get('status_history_screenshot_path'))
                     return result
                 elif popup_result['type'] == 'estado_invalido':
-                    result['status'] = 'error'
-                    self.stats['errores'] += 1
+                    self._handle_unexpected_error(phone, result, retry_count, "Popup estado no permitido")
+                    return result
+                else:
+                    self._handle_unexpected_error(
+                        phone,
+                        result,
+                        retry_count,
+                        f"Popup inesperado: {popup_result.get('type')}"
+                    )
                     return result
             
-            # Seleccionar tipo de consulta
-            type_result = self.form_handler.select_consultation_type()
-            if type_result == 'carrier_not_allowed':
-                self.logger.warning("⚠️ Estado de la orden no permite conversación con transportadora (popup Dropi)")
-                result['status'] = 'cannot_generate_yet'
-                result['report_generated'] = False
-                next_attempt = self.result_manager.calculate_next_attempt_time('cannot_generate_yet', retry_count)
-                result['next_attempt_time'] = next_attempt.strftime('%Y-%m-%d %H:%M:%S') if next_attempt else None
-                self.stats['saltados_por_tiempo'] += 1
+            # Flujo nuevo Dropi: opción única "Ordenes sin movimiento" (sin dropdowns)
+            selection_result = self.form_handler.select_no_movement_option_and_capture_details()
+            result['last_movement_date'] = selection_result.get('last_movement_date')
+            result['last_movement_status'] = selection_result.get('last_movement_status')
+            result['inactivity_days_real'] = selection_result.get('inactivity_days_real')
+            result['last_movement_raw_text'] = selection_result.get('last_movement_raw_text')
+
+            if not selection_result.get('selected'):
+                self._handle_unexpected_error(phone, result, retry_count, "Selección de opción única (Ordenes sin movimiento)")
                 return result
-            if not type_result:
-                self._handle_unexpected_error(phone, result, retry_count, "Tipo de consulta (dropdown Transportadora)")
-                return result
-            
-            # Seleccionar motivo
-            reason_result = self.form_handler.select_consultation_reason()
             
             # Verificar alert de espera
             if self.popup_handler.check_wait_time_alert():
                 self.logger.warning("⚠️ Alert detectado: 'Debes esperar al menos un día sin movimiento'")
                 result['status'] = 'cannot_generate_yet'
                 result['report_generated'] = False
-                next_attempt = self.result_manager.calculate_next_attempt_time('cannot_generate_yet', retry_count)
+                next_attempt = self.result_manager.calculate_next_attempt_time(
+                    'cannot_generate_yet',
+                    retry_count,
+                    last_movement_date=result.get('last_movement_date'),
+                )
                 result['next_attempt_time'] = next_attempt.strftime('%Y-%m-%d %H:%M:%S') if next_attempt else None
                 
                 self.stats['saltados_por_tiempo'] += 1
                 
                 # Cerrar modal
                 self.form_handler._close_modal()
-                return result
-            
-            if not reason_result:
-                self._handle_unexpected_error(phone, result, retry_count, "Motivo de consulta (dropdown orden sin movimiento)")
+                self.form_handler.delete_temp_screenshot(result.get('status_history_screenshot_path'))
                 return result
             
             # Click en Siguiente
@@ -357,16 +385,30 @@ class DropiReporter:
             if not self.form_handler.enter_observation_text():
                 self._handle_unexpected_error(phone, result, retry_count, "Campo observación")
                 return result
+
+            # Adjuntar imagen capturada previamente (Status History)
+            if not self.form_handler.upload_status_history_image(result.get('status_history_screenshot_path')):
+                self._handle_unexpected_error(phone, result, retry_count, "Adjuntar imagen de Status History")
+                return result
             
             # Iniciar conversación
             if not self.form_handler.start_conversation():
                 self._handle_unexpected_error(phone, result, retry_count, "Iniciar conversación (botón bloqueado o imprevisto)")
+                return result
+
+            # Comprobante obligatorio: validar redirección a chat CAS con cas_chat_id
+            chat_check = self.form_handler.wait_for_chat_redirect(timeout_sec=25)
+            result['cas_chat_url'] = chat_check.get('chat_url')
+            result['cas_chat_id'] = chat_check.get('cas_chat_id')
+            if not chat_check.get('success'):
+                self._handle_unexpected_error(phone, result, retry_count, "No se validó chat CAS tras Start conversation")
                 return result
             
             # Éxito
             result['status'] = 'reportado'
             result['report_generated'] = True
             result['next_attempt_time'] = None
+            self.form_handler.delete_temp_screenshot(result.get('status_history_screenshot_path'))
             self.stats['procesados'] += 1
             
             # Tras reportar, Dropi puede redirigir a otra página; asegurar que estamos en Mis Pedidos para la siguiente orden
@@ -393,14 +435,24 @@ class DropiReporter:
         try:
             self.driver.refresh()
             time.sleep(2)
-            self.logger.info("   Página refrescada; se continuará con la siguiente orden.")
+            self.logger.info("   Página refrescada; forzando retorno a Mis Pedidos.")
         except Exception as e:
             self.logger.debug("Refresh falló: %s", e)
+        try:
+            if "/dashboard/orders" not in self.driver.current_url:
+                self._navigate_to_orders()
+        except Exception as e:
+            self.logger.debug("No fue posible forzar retorno a pedidos: %s", e)
         result['status'] = 'cannot_generate_yet'
         result['report_generated'] = False
-        next_attempt = self.result_manager.calculate_next_attempt_time('cannot_generate_yet', retry_count)
+        next_attempt = self.result_manager.calculate_next_attempt_time(
+            'cannot_generate_yet',
+            retry_count,
+            last_movement_date=result.get('last_movement_date'),
+        )
         result['next_attempt_time'] = next_attempt.strftime('%Y-%m-%d %H:%M:%S') if next_attempt else None
         self.stats['saltados_por_tiempo'] += 1
+        self.form_handler.delete_temp_screenshot(result.get('status_history_screenshot_path'))
     
     def _print_final_stats(self):
         """Imprime las estadísticas finales"""

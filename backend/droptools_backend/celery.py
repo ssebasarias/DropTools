@@ -23,6 +23,10 @@ app.conf.beat_schedule = {
         'task': 'core.tasks.process_slot_task',
         'schedule': crontab(minute=0, hour='*'),
     },
+    'calculate-daily-analytics': {
+        'task': 'core.tasks.calculate_daily_analytics',
+        'schedule': crontab(minute=10, hour=2),
+    },
 }
 
 # Configuración adicional
